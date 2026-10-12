@@ -35,6 +35,8 @@ bun tools/psp.ts status            # host0:/duty/status.json: frame time, triang
 bun tools/psp.ts ctl "ui=start"    # host0:/duty/control.txt (the words are in psp/src/main.rs)
 bun tools/psp.ts bench             # a match played by the bench's player, 60 s of frame timings
 bun tools/psp.ts tour              # every start point, four headings, turning and walking: late frames by place
+bun tools/psp.ts film --boot "@10:ui=start @24:go=-14.68,-26.73,60 @24:auto=1" --frames 600 --out DIR
+                                   # a run's pictures, a thirtieth of a second of the match apart
 bun tools/psp.ts capture
 ```
 
@@ -169,6 +171,22 @@ bun tools/release.ts --targets psp [--out dist/release] [--no-build] [--no-cook]
 - The tool also names a `3ds` target; its program is not in this repository.
 
 **Packages go to Pocket Studio and to no page on GitHub.** `--upload` runs `pocket-studio package <file> --target <id> --version <version>` for each package from the repository's root, where `pocket-studio register --title "Pocket Duty"` wrote `.pocket-studio.json` (ignored by Git). `POCKET_STUDIO_CLI` names the command when it is not on `PATH`.
+
+## The listing
+
+`bun tools/listing.ts` films what the game's page on Pocket Studio shows and writes it to `dist/listing/`, which Git ignores:
+
+```
+bun tools/listing.ts [--only FILE… | --words] [--emu] [--upload]
+```
+
+- **The words are `listing/listing.json`**: one sentence, the paragraphs, a caption for each picture, and the Japanese of each under `translations.ja`. `--words` writes `dist/listing/listing.json` from them for the pictures already there.
+- **Every picture is drawn by a PSP.** A run is the program started with control words in `boot.txt` (`runs` in `listing/listing.json`), filmed from its first frame: `film=<frames>` has the console write each frame's picture to the PSPLINK share and step the match two sixtieths of a second a frame while it does, so a run of the same words on the same build gives the same pictures. A take keeps frames of a run: a clip (`from`, `frames`, `poster`) at 30 a second, or a still (`frame`).
+- The player in a run is walked by `go=<x>,<z>`, which finds a way over the walk grid as a soldier does, and aimed by `auto=1`, the bench's player. The words are `remote` in `psp/src/main.rs`.
+- A clip and a still are the console's 480 × 272 with each texel doubled. The share picture (1200 × 630) and the cover (`dist/cover.png`, 480 × 272) come from a run with no interface over the street (`bare`).
+- `bun tools/psp.ts film --boot "<words>" --frames N --out DIR` films one run; `--emu` has PPSSPPHeadless draw it, for trying a take. `--upload` refuses a picture the emulator drew: the listing says a PSP drew each one.
+
+It needs the built program (`bun tools/psp.ts build`), a PSP on the cable under PSPLINK, ffmpeg and ffprobe. `--upload` runs `pocket-studio listing dist/listing` from the repository's root; `POCKET_STUDIO_CLI` names the command when it is not on `PATH`. No picture goes to Git.
 
 ## Licence
 

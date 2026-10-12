@@ -1,0 +1,157 @@
+{
+  "tagline": "A ten-minute firefight on a market street, against squads of soldiers.",
+  "description": [
+    "Pocket Duty is a first-person shooter on one market street. A match is Team Deathmatch: ten minutes, first side to 30. You are one side. The other is soldiers in squads of three, who take cover, flank, and come looking for you when they have lost you for 14 seconds.",
+    "You carry three weapons, an M4A1, an MPX-9 and a P-19, each with its own recoil pattern. Raising the sights turns the view onto the nearest soldier in front of you. You can jump, crouch, slide and climb a ledge, and your health comes back when you stay out of fire.",
+    "It is made from Claude of Duty by mshumer (github.com/mshumer/Claude-of-Duty, MIT), a browser game whose street, soldiers, weapons and sounds are built by code when it starts. Pocket Duty runs that game once on a computer, records what it builds, and compiles the record for the console: the light of each vertex, three levels of detail, and for each place the list of what can be seen from it.",
+    "On a PSP it draws 480 × 272 at 30 frames a second through the console's fixed-function GPU, with the interface drawn over it by PocketJS. A whole ten-minute match on a console measured 29.9 frames a second. It needs a PSP-2000 or a later model."
+  ],
+  "runs": {
+    "fight": {
+      "words": "@10:ui=start @24:go=-14.68,-26.73,60 @24:auto=1 @1500:clock=1"
+    },
+    "street": {
+      "words": "@10:ui=start @20:god=1 @24:go=-14.68,-26.73,70 @420:pad=8,0,0,2 @500:ui=menu"
+    },
+    "sights": {
+      "words": "@10:ui=start @30:god=1 @60:near=1,16 @66:pad=256,0,0,36 @102:pad=768,0,0,9 @111:pad=256,0,0,12 @123:pad=768,0,0,9 @132:pad=256,0,0,12 @144:pad=768,0,0,9 @153:pad=256,0,0,12 @165:pad=0,0,0,6 @171:pad=256,0,0,24 @195:pad=768,0,0,9 @204:pad=256,0,0,12 @216:pad=768,0,0,9 @225:pad=256,0,0,12 @237:pad=768,0,0,9 @246:pad=256,0,0,12 @258:pad=0,0,0,6 @264:pad=256,0,0,24 @288:pad=768,0,0,9 @297:pad=256,0,0,12 @309:pad=768,0,0,9 @318:pad=256,0,0,12 @330:pad=768,0,0,9 @339:pad=256,0,0,12 @351:pad=0,0,0,6 @357:pad=256,0,0,24 @381:pad=768,0,0,9 @390:pad=256,0,0,12 @402:pad=768,0,0,9 @411:pad=256,0,0,12 @423:pad=768,0,0,9 @432:pad=256,0,0,12 @444:pad=0,0,0,6 @450:pad=256,0,0,24"
+    },
+    "bare": {
+      "words": "@10:mode=play @20:god=1 @24:go=-14.68,-26.73,60",
+      "bare": true
+    }
+  },
+  "media": [
+    {
+      "kind": "video",
+      "file": "firefight.mp4",
+      "poster": "firefight.jpg",
+      "take": {
+        "run": "fight",
+        "from": 470,
+        "frames": 420,
+        "poster": 130
+      },
+      "caption": "Fourteen seconds up the street: six soldiers go down, and the player's health falls to 29 of 100 before it comes back."
+    },
+    {
+      "kind": "video",
+      "file": "street.mp4",
+      "poster": "street.jpg",
+      "take": {
+        "run": "street",
+        "from": 30,
+        "frames": 360,
+        "poster": 176
+      },
+      "caption": "A walk up the market street from where a match starts: stalls, awnings and hanging cloth under a low sun."
+    },
+    {
+      "kind": "video",
+      "file": "sights.mp4",
+      "poster": "sights.jpg",
+      "take": {
+        "run": "sights",
+        "from": 62,
+        "frames": 330,
+        "poster": 88
+      },
+      "caption": "The sights raised on a squad 16 metres away: the view turns onto the nearest soldier, then the M4A1 fires in short bursts."
+    },
+    {
+      "kind": "image",
+      "file": "headshot.jpg",
+      "take": {
+        "run": "fight",
+        "frame": 512
+      },
+      "caption": "A soldier down to a shot in the head: 150 points, and the kill in the list at the top right."
+    },
+    {
+      "kind": "image",
+      "file": "sight.jpg",
+      "take": {
+        "run": "sights",
+        "frame": 196
+      },
+      "caption": "A soldier in the M4A1's red dot sight, with more of his squad to the left."
+    },
+    {
+      "kind": "image",
+      "file": "wounded.jpg",
+      "take": {
+        "run": "fight",
+        "frame": 700
+      },
+      "caption": "Health at 29 of 100: the edges of the screen stay red until it comes back."
+    },
+    {
+      "kind": "image",
+      "file": "mpx.jpg",
+      "take": {
+        "run": "street",
+        "frame": 455
+      },
+      "caption": "The MPX-9, the second of the three weapons, near the arch at the street's far end."
+    },
+    {
+      "kind": "image",
+      "file": "title.jpg",
+      "take": {
+        "run": "fight",
+        "frame": 6
+      },
+      "caption": "The title screen, over the street where a match starts."
+    },
+    {
+      "kind": "image",
+      "file": "menu.jpg",
+      "take": {
+        "run": "street",
+        "frame": 520
+      },
+      "caption": "START pauses a match: resume it, change the settings, restart it or go back to the title."
+    },
+    {
+      "kind": "image",
+      "file": "results.jpg",
+      "take": {
+        "run": "fight",
+        "frame": 1575
+      },
+      "caption": "The results screen, of a match stopped at 50 seconds for this picture: score, kills, deaths, head shots, accuracy, time."
+    }
+  ],
+  "card": "card.jpg",
+  "cardTake": {
+    "run": "bare",
+    "frame": 70
+  },
+  "coverTake": {
+    "run": "bare",
+    "frame": 224
+  },
+  "translations": {
+    "ja": {
+      "tagline": "市場の通りで、兵士の分隊を相手にする 10 分間の銃撃戦。",
+      "description": [
+        "Pocket Duty は、市場の通りひとつを舞台にした一人称視点のシューティングゲームです。1 試合はチームデスマッチで、時間は 10 分、先に 30 点を取った側が勝ちます。あなたが一方の側で、相手は 3 人ずつの分隊で動く兵士たちです。兵士は物陰に隠れ、回り込み、あなたを 14 秒見失うと探しに来ます。",
+        "武器は M4A1、MPX-9、P-19 の 3 つで、それぞれ反動の出方が違います。照準を構えると、視点が正面にいるいちばん近い兵士のほうを向きます。ジャンプ、しゃがみ、スライディング、段差をよじ登ることができ、撃たれずにいると体力が戻ります。",
+        "もとになっているのは mshumer による Claude of Duty（github.com/mshumer/Claude-of-Duty、MIT）です。通りも兵士も武器も音も、起動時にコードで作るブラウザゲームです。Pocket Duty はそのゲームをコンピュータで一度だけ動かし、作られたものを記録して、本体向けにコンパイルします。頂点ごとの光、3 段階の詳細度、場所ごとにそこから見えるものの一覧です。",
+        "PSP では 480 × 272 を毎秒 30 フレームで、本体の固定機能 GPU で描き、その上に PocketJS がインターフェースを描きます。実機で 10 分の試合をまるごと計測した結果は毎秒 29.9 フレームでした。PSP-2000 以降のモデルが必要です。"
+      ],
+      "captions": {
+        "firefight.mp4": "通りを進む 14 秒間。兵士が 6 人倒れ、プレイヤーの体力は 100 のうち 29 まで減ってから戻ります。",
+        "street.mp4": "試合が始まる場所から市場の通りを歩きます。低い日差しの下に、屋台と日よけと吊るされた布。",
+        "sights.mp4": "16 メートル先の分隊に照準を構えます。視点がいちばん近い兵士を向き、M4A1 を短く区切って撃ちます。",
+        "headshot.jpg": "頭への一発で倒れた兵士。150 点が入り、右上の一覧に記録が出ます。",
+        "sight.jpg": "M4A1 のドットサイトに入った兵士。左には同じ分隊の兵士がいます。",
+        "wounded.jpg": "体力は 100 のうち 29。戻るまで画面のふちが赤いままです。",
+        "mpx.jpg": "3 つの武器の 2 つ目、MPX-9。通りのいちばん奥のアーチの近くで。",
+        "title.jpg": "タイトル画面。うしろは試合が始まる通りです。",
+        "menu.jpg": "START で試合が止まります。再開、設定、やり直し、タイトルへ戻るを選べます。",
+        "results.jpg": "結果の画面。この画像のために 50 秒で止めた試合のもので、スコア、倒した数、倒された数、ヘッドショット、命中率、時間が並びます。"
+      }
+    }
+  }
+}

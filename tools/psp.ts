@@ -15,6 +15,10 @@
 //   bun tools/psp.ts capture [--out f.png]    # PSPLINK screenshot
 //   bun tools/psp.ts bench [--seconds 60]     # a match played by the bench's player: frame timings → .pocket-build/validation/psp/
 //   bun tools/psp.ts tour [--seconds 3]       # every start point, four headings, turning and walking: late frames by place
+//   bun tools/psp.ts film --boot "<words>" --frames 300 --out DIR [--from 2] [--bare] [--emu] [--build]
+//                                             # the pictures of a run, one thirtieth of a second of the match apart,
+//                                             # drawn by the console (or by PPSSPPHeadless with --emu): what
+//                                             # tools/listing.ts makes the listing's clips from. --bare: no interface
 //   bun tools/psp.ts package                  # dist/psp/PSP/GAME/PocketDuty for a Memory Stick
 //   bun tools/psp.ts emu [--frames 240] [--ctl "at=..."] [--out f.png] [--standalone] [--keep] [--no-interface]
 //                                             # the same PRX in PPSSPPHeadless (software GE): a frame and its status;
@@ -25,7 +29,7 @@
 // commands take PocketJS's `psp:usb` lease; `--take` ends another holder first.
 
 import { $ } from "bun";
-import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { deflateSync } from "node:zlib";
 import { extractHostBuildInputs, hostBuildEnvironment } from "../vendor/pocketjs/framework/src/manifest/index.ts";
@@ -427,49 +431,118 @@ async function device<T>(f: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Stages the built program, the pack and the interface on the share with `boot` as `boot.txt`, starts it under
+ * PSPLINK (after a reset when a program is loaded) and returns its first status. `bare` leaves the interface's
+ * files off the share: the street with nothing drawn over it.
+ */
+async function start(boot: string, bare = false): Promise<any> {
+  const id = stage(app);
+  cpSync(`${OUT}/pocket-duty.prx`, `${share}/pocket-duty.prx`);
+  if (bare) for (const f of UI_FILES) rmSync(`${app}/${f}`, { force: true });
+  else stageInterface(app);
+  writeFileSync(`${app}/build.json`, JSON.stringify({ prxSha256: sha(`${OUT}/pocket-duty.prx`), packSha256: id, interfaceSha256: Object.fromEntries(UI_FILES.map((f) => [f, sha(`${OUT}/${f}`)])) }, null, 1));
+  writeFileSync(`${app}/boot.txt`, `${boot}\n`);
+  rmSync(`${app}/status.json`, { force: true });
+  // A reset restarts PSPLINK from the Memory Stick and drops the cable for several seconds. A command sent
+  // before the cable is back leaves PSPLINK half reset (the shell answers, storage does not) until someone
+  // restarts it on the console. So: reset, then nothing until usbhostfs_pc logs a new connection.
+  // PSPLINK lists its own modules last: with nothing after USBHostFS, no program is loaded and no reset is needed.
+  const names = (await pspsh("modlist").catch(() => "")).split("\n").filter((l) => l.includes("Name:")).map((l) => l.split("Name:")[1]!.trim());
+  const idle = names.length > 0 && (names.at(-1) === "USBHostFS" || names.at(-1) === "PSPLINK");
+  const before = logEnd();
+  if (idle) {
+    console.log("psp: PSPLINK is idle; loading without a reset");
+  } else {
+    console.log(`psp: resetting PSPLINK (${names.at(-1) ?? "module list unreadable"})`);
+    await pspsh("reset").catch(() => "");
+    if (before === undefined) {
+      console.log("psp: no usbhostfs_pc log here (the host was started elsewhere); waiting 15 s for PSPLINK");
+      await Bun.sleep(15000);
+    } else {
+      const end = Date.now() + 40000;
+      while (!reconnected(before)) {
+        if (Date.now() > end) throw new Error("PSPLINK did not reconnect after the reset: restart PSPLINK on the console");
+        await Bun.sleep(250);
+      }
+      await Bun.sleep(1000);
+    }
+  }
+  if (!/duty\.pack/.test(await pspsh("ls host0:/duty"))) throw new Error("PSPLINK does not serve host0: restart PSPLINK on the console");
+  await pspsh("ldstart host0:/pocket-duty.prx");
+  const s = await waitFor((s) => s.stage === "running", 180);
+  return s;
+}
+
 switch (cmd) {
   case "build":
     await build();
     break;
   case "run":
     if (!argv.includes("--no-build")) await build();
-    await device(async () => {
-      const id = stage(app);
-      cpSync(`${OUT}/pocket-duty.prx`, `${share}/pocket-duty.prx`);
-      stageInterface(app);
-      writeFileSync(`${app}/build.json`, JSON.stringify({ prxSha256: sha(`${OUT}/pocket-duty.prx`), packSha256: id, interfaceSha256: Object.fromEntries(UI_FILES.map((f) => [f, sha(`${OUT}/${f}`)])) }, null, 1));
-      writeFileSync(`${app}/boot.txt`, `${opt("--boot", "title=0")}\n`);
-      rmSync(`${app}/status.json`, { force: true });
-      // A reset restarts PSPLINK from the Memory Stick and drops the cable for several seconds. A command sent
-      // before the cable is back leaves PSPLINK half reset (the shell answers, storage does not) until someone
-      // restarts it on the console. So: reset, then nothing until usbhostfs_pc logs a new connection.
-      // PSPLINK lists its own modules last: with nothing after USBHostFS, no program is loaded and no reset is needed.
-      const names = (await pspsh("modlist").catch(() => "")).split("\n").filter((l) => l.includes("Name:")).map((l) => l.split("Name:")[1]!.trim());
-      const idle = names.length > 0 && (names.at(-1) === "USBHostFS" || names.at(-1) === "PSPLINK");
-      const before = logEnd();
-      if (idle) {
-        console.log("psp: PSPLINK is idle; loading without a reset");
-      } else {
-        console.log(`psp: resetting PSPLINK (${names.at(-1) ?? "module list unreadable"})`);
-        await pspsh("reset").catch(() => "");
-        if (before === undefined) {
-          console.log("psp: no usbhostfs_pc log here (the host was started elsewhere); waiting 15 s for PSPLINK");
-          await Bun.sleep(15000);
-        } else {
-          const end = Date.now() + 40000;
-          while (!reconnected(before)) {
-            if (Date.now() > end) throw new Error("PSPLINK did not reconnect after the reset: restart PSPLINK on the console");
-            await Bun.sleep(250);
-          }
-          await Bun.sleep(1000);
-        }
+    await device(async () => console.log(JSON.stringify(await start(opt("--boot", "title=0")), null, 1)));
+    break;
+  case "film": {
+    // A film: `--frames` pictures from frame `--from` of a run that `--boot` words steer, one thirtieth of a
+    // second of the match apart. The console draws each one and writes it to the share; `--emu` has
+    // PPSSPPHeadless draw them. They go to `--out` as 00000.raw onwards: 480 × 272 texels of 16 bits.
+    if (argv.includes("--build")) await build();
+    const frames = Number(opt("--frames", "300"));
+    const from = Number(opt("--from", "2"));
+    const bare = argv.includes("--bare");
+    const out = resolve(opt("--out", `${ROOT}/.pocket-build/film/${Date.now()}`));
+    const boot = `title=0 @${from}:film=${frames} ${opt("--boot", "")}`.trim();
+    // The program reads this many bytes of boot.txt (`boot_buf` in psp/src/main.rs); `exit=` is added for the emulator.
+    const BOOT_MAX = 2048;
+    if (boot.length + 16 > BOOT_MAX) throw new Error(`the film's words are ${boot.length} bytes; boot.txt holds ${BOOT_MAX - 16}`);
+    const bytes = 480 * 272 * 2;
+    const take = (dir: string) => {
+      rmSync(out, { recursive: true, force: true });
+      mkdirSync(out, { recursive: true });
+      for (let i = 0; i < frames; i++) {
+        const name = `${String(i).padStart(5, "0")}.raw`;
+        if (!existsSync(`${dir}/${name}`) || statSync(`${dir}/${name}`).size !== bytes) throw new Error(`the film stops at frame ${i} of ${frames}`);
+        cpSync(`${dir}/${name}`, `${out}/${name}`);
       }
-      if (!/duty\.pack/.test(await pspsh("ls host0:/duty"))) throw new Error("PSPLINK does not serve host0: restart PSPLINK on the console");
-      await pspsh("ldstart host0:/pocket-duty.prx");
-      const s = await waitFor((s) => s.stage === "running", 180);
-      console.log(JSON.stringify(s, null, 1));
+      rmSync(dir, { recursive: true, force: true });
+    };
+    if (argv.includes("--emu")) {
+      const headless = process.env.PPSSPP_HEADLESS ?? `${process.env.HOME}/ppsspp-src/build/PPSSPPHeadless`;
+      if (!existsSync(headless)) throw new Error(`no PPSSPPHeadless at ${headless} (set PPSSPP_HEADLESS)`);
+      const root = `${ROOT}/.pocket-build/psp/emu`;
+      mkdirSync(`${root}/duty`, { recursive: true });
+      stage(`${root}/duty`);
+      for (const f of [...UI_FILES, "interface.json", "status.json"]) for (const dir of [root, `${root}/duty`]) rmSync(`${dir}/${f}`, { force: true });
+      rmSync(`${root}/duty.pack`, { force: true });
+      rmSync(`${root}/duty/film`, { recursive: true, force: true });
+      mkdirSync(`${root}/duty/film`, { recursive: true });
+      if (!bare) stageInterface(`${root}/duty`);
+      cpSync(`${OUT}/EBOOT.PBP`, `${root}/EBOOT.PBP`);
+      writeFileSync(`${root}/duty/boot.txt`, `exit=${from + frames + 3} ${boot}\n`);
+      await $`${headless} --root ${root} --graphics=${opt("--graphics", "software")} --timeout=${opt("--timeout", "300")} ${root}/EBOOT.PBP`.nothrow().quiet();
+      take(`${root}/duty/film`);
+      console.log(JSON.stringify({ out, frames, drawnBy: "PPSSPPHeadless" }));
+      break;
+    }
+    await device(async () => {
+      rmSync(`${app}/film`, { recursive: true, force: true });
+      mkdirSync(`${app}/film`, { recursive: true });
+      const began = Date.now();
+      await start(boot, bare);
+      // The last frame is whole when its file has every byte. A frame takes the cable a fraction of a second.
+      const last = `${app}/film/${String(frames - 1).padStart(5, "0")}.raw`;
+      const end = Date.now() + 60000 + frames * 2500;
+      while (!existsSync(last) || statSync(last).size !== bytes) {
+        if (Date.now() > end) throw new Error(`the PSP wrote ${existsSync(`${app}/film`) ? readdirSync(`${app}/film`).length : 0} of ${frames} frames`);
+        await Bun.sleep(500);
+      }
+      await Bun.sleep(500);
+      const status = readStatus();
+      take(`${app}/film`);
+      console.log(JSON.stringify({ out, frames, drawnBy: "psp:usb", seconds: Math.round((Date.now() - began) / 1000), mode: status.mode, match: status.match }));
     });
     break;
+  }
   case "serve": {
     // One usbhostfs_pc owns the cable. This one outlives the command and logs where `run` can count its connections.
     if ((await $`pgrep -x usbhostfs_pc`.nothrow().quiet()).exitCode === 0) throw new Error("a usbhostfs_pc is already running; stop it first, or pass its directory with --share");
@@ -542,6 +615,6 @@ switch (cmd) {
     break;
   }
   default:
-    console.log("usage: bun tools/psp.ts <build|serve|run|status|ctl|capture|bench|tour|emu|package> [--share DIR] [--take]");
+    console.log("usage: bun tools/psp.ts <build|serve|run|status|ctl|capture|bench|tour|film|emu|package> [--share DIR] [--take]");
     process.exit(cmd ? 1 : 0);
 }

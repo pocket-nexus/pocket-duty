@@ -421,12 +421,18 @@ pub unsafe fn swap() {
 /// A frame out of video memory, 480 × 272 texels of 16 bits: host I/O cannot take a video memory
 /// address. `buffer` is `DRAW_BUFFER` for the list just drawn and not yet presented.
 pub unsafe fn pixels(buffer: usize) -> Vec<u8> {
-    let vram = sceGeEdramGetAddr().add(buffer * FB_BYTES);
     let mut out = alloc::vec![0u8; 480 * 272 * 2];
+    read_pixels(buffer, &mut out);
+    out
+}
+
+/// The same frame into `out`, which holds 480 × 272 texels of 16 bits.
+pub unsafe fn read_pixels(buffer: usize, out: &mut [u8]) {
+    assert!(out.len() >= 480 * 272 * 2);
+    let vram = sceGeEdramGetAddr().add(buffer * FB_BYTES);
     for y in 0..272 {
         ptr::copy_nonoverlapping(vram.add(y * 512 * 2), out.as_mut_ptr().add(y * 480 * 2), 480 * 2);
     }
-    out
 }
 
 /// Behind the interface while there is no world.

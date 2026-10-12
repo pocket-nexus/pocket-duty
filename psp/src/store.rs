@@ -348,6 +348,31 @@ pub unsafe fn write_shot(pixels: &[u8]) {
     }
 }
 
+/// Writes a film's frame to `host0:/duty/film/<index>.raw`, five digits, in the frame thread.
+pub unsafe fn write_frame(index: u32, pixels: &[u8]) {
+    let mut name = *b"host0:/duty/film/00000.raw\0";
+    let mut n = index;
+    for digit in (17..22).rev() {
+        name[digit] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    if index == 0 {
+        sceIoMkdir(b"host0:/duty/film\0".as_ptr(), 0o755);
+    }
+    let fd = sceIoOpen(name.as_ptr(), IoOpenFlags::WR_ONLY | IoOpenFlags::CREAT | IoOpenFlags::TRUNC, 0o644);
+    if fd.0 >= 0 {
+        let mut at = 0;
+        while at < pixels.len() {
+            let n = sceIoWrite(fd, pixels.as_ptr().add(at) as *const c_void, (pixels.len() - at).min(64 * 1024));
+            if n <= 0 {
+                break;
+            }
+            at += n as usize;
+        }
+        sceIoClose(fd);
+    }
+}
+
 /// Writes a small text file for the computer (`name` ends in a NUL).
 pub unsafe fn write_text(name: &[u8], text: &str) {
     let fd = sceIoOpen(name.as_ptr(), IoOpenFlags::WR_ONLY | IoOpenFlags::CREAT | IoOpenFlags::TRUNC, 0o644);
