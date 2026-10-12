@@ -348,6 +348,15 @@ pub unsafe fn write_shot(pixels: &[u8]) {
     }
 }
 
+/// Writes a small text file for the computer (`name` ends in a NUL).
+pub unsafe fn write_text(name: &[u8], text: &str) {
+    let fd = sceIoOpen(name.as_ptr(), IoOpenFlags::WR_ONLY | IoOpenFlags::CREAT | IoOpenFlags::TRUNC, 0o644);
+    if fd.0 >= 0 {
+        sceIoWrite(fd, text.as_ptr() as *const c_void, text.len());
+        sceIoClose(fd);
+    }
+}
+
 /// Writes one message for the computer while loading (the frame loop is not running yet).
 pub unsafe fn note(text: &str) {
     let fd = sceIoOpen(b"host0:/duty/status.json\0".as_ptr(), IoOpenFlags::WR_ONLY | IoOpenFlags::CREAT | IoOpenFlags::TRUNC, 0o644);

@@ -27,6 +27,9 @@ pub struct Frame {
     pub by_level: [(u32, u32); 3],
     /// Triangles sent per picture.
     pub by_texture: Vec<u32>,
+    /// What became of the triangles sent: behind the eye, turned away, off the screen, between
+    /// the pixels' middles, behind what was drawn before them, drawn.
+    pub fate: [u32; 6],
     /// Per chunk drawn: its number, level, triangles sent and showing.
     pub by_chunk: Vec<(u16, u8, u32, u32)>,
 }
@@ -84,10 +87,12 @@ pub fn render(pack_bytes: &[u8], camera: &Camera, width: usize, height: usize, a
     let planes = mat::unit_planes(&mat::planes(&vp));
     let clusters: Vec<Cluster> = records(pack_bytes, pack::CLUS);
     let bits = pack::section(pack_bytes, pack::VBIT).unwrap_or(&[]);
-    let world = view::World { scene: &scene, chunks: &chunks, clusters: &clusters, cells: &cells, lists: &lists, bits };
+    let larges_at: Vec<u32> = records(pack_bytes, pack::LTRO);
+    let world = view::World { scene: &scene, chunks: &chunks, clusters: &clusters, larges_at: &larges_at, cells: &cells, lists: &lists, bits };
+    let mut by_cell = view::Cells::new(&scene, &chunks);
     let guard = Guard::new(&vp, near, 480.0, 272.0, 2048.0).boxes_along(&scene.level_x, &scene.level_z);
     let mut draws: Vec<Draw> = Vec::new();
-    let counts = view::select(&world, &planes, camera.eye, &guard, &view::Options { nearer: 1.0, everything: all_chunks }, &mut draws);
+    let counts = view::select(&world, &mut by_cell, &planes, camera.eye, &guard, &view::Options { nearer: 1.0, everything: all_chunks }, &mut draws);
     // What is solid first, then the glass.
     draws.sort_by_key(|d| chunks[d.chunk as usize].flags & chunk::BLEND != 0);
 
@@ -95,13 +100,14 @@ pub fn render(pack_bytes: &[u8], camera: &Camera, width: usize, height: usize, a
     let mut colour = vec![[0.0f32; 3]; width * height];
     let mut depth = vec![0.0f32; width * height];
     let mut seen = 0usize;
+    let mut fate = [0u32; 6];
     let mut by_level = [(0u32, 0u32); 3];
     let mut by_texture = vec![0u32; textures.len()];
     let mut by_chunk: Vec<(u16, u8, u32, u32)> = Vec::new();
     let shadow = textures.get(scene.shadow_texture as usize);
     for d in &draws {
         let c = &chunks[d.chunk as usize];
-        let lod = &c.lod[d.lod as usize];
+        let lod = c.lod(d.lod as usize);
         let centre = scene.cell_centre(c.cell as u32);
         let record = &textures[c.texture as usize];
         by_level[d.lod as usize].0 += d.count / 3;
@@ -137,10 +143,13 @@ pub fn render(pack_bytes: &[u8], camera: &Camera, width: usize, height: usize, a
             }
             poly = cut;
             if poly.len() < 3 {
+                fate[0] += 1;
                 continue;
             }
             let screen: Vec<[f32; 3]> = poly.iter().map(|p| [(p.clip[0] / p.clip[3] * 0.5 + 0.5) * width as f32, (0.5 - p.clip[1] / p.clip[3] * 0.5) * height as f32, 1.0 / p.clip[3]]).collect();
             let mut drew = false;
+            // What became of it: turned away, off the screen, between the pixels' middles, behind something.
+            let (mut faced, mut on_screen, mut covered) = (false, false, false);
             for i in 1..poly.len() - 1 {
                 let (p, s) = ([&poly[0], &poly[i], &poly[i + 1]], [screen[0], screen[i], screen[i + 1]]);
                 let area = (s[1][0] - s[0][0]) * (s[2][1] - s[0][1]) - (s[2][0] - s[0][0]) * (s[1][1] - s[0][1]);
@@ -148,8 +157,10 @@ pub fn render(pack_bytes: &[u8], camera: &Camera, width: usize, height: usize, a
                 if area == 0.0 || (area > 0.0 && c.flags & chunk::TWO_SIDED == 0) {
                     continue;
                 }
+                faced = true;
                 let (x0, x1) = (s.iter().map(|v| v[0]).fold(f32::MAX, f32::min).max(0.0) as usize, (s.iter().map(|v| v[0]).fold(f32::MIN, f32::max).ceil().min(width as f32)) as usize);
                 let (y0, y1) = (s.iter().map(|v| v[1]).fold(f32::MAX, f32::min).max(0.0) as usize, (s.iter().map(|v| v[1]).fold(f32::MIN, f32::max).ceil().min(height as f32)) as usize);
+                on_screen |= x1 > x0 && y1 > y0;
                 for y in y0..y1 {
                     for x in x0..x1 {
                         let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
@@ -158,6 +169,7 @@ pub fn render(pack_bytes: &[u8], camera: &Camera, width: usize, height: usize, a
                         if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                             continue;
                         }
+                        covered = true;
                         let inv = w0 * s[0][2] + w1 * s[1][2] + w2 * s[2][2];
                         let at = y * width + x;
                         if inv <= depth[at] {
@@ -193,6 +205,7 @@ pub fn render(pack_bytes: &[u8], camera: &Camera, width: usize, height: usize, a
                     }
                 }
             }
+            fate[if !faced { 1 } else if !on_screen { 2 } else if !covered { 3 } else if !drew { 4 } else { 5 }] += 1;
             seen += drew as usize;
             by_level[d.lod as usize].1 += drew as u32;
             by_chunk.last_mut().unwrap().3 += drew as u32;
@@ -223,5 +236,5 @@ pub fn render(pack_bytes: &[u8], camera: &Camera, width: usize, height: usize, a
             };
         }
     }
-    Frame { image: Image { width, height, data: colour.iter().map(|c| [c[0], c[1], c[2], 1.0]).collect() }, counts, seen, by_level, by_texture, by_chunk }
+    Frame { image: Image { width, height, data: colour.iter().map(|c| [c[0], c[1], c[2], 1.0]).collect() }, counts, seen, by_level, by_texture, fate, by_chunk }
 }

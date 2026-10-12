@@ -943,7 +943,7 @@ fn swept(body: &Body, alias: &[u8], joints: &[V3], tails: &[V3], bore: (V3, V3, 
     (source, groups)
 }
 
-fn soldier(dir: &Dir, meta: &Value, alias: &[u8], rig: &Value, motions: &[Motion], budget: usize) -> (Built, String) {
+fn soldier(dir: &Dir, meta: &Value, alias: &[u8], rig: &Value, motions: &[Motion], budget: usize, far: bool) -> (Built, String) {
     let body = body(dir, meta);
     let parents: Vec<i64> = rig["parents"].as_array().map(|a| a.iter().map(|v| v.as_i64().unwrap_or(-1)).collect()).unwrap_or_default();
     let joints: Vec<V3> = (0..bone::SOLDIER).map(|b| list3(&rig["joints"][b])).collect();
@@ -987,10 +987,11 @@ fn soldier(dir: &Dir, meta: &Value, alias: &[u8], rig: &Value, motions: &[Motion
     let corner_normals = normals(&source, &kept, 0.17);
     let per_group: Vec<String> = groups.iter().enumerate().map(|(g, group)| format!("{} {}", group.name, kept.iter().filter(|k| k.group == g).count())).collect();
     let draws = draws_by_bones(&mut source, &kept, &corner_normals, &parents);
-    let made = built(meta["model"].as_u64().unwrap_or(0) as u32, bone::SOLDIER, draws);
+    let made = built(meta["model"].as_u64().unwrap_or(0) as u32 + if far { model::FAR } else { 0 }, bone::SOLDIER, draws);
     let line = format!(
-        "{}: {} triangles → drawn again with sides {:?} as {} → {} that show ({}), {} batches of {:?} bones, {} vertices, {} bytes",
+        "{}{}: {} triangles → drawn again with sides {:?} as {} → {} that show ({}), {} batches of {:?} bones, {} vertices, {} bytes",
         meta["name"].as_str().unwrap_or("soldier"),
+        if far { " from afar" } else { "" },
         body.tris.len(),
         detail,
         drawn,
@@ -1150,10 +1151,18 @@ fn all(ir: &Path, profile: &Value) -> Result<Option<Cooked>, String> {
     let alias = aliases(&parents, &soldier_motions);
     let joints: [V3; bone::SOLDIER] = core::array::from_fn(|b| list3(&meta["rig"]["joints"][b]));
     for s in meta["soldiers"].as_array().into_iter().flatten() {
-        let (made, line) = soldier(&dir, s, &alias, &meta["rig"], &soldier_motions, budget(profile, "soldier", 700));
+        let (made, line) = soldier(&dir, s, &alias, &meta["rig"], &soldier_motions, budget(profile, "soldier", 700), false);
         cooked.infos.push(Info { model: made.model.id, muzzle: list3(&s["muzzle"]), joints, ..Default::default() });
         cooked.models.push(made);
         cooked.lines.push(line);
+        // The same soldier drawn plainer, for when he is far off: the GE skins and lights every
+        // triangle of him at any distance.
+        let far = budget(profile, "soldierFar", 0);
+        if far > 0 {
+            let (made, line) = soldier(&dir, s, &alias, &meta["rig"], &soldier_motions, far, true);
+            cooked.models.push(made);
+            cooked.lines.push(line);
+        }
     }
     cooked.motions.extend(soldier_motions);
 

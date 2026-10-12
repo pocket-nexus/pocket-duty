@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use duty_pack::{chunk, Chunk, Cluster, Lod, Scene, WorldVertex};
+use duty_pack::{chunk, large, Chunk, Cluster, Large, Lod, Scene, WorldVertex};
 use meshopt::VertexDataAdapter;
 use duty_sim::math::{v3, V3};
 use rayon::prelude::*;
@@ -21,6 +21,9 @@ pub struct Built {
     pub vertices: Vec<WorldVertex>,
     pub indices: Vec<u16>,
     pub clusters: Vec<Cluster>,
+    /// The large triangles' records, and for each cluster where its first one is.
+    pub larges: Vec<Large>,
+    pub larges_at: Vec<u32>,
     /// Triangles at each level of detail, and how many of them are large.
     pub triangles: [usize; LODS],
     pub large: [usize; LODS],
@@ -39,6 +42,9 @@ pub struct Settings {
     pub shadow_edge: [f32; LODS],
     /// A triangle with an edge longer than this is one the device may have to cut, metres.
     pub large_edge: f32,
+    /// The cosine a face's normal makes with one of the level's six ways at least to count as
+    /// lying along it; 0 puts every face with the way it leans most.
+    pub square: f32,
     /// Triangles a cluster holds at most, and how much a cluster's faces are kept facing alike
     /// (0 groups by place alone).
     pub cluster_triangles: usize,
@@ -212,6 +218,8 @@ struct Level {
     indices: Vec<u16>,
     /// The clusters, their runs counted from the level's first index.
     clusters: Vec<Cluster>,
+    /// A record for each cluster's large triangles, cluster after cluster.
+    larges: Vec<Large>,
     large: usize,
     bounds: ([f32; 3], [f32; 3]),
 }
@@ -257,7 +265,7 @@ fn light_piece(piece: &Piece, material: &Material, scene: &Scene, lighting: &Lig
     let mut open: HashMap<LightKey, f32> = HashMap::new();
     let sun_dir = lighting.sky.sun;
     let levels: [Level; LODS] = core::array::from_fn(|l| {
-        let mut level = Level { vertices: Vec::new(), indices: Vec::new(), clusters: Vec::new(), large: 0, bounds: ([f32::MAX; 3], [f32::MIN; 3]) };
+        let mut level = Level { vertices: Vec::new(), indices: Vec::new(), clusters: Vec::new(), larges: Vec::new(), large: 0, bounds: ([f32::MAX; 3], [f32::MIN; 3]) };
         let mut welded: HashMap<WorldVertex, u16> = HashMap::new();
         let mut triangles: Vec<[u16; 3]> = Vec::new();
         for (t, tri) in refined[l].iter().enumerate() {
@@ -308,12 +316,17 @@ fn light_piece(piece: &Piece, material: &Material, scene: &Scene, lighting: &Lig
         // left out whole when the eye is behind them. The six ways are the level's own: along its
         // street, across it, up and down.
         let two_sided_material = material.double_sided || material.cutout || material.transparent;
-        let mut facing: [Vec<u32>; 6] = Default::default();
+        // A face that lies along the level (a wall, a floor, a crate's side) goes with the others
+        // that do, apart from the ones that only lean that way: a cluster of faces in one plane
+        // is turned away from every eye behind that plane.
+        let mut facing: [Vec<u32>; 12] = Default::default();
         for t in &triangles {
             let p = [place(t[0]), place(t[1]), place(t[2])];
             let n = crate::lod::cross(sub(p[1], p[0]), sub(p[2], p[0]));
             let along = [dot(n, set.level_axes[0]), n[1], dot(n, set.level_axes[1])];
-            let axis = if two_sided_material { 0 } else { (0..3).max_by(|a, b| along[*a].abs().partial_cmp(&along[*b].abs()).unwrap()).unwrap() * 2 + (along.iter().fold((0.0f32, 0.0f32), |best, v| if v.abs() > best.0 { (v.abs(), *v) } else { best }).1 < 0.0) as usize };
+            let most = (0..3).max_by(|a, b| along[*a].abs().partial_cmp(&along[*b].abs()).unwrap()).unwrap();
+            let square = set.square > 0.0 && along[most].abs() >= set.square * len(n);
+            let axis = if two_sided_material { 0 } else { most * 2 + (along[most] < 0.0) as usize + if square { 0 } else { 6 } };
             facing[axis].extend(t.map(|v| v as u32));
         }
         let two_sided = two_sided_material;
@@ -344,24 +357,78 @@ fn light_piece(piece: &Piece, material: &Material, scene: &Scene, lighting: &Lig
                     reach[k] = reach[k].max(along.abs());
                 }
             }
+            let faces: Vec<[[f32; 3]; 3]> = run.iter().map(|t| t.1.map(place)).collect();
+            let (axis, cutoff, apex) = if two_sided { ([0; 3], 127, 0) } else { cone(&faces, bounds.center, bounds.radius, bounds.cone_axis) };
             level.clusters.push(Cluster {
                 half: reach.map(|h| (h / bounds.radius.max(1e-6) * 255.0).ceil().clamp(1.0, 255.0) as u8),
-                pad: 0,
+                apex,
                 centre: bounds.center,
                 radius: bounds.radius,
-                axis: if two_sided { [0; 3] } else { bounds.cone_axis_s8 },
-                cutoff: if two_sided { 127 } else { bounds.cone_cutoff_s8 },
+                axis,
+                cutoff,
                 first: level.indices.len() as u32,
                 count: indices.len() as u16,
                 large: large as u16,
             });
             level.large += large;
+            // What the device asks of each large triangle before it reads the corners: a sphere
+            // about it and its longest edge, on the lattice the corners are on.
+            for (_, corners) in &run[..large] {
+                let p = corners.map(|v| level.vertices[v as usize].pos.map(|x| x as f32));
+                let centre: [i16; 3] = core::array::from_fn(|i| ((p[0][i] + p[1][i] + p[2][i]) / 3.0).round() as i16);
+                let radius = p.iter().map(|p| len(sub(*p, centre.map(|x| x as f32)))).fold(0.0f32, f32::max);
+                let edge = (0..3).map(|k| len(sub(p[k], p[(k + 1) % 3]))).fold(0.0f32, f32::max);
+                // (a step more than the length, for the rounding of the centre)
+                let units = |steps: f32| ((steps + 1.0) / large::UNIT as f32).ceil().min(255.0) as u8;
+                level.larges.push(Large { centre, radius: units(radius), edge: units(edge) });
+            }
             level.indices.extend(run.iter().flat_map(|t| t.1));
           }
         }
         level
     });
     Lit { levels, uv_offset, uv_scale, points: open.len() }
+}
+
+/// The cone that says when every one of a cluster's faces is turned away (`Cluster::axis`,
+/// `cutoff`, `apex`), about the direction `toward`: (0, 127, 0) when no eye sees them all from
+/// behind, or the numbers do not hold where the apex is.
+///
+/// With every face's normal within an angle β of the axis, and the apex behind the plane of every
+/// face, an eye that sees the apex at 90° − β from the axis or less is behind every face.
+pub fn cone(faces: &[[[f32; 3]; 3]], centre: [f32; 3], radius: f32, toward: [f32; 3]) -> ([i8; 3], i8, u8) {
+    const NONE: ([i8; 3], i8, u8) = ([0; 3], 127, 0);
+    let stored: [i8; 3] = toward.map(|c| (c * 127.0).round().clamp(-127.0, 127.0) as i8);
+    // The axis as the device reads it back.
+    let read = stored.map(|c| c as f32 / 127.0);
+    let length = len(read);
+    if length < 0.5 || radius <= 0.0 {
+        return NONE;
+    }
+    let axis = read.map(|c| c / length);
+    let (mut least, mut behind) = (1.0f32, 0.0f32);
+    for face in faces {
+        let n = crate::lod::cross(sub(face[1], face[0]), sub(face[2], face[0]));
+        let area = len(n);
+        if area < 1e-12 {
+            continue;
+        }
+        let n = n.map(|c| c / area);
+        let facing = dot(n, axis);
+        if facing <= 0.1 {
+            return NONE;
+        }
+        least = least.min(facing);
+        // How far behind the centre the axis meets this face's plane.
+        behind = behind.max(dot(sub(centre, face[0]), n) / facing);
+    }
+    // (a step of the stored numbers more of each, and a hundredth of the radius, for rounding)
+    let apex = ((behind + radius * 0.01) / (radius / 16.0)).ceil().max(0.0) + 1.0;
+    let cutoff = ((1.0 - least * least).max(0.0).sqrt() * length * 127.0).ceil() + 2.0;
+    if apex > 255.0 || cutoff > 126.0 {
+        return NONE;
+    }
+    (stored, cutoff as i8, apex as u8)
 }
 
 pub fn build(pieces: &[Piece], world: &World, scene: &Scene, lighting: &Lighting, tone: &Tone, set: &Settings) -> Built {
@@ -372,7 +439,7 @@ pub fn build(pieces: &[Piece], world: &World, scene: &Scene, lighting: &Lighting
         let p = &pieces[i];
         (world.materials[p.material].transparent, set.texture_of[p.material], p.ground, p.cell, p.material, p.detail)
     });
-    let mut built = Built { chunks: Vec::new(), vertices: Vec::new(), indices: Vec::new(), clusters: Vec::new(), triangles: [0; LODS], large: [0; LODS], lit_points: lit.iter().map(|l| l.points).sum() };
+    let mut built = Built { chunks: Vec::new(), vertices: Vec::new(), indices: Vec::new(), clusters: Vec::new(), larges: Vec::new(), larges_at: Vec::new(), triangles: [0; LODS], large: [0; LODS], lit_points: lit.iter().map(|l| l.points).sum() };
     for i in order {
         let (piece, lit) = (&pieces[i], &lit[i]);
         let material = &world.materials[piece.material];
@@ -382,18 +449,16 @@ pub fn build(pieces: &[Piece], world: &World, scene: &Scene, lighting: &Lighting
                 flags |= bit;
             }
         }
-        let mut record = Chunk {
-            min: [f32::MAX; 3],
-            max: [f32::MIN; 3],
-            texture: set.texture_of[piece.material],
-            flags,
-            cell: piece.cell as u16,
-            opacity: (material.opacity.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
-            pad: 0,
-            uv_scale: lit.uv_scale,
-            uv_offset: lit.uv_offset,
-            lod: [Lod::default(); LODS],
-        };
+        let mut record = Chunk::default();
+        record.min = [f32::MAX; 3];
+        record.max = [f32::MIN; 3];
+        record.texture = set.texture_of[piece.material];
+        record.flags = flags;
+        record.cell = piece.cell as u16;
+        record.opacity = (material.opacity.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        record.uv_scale = lit.uv_scale;
+        record.uv_offset = lit.uv_offset;
+        let mut any = false;
         for (l, level) in lit.levels.iter().enumerate() {
             if level.indices.is_empty() {
                 continue;
@@ -402,16 +467,103 @@ pub fn build(pieces: &[Piece], world: &World, scene: &Scene, lighting: &Lighting
                 record.min[a] = record.min[a].min(level.bounds.0[a]);
                 record.max[a] = record.max[a].max(level.bounds.1[a]);
             }
-            record.lod[l] = Lod { vertex: built.vertices.len() as u32, index: built.indices.len() as u32, indices: level.indices.len() as u32, cluster: built.clusters.len() as u32, clusters: level.clusters.len() as u32 };
+            assert!(level.clusters.len() < 65536, "a chunk of cell {} has more than 65 535 clusters at level {l}", piece.cell);
+            *record.lod_mut(l) = Lod { vertex: built.vertices.len() as u32, index: built.indices.len() as u32, cluster: built.clusters.len() as u32, clusters: level.clusters.len() as u16, pad: 0 };
+            any = true;
             built.vertices.extend_from_slice(&level.vertices);
             built.indices.extend_from_slice(&level.indices);
+            // Where each cluster's first large triangle's record is.
+            let mut at = built.larges.len() as u32;
+            for cl in &level.clusters {
+                built.larges_at.push(at);
+                at += cl.large as u32;
+            }
+            built.larges.extend_from_slice(&level.larges);
             built.clusters.extend_from_slice(&level.clusters);
             built.triangles[l] += level.indices.len() / 3;
             built.large[l] += level.large;
         }
-        if record.lod.iter().any(|l| l.indices > 0) {
+        if any {
             built.chunks.push(record);
         }
     }
     built
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use duty_sim::view::turned_away;
+
+    struct Random(u64);
+    impl Random {
+        fn next(&mut self) -> f32 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((self.0 >> 40) as f32) / (1u64 << 24) as f32
+        }
+        fn range(&mut self, lo: f32, hi: f32) -> f32 {
+            lo + (hi - lo) * self.next()
+        }
+    }
+
+    #[test]
+    fn an_eye_the_cone_says_is_behind_a_cluster_is_behind_every_one_of_its_faces() {
+        let mut random = Random(5);
+        let (mut cones, mut behind, mut flat) = (0, 0, 0);
+        for round in 0..600 {
+            // Faces about one direction: in one plane, or leaning up to a given angle from it.
+            let toward = duty_sim::math::v3(random.range(-1.0, 1.0), random.range(-1.0, 1.0), random.range(-1.0, 1.0)).norm_or(V3::UP);
+            let lean = if round % 3 == 0 { 0.0 } else { random.range(0.0, 1.2) };
+            let side = toward.cross(if toward.y.abs() < 0.9 { V3::UP } else { v3(1.0, 0.0, 0.0) }).norm_or(v3(1.0, 0.0, 0.0));
+            let up = side.cross(toward);
+            let faces: Vec<[[f32; 3]; 3]> = (0..random.range(1.0, 24.0) as usize)
+                .map(|_| {
+                    let n = (toward + side * random.range(-lean, lean) + up * random.range(-lean, lean)).norm_or(toward);
+                    let (u, w) = (n.cross(side).norm_or(up), n.cross(up).norm_or(side));
+                    let at = side * random.range(-3.0, 3.0) + up * random.range(-3.0, 3.0) + toward * random.range(-lean, lean);
+                    // Counter-clockwise seen from where `n` points: (b - a) × (c - a) is along `n`.
+                    let (a, b) = (u * random.range(0.2, 2.0), w * random.range(0.2, 2.0));
+                    let (b, c) = if a.cross(b).dot(n) > 0.0 { (at + a, at + b) } else { (at + b, at + a) };
+                    [[at.x, at.y, at.z], [b.x, b.y, b.z], [c.x, c.y, c.z]]
+                })
+                .collect();
+            let centre = [0.0f32; 3];
+            let radius = faces.iter().flatten().map(|p| len(*p)).fold(0.0f32, f32::max);
+            let (axis, cutoff, apex) = cone(&faces, centre, radius, [toward.x, toward.y, toward.z]);
+            if cutoff == 127 {
+                continue;
+            }
+            cones += 1;
+            flat += (lean == 0.0) as u32;
+            let cluster = Cluster { centre, radius, axis, cutoff, apex, ..Cluster::default() };
+            for _ in 0..200 {
+                let eye = v3(random.range(-30.0, 30.0), random.range(-30.0, 30.0), random.range(-30.0, 30.0));
+                if !turned_away(&cluster, V3::ZERO, eye) {
+                    continue;
+                }
+                behind += 1;
+                for face in &faces {
+                    let n = crate::lod::cross(sub(face[1], face[0]), sub(face[2], face[0]));
+                    assert!(dot(n, sub(face[0], [eye.x, eye.y, eye.z])) >= 0.0, "round {round}: the eye at {eye:?} is in front of {face:?}");
+                }
+            }
+        }
+        // Most rounds give a cone, the flat ones among them, and eyes are found behind them.
+        assert!(cones > 300 && flat > 150 && behind > 10_000, "{cones} {flat} {behind}");
+    }
+
+    #[test]
+    fn a_flat_cluster_is_turned_away_from_just_behind_its_plane() {
+        // A wall 8 m wide in the plane z = 0, facing +z.
+        let faces = vec![[[-4.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 3.0, 0.0]], [[-4.0, 0.0, 0.0], [4.0, 3.0, 0.0], [-4.0, 3.0, 0.0]]];
+        let (centre, radius) = ([0.0, 1.5, 0.0], 4.3);
+        let (axis, cutoff, apex) = cone(&faces, centre, radius, [0.0, 0.0, 1.0]);
+        let cluster = Cluster { centre, radius, axis, cutoff, apex, ..Cluster::default() };
+        let at = v3(0.0, 1.5, 0.0);
+        // Half a metre behind it, anywhere along it: its sphere reaches far past that.
+        assert!(turned_away(&cluster, at, v3(0.0, 1.5, -1.0)));
+        assert!(turned_away(&cluster, at, v3(3.0, 1.0, -1.5)));
+        assert!(!turned_away(&cluster, at, v3(0.0, 1.5, 0.5)));
+        assert!(!turned_away(&cluster, at, v3(-3.5, 2.0, 0.2)));
+    }
 }

@@ -146,6 +146,7 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
             large_edge: number(&profile["clip"]["largeEdge"], 0.9),
             cluster_triangles: profile["cluster"]["triangles"].as_u64().unwrap_or(32) as usize,
             cone_weight: number(&profile["cluster"]["cone"], 0.25),
+            square: number(&profile["cluster"]["square"], 0.0),
             level_axes: [level.axis_x, level.axis_z],
         },
     );
@@ -170,7 +171,7 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     // ---- what can be seen from where
     let t5 = Instant::now();
     let collision = collision::Collision::open(ir)?;
-    let sight = pvs::compute(&scene, &built.chunks, &built.clusters, &built.vertices, &built.indices, &collision, &pvs::Settings { rays: profile["sight"]["rays"].as_u64().unwrap_or(400_000) as usize, near: number(&profile["sight"]["near"], 3.0) });
+    let sight = pvs::compute(&scene, &built.chunks, &built.clusters, &built.vertices, &built.indices, &collision, &pvs::Settings { rays: std::env::var("DUTY_RAYS").ok().and_then(|n| n.parse().ok()).unwrap_or(profile["sight"]["rays"].as_u64().unwrap_or(400_000) as usize), near: number(&profile["sight"]["near"], 3.0) });
     println!("sight: {} cells an eye can be in; a cell sees {} of {} chunks and {} of {} clusters on average ({:.1} s); collision {} triangles, {} nodes", sight.open, sight.chunks, built.chunks.len(), sight.clusters, built.clusters.len(), t5.elapsed().as_secs_f32(), collision.tris.len(), collision.nodes.len());
 
     // ---- the ground's shadow and the sky
@@ -257,6 +258,8 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     writer.add(pack::WVTX, &built.vertices);
     writer.add(pack::WIDX, &built.indices);
     writer.add(pack::CLUS, &built.clusters);
+    writer.add(pack::LTRI, &built.larges);
+    writer.add(pack::LTRO, &built.larges_at);
     writer.add(pack::VCEL, &sight.cells);
     writer.add(pack::VLST, &sight.lists);
     writer.add(pack::VBIT, &sight.bits);
@@ -320,6 +323,8 @@ fn shot(out: &Path, argv: &[String]) -> Result<(), String> {
     let c = &frame.counts;
     println!("  chunks: {} listed, {} in the view; clusters: {} of them, {} unseen from the cell, {} outside the view, {} turned away, {} drawn ({} to test, {} large triangles)", c.listed, c.chunks, c.clusters, c.unseen, c.outside, c.turned, c.drawn, c.cut, c.large);
     println!("  by level (sent, showing): {:?}", frame.by_level);
+    let f = frame.fate;
+    println!("  of the triangles sent: {} behind the eye, {} turned away, {} off the screen, {} between pixels, {} behind what was drawn, {} drawn", f[0], f[1], f[2], f[3], f[4], f[5]);
     if argv.iter().any(|a| a == "--chunks") {
         let chunks: Vec<pack::Chunk> = { let b = pack::section(&bytes, pack::CHNK).unwrap(); (0..b.len() / core::mem::size_of::<pack::Chunk>()).map(|i| pack::read(b, i * core::mem::size_of::<pack::Chunk>()).unwrap()).collect() };
         let mut rows = frame.by_chunk.clone();

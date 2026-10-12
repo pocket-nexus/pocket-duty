@@ -27,6 +27,9 @@ pub mod model {
     pub const VANGUARD: u32 = 0;
     pub const IRREGULAR: u32 = 1;
     pub const BREACHER: u32 = 2;
+    /// A soldier's plainer drawing, for one too far off to show the difference, is his number
+    /// plus this. A pack may hold none.
+    pub const FAR: u32 = 4;
     /// The weapons as the player holds them, each with the arms that hold it.
     pub const RIFLE: u32 = 16;
     pub const SMG: u32 = 17;

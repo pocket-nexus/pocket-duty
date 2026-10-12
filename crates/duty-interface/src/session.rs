@@ -315,15 +315,23 @@ const LINGER: u8 = 12;
 pub struct Pace {
     buttons: u32,
     linger: u8,
+    /// Turns offered since the last one taken for readouts alone.
+    waited: u8,
+    /// Turns taken so far, by why: the guest is not idle; a button it listens to moved; news
+    /// that is more than readouts; the turns after any of those; readouts.
+    pub taken: [u32; 5],
 }
 
 impl Pace {
     pub const fn new() -> Pace {
-        Pace { buttons: 0, linger: 0 }
+        Pace { buttons: 0, linger: 0, waited: 0, taken: [0; 5] }
     }
 
     /// `buttons`: the guest's pad (PocketJS's bits) as it would be handed over this turn.
-    pub fn due(&mut self, session: &Session, buttons: u32) -> bool {
+    /// `every`: of the turns that would bring the guest nothing but new readouts (the numbers of
+    /// play), one in this many is taken. A PSP's turn is a quarter of its frame, and a compass
+    /// that follows the view at 15 steps a second reads the same as one at 30.
+    pub fn due(&mut self, session: &Session, buttons: u32, every: u8) -> bool {
         let heard = match session.mode {
             Mode::Play => buttons & GUEST_MENU,
             Mode::Down => 0,
@@ -334,13 +342,31 @@ impl Pace {
         let interface = unsafe { channel() };
         let news = interface.news();
         if !session.idle || changed || (news && !interface.only_readouts()) {
+            self.taken[if !session.idle { 0 } else if changed { 1 } else { 2 }] += 1;
             self.linger = LINGER;
+            self.waited = 0;
             return true;
         }
         if self.linger > 0 {
+            // What settles after news (a fade, a slide) is drawn at the readouts' pace too.
             self.linger -= 1;
+            self.waited += 1;
+            if self.waited >= every.max(1).min(2) || self.linger == 0 {
+                self.waited = 0;
+                self.taken[3] += 1;
+                return true;
+            }
+            return false;
+        }
+        if !news {
+            return false;
+        }
+        self.waited += 1;
+        if self.waited >= every.max(1) {
+            self.waited = 0;
+            self.taken[4] += 1;
             return true;
         }
-        news
+        false
     }
 }

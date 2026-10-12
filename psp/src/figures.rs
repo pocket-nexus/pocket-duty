@@ -7,8 +7,6 @@
 //! side, the sun's on the sides turned to it, and the sun's only where the
 //! ground's shadow picture has sun at the figure's feet.
 
-use core::ffi::c_void;
-
 use alloc::vec::Vec;
 use duty_pack::figure::{self as figure, bone, clip, model, part, Batch, Clip, FigureHeader, Info, Model, Pose, SkinVertex};
 use duty_pack::{self as pack};
@@ -20,7 +18,7 @@ use duty_sim::tune::soldier as rules;
 use duty_sim::weapon::Action;
 use psp::sys::*;
 
-use crate::gfx::{self, abgr, fmatrix, Camera, Gfx};
+use crate::gfx::{self, abgr, fmatrix, Camera, Gfx, Sub};
 use crate::store::{self, Kept};
 
 fn vtype_skin() -> VertexType {
@@ -53,6 +51,9 @@ pub struct Figures {
     /// Triangles drawn this frame.
     pub triangles: u32,
 }
+
+/// Metres from the eye at which a soldier is drawn from his plainer model.
+const FAR_FROM: f32 = 16.0;
 
 const IDENTITY: Pose = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
 
@@ -88,9 +89,9 @@ fn euler(turn: [f32; 3], by: [f32; 3]) -> Pose {
     after(&x, &after(&y, &z))
 }
 
-fn bone_matrix(p: &Pose) -> ScePspFMatrix4 {
-    let col = |c: usize, w: f32| ScePspFVector4 { x: p[0][c], y: p[1][c], z: p[2][c], w };
-    ScePspFMatrix4 { x: col(0, 0.0), y: col(1, 0.0), z: col(2, 0.0), w: col(3, 1.0) }
+/// A pose as the GE takes a bone's matrix: column by column.
+fn columns(p: &Pose) -> [[f32; 3]; 4] {
+    core::array::from_fn(|c| [p[0][c], p[1][c], p[2][c]])
 }
 
 impl Figures {
@@ -167,21 +168,29 @@ impl Figures {
         sceGuAmbient(abgr(scene.sky_colour.map(|c| c * 0.55)));
     }
 
-    unsafe fn draw_model(&mut self, model: u32, poses: &[Pose]) {
+    /// A model's batches, each with its bones, through `sub`: the run is closed when this returns,
+    /// so what the caller set with `sceGu` before it holds for these draws and no later ones.
+    unsafe fn draw_model(&mut self, sub: &mut Sub, model: u32, poses: &[Pose]) {
         let Some(m) = self.models.iter().find(|m| m.id == model) else { return };
         let mut triangles = 0;
+        sub.i(GeCommand::VertexType, vtype_skin().bits() as u32);
         for b in &m.batches {
-            for slot in 0..b.count as usize {
-                sceGuBoneMatrix(slot as u32, &bone_matrix(&poses[(b.bones[slot] as usize).min(poses.len() - 1)]));
+            if !sub.room() {
+                break;
             }
-            sceGuDrawArray(GuPrimitive::Triangles, vtype_skin(), b.index_count as i32, b.indices as *const c_void, b.vertices as *const c_void);
+            for slot in 0..b.count as usize {
+                sub.matrix(GeCommand::BoneMatrixNumber, GeCommand::BoneMatrixData, slot as u32 * 12, &columns(&poses[(b.bones[slot] as usize).min(poses.len() - 1)]));
+            }
+            sub.address(GeCommand::Vaddr, b.vertices as usize);
+            sub.triangles(b.indices, b.index_count);
             triangles += b.index_count / 3;
         }
+        sub.close();
         self.triangles += triangles;
     }
 
     /// The soldiers, standing and fallen. The list is open, the world drawn, the eye the origin.
-    pub unsafe fn soldiers(&mut self, gfx: &Gfx, camera: &Camera, game: &Game) {
+    pub unsafe fn soldiers(&mut self, gfx: &mut Gfx, camera: &Camera, game: &Game) {
         if self.models.is_empty() {
             return;
         }
@@ -209,7 +218,11 @@ impl Figures {
             let at = s.pos - camera.eye;
             let root: Mat4 = [cs, 0.0, sn, at.x, 0.0, 1.0, 0.0, at.y, -sn, 0.0, cs, at.z, 0.0, 0.0, 0.0, 1.0];
             sceGuSetMatrix(MatrixMode::Model, &fmatrix(&root));
-            self.draw_model(model::VANGUARD + s.variant as u32 % 3, &poses);
+            // Far off, his plainer drawing when the pack has one: at 16 m he is 24 pixels tall.
+            let id = model::VANGUARD + s.variant as u32 % 3;
+            let plain = id + model::FAR;
+            let id = if distance > FAR_FROM && self.models.iter().any(|m| m.id == plain) { plain } else { id };
+            self.draw_model(&mut gfx.sub, id, &poses);
         }
         sceGuDisable(GuState::Lighting);
         sceGuDisable(GuState::Light1);
@@ -268,7 +281,7 @@ impl Figures {
 
     /// The weapon in the player's hands, in a frustum and a depth range of its own. Returns where
     /// its muzzle is, counted from the eye in the eye's own axes.
-    pub unsafe fn held(&mut self, gfx: &Gfx, view: &Mat4, game: &Game) -> Option<V3> {
+    pub unsafe fn held(&mut self, gfx: &mut Gfx, view: &Mat4, game: &Game) -> Option<V3> {
         let arms = &game.arms;
         let id = model::RIFLE + arms.active as u32;
         if game.player.dead || !self.models.iter().any(|m| m.id == id) {
@@ -324,7 +337,7 @@ impl Figures {
         let sun = v3(gfx.scene.sun[0], gfx.scene.sun[1], gfx.scene.sun[2]);
         let in_view = v3(view[0] * sun.x + view[1] * sun.y + view[2] * sun.z, view[4] * sun.x + view[5] * sun.y + view[6] * sun.z, view[8] * sun.x + view[9] * sun.y + view[10] * sun.z);
         self.light(gfx, player.body.pos, in_view, v3(view[1], view[5], view[9]));
-        self.draw_model(id, &poses);
+        self.draw_model(&mut gfx.sub, id, &poses);
         sceGuDisable(GuState::Lighting);
         sceGuDisable(GuState::Light1);
         Some(apply(&poses[part::BODY], info.muzzle))

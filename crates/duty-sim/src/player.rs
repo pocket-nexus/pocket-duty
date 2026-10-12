@@ -7,7 +7,7 @@
 //! back after a few seconds unhurt. What a handheld's pad cannot ask for is
 //! left out: leaning, and lying prone.
 
-use crate::body::Body;
+use crate::body::{Body, Near};
 use crate::event::{Event, Events};
 use crate::level::Level;
 use crate::math::*;
@@ -161,13 +161,14 @@ impl Player {
     }
 
     /// One step of `DT`. `can_ads`: the weapon lets the sights be raised.
-    pub fn step(&mut self, level: &Level, input: &Input, events: &mut Events) {
+    /// `near` is the triangles about his body, his own from step to step.
+    pub fn step(&mut self, level: &Level, near: &mut Near, input: &Input, events: &mut Events) {
         let pressed = input.buttons & !self.held;
         self.held = input.buttons;
         if self.dead {
             // (he falls if he was in the air, and then lies)
             self.body.vel = v3(0.0, if self.body.grounded { 0.0 } else { self.body.vel.y - GRAVITY * DT }, 0.0);
-            self.body.advance(level, DT);
+            self.body.advance(level, near, DT);
             self.eye = ease(self.eye, 0.35, 6.0, DT);
             return;
         }
@@ -345,7 +346,7 @@ impl Player {
         }
 
         let before = self.body.pos.y;
-        self.body.advance(level, DT);
+        self.body.advance(level, near, DT);
         // A step the feet took at once the eye takes over a moment.
         if self.body.grounded && grounded && !jumped {
             self.step_debt = clamp(self.step_debt - (self.body.pos.y - before), -0.5, 0.5);
@@ -571,8 +572,9 @@ mod tests {
     use crate::body::tests::yard;
 
     fn run(player: &mut Player, level: &Level, input: Input, seconds: f32, events: &mut Events) {
+        let mut near = Near::new();
         for _ in 0..(seconds * 60.0) as u32 {
-            player.step(level, &input, events);
+            player.step(level, &mut near, &input, events);
         }
     }
 
@@ -622,8 +624,7 @@ mod tests {
         let mut p = Player::new(v3(0.0, 0.0, -1.0), 0.0);
         run(&mut p, &level, Input::default(), 0.2, &mut events);
         let mut top = 0.0f32;
-        p.step(
-            &level,
+        p.step(&level, &mut Near::new(),
             &Input {
                 buttons: btn::JUMP,
                 ..Default::default()
@@ -631,7 +632,7 @@ mod tests {
             &mut events,
         );
         for _ in 0..60 {
-            p.step(&level, &Input::default(), &mut events);
+            p.step(&level, &mut Near::new(), &Input::default(), &mut events);
             top = top.max(p.body.pos.y);
         }
         assert!(abs(top - 0.6) < 0.04, "apex {top}");
@@ -654,8 +655,7 @@ mod tests {
             0.8,
             &mut events,
         );
-        p.step(
-            &level,
+        p.step(&level, &mut Near::new(),
             &Input {
                 my: 1.0,
                 buttons: btn::CROUCH,
@@ -683,8 +683,7 @@ mod tests {
         let mut p = Player::new(v3(-1.2, 0.0, 0.0), PI * 0.5);
         let mut stood = false;
         for _ in 0..120 {
-            p.step(
-                &level,
+            p.step(&level, &mut Near::new(),
                 &Input {
                     my: 0.8,
                     buttons: btn::JUMP,

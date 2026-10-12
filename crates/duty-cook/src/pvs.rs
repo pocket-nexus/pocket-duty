@@ -74,16 +74,18 @@ pub fn compute(scene: &Scene, chunks: &[Chunk], clusters: &[Cluster], vertices: 
         let mut verts: Vec<[f32; 3]> = Vec::new();
         let mut tris: Vec<Tri> = Vec::new();
         for c in chunks {
-            let lod = &c.lod[level];
-            if lod.indices == 0 {
+            let lod = c.lod(level);
+            if lod.clusters == 0 {
                 continue;
             }
             let centre = scene.cell_centre(c.cell as u32);
             let base = verts.len() as u32;
-            let count = indices[lod.index as usize..(lod.index + lod.indices) as usize].iter().map(|v| *v as usize + 1).max().unwrap_or(0);
+            // The level's indices end where the last of its clusters' runs does.
+            let end = clusters[lod.cluster as usize..lod.cluster as usize + lod.clusters as usize].iter().map(|cl| cl.first + cl.count as u32).max().unwrap_or(0);
+            let count = indices[lod.index as usize..(lod.index + end) as usize].iter().map(|v| *v as usize + 1).max().unwrap_or(0);
             verts.extend(vertices[lod.vertex as usize..lod.vertex as usize + count].iter().map(|v| core::array::from_fn(|a| centre[a] + v.pos[a] as f32 * scene.quantum)));
             let clear = if c.flags & (chunk::BLEND | chunk::CUTOUT) != 0 { CLEAR } else { 0 };
-            for id in lod.cluster..lod.cluster + lod.clusters {
+            for id in lod.cluster..lod.cluster + lod.clusters as u32 {
                 let cl = &clusters[id as usize];
                 let run = &indices[(lod.index + cl.first) as usize..(lod.index + cl.first) as usize + cl.count as usize];
                 tris.extend(run.chunks_exact(3).map(|t| Tri { v: [base + t[0] as u32, base + t[1] as u32, base + t[2] as u32], tag: id | clear }));
@@ -98,8 +100,8 @@ pub fn compute(scene: &Scene, chunks: &[Chunk], clusters: &[Cluster], vertices: 
     // The chunk each cluster belongs to.
     let mut owner = vec![0u16; clusters.len()];
     for (i, c) in chunks.iter().enumerate() {
-        for lod in &c.lod {
-            owner[lod.cluster as usize..(lod.cluster + lod.clusters) as usize].fill(i as u16);
+        for lod in c.levels() {
+            owner[lod.cluster as usize..lod.cluster as usize + lod.clusters as usize].fill(i as u16);
         }
     }
     let seen: Vec<Option<Vec<u8>>> = (0..cells)
@@ -158,8 +160,8 @@ pub fn compute(scene: &Scene, chunks: &[Chunk], clusters: &[Cluster], vertices: 
             let half = scene.cell * 0.5 + set.near;
             for c in chunks {
                 if c.min[0] < centre[0] + half && c.max[0] > centre[0] - half && c.min[2] < centre[2] + half && c.max[2] > centre[2] - half {
-                    for lod in &c.lod {
-                        for id in lod.cluster as usize..(lod.cluster + lod.clusters) as usize {
+                    for lod in c.levels() {
+                        for id in lod.cluster as usize..lod.cluster as usize + lod.clusters as usize {
                             bits[id >> 3] |= 1 << (id & 7);
                         }
                     }

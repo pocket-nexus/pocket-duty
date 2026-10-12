@@ -2,13 +2,13 @@
 
 [Claude of Duty](https://github.com/mshumer/Claude-of-Duty) on the PSP: the reference's market street, its soldiers and its three weapons at **480 × 272 and 30 frames a second**, through the GE's fixed-function pipeline. Built on [Pocket3D](https://github.com/pocket-nexus/pocketjs) and PocketJS.
 
-The reference is a browser game: Three.js with WebGPU, every mesh, texture, animation and sound built by code at start. This repository keeps it unmodified in `web/`, runs it once in a desktop browser to record what it builds, and compiles the record for the console.
+The reference is a browser game: three.js on WebGL2, every mesh, texture, animation and sound built by code at start. This repository keeps it unmodified in `web/`, runs it once in a desktop browser to record what it builds, and compiles the record for the console.
 
 | | |
 |---|---|
 | Reference | `web/`, Claude of Duty by mshumer at `d9b237b`, MIT (`web/LICENSE`) |
 | Console | PSP-2000 or later (the pack needs the 52 MB memory setting; a PSP-1000 has 24 MB) |
-| State | The program runs in PPSSPPHeadless: every screen, a whole match. **No console run is recorded yet** |
+| State | A whole match on a console: **29.9 frames a second, 55 frames late of 18 375** (see "What is measured") |
 
 ## Build and run
 
@@ -32,6 +32,7 @@ bun tools/psp.ts run               # build, stage on the share, reset PSPLINK, s
 bun tools/psp.ts status            # host0:/duty/status.json: frame time, triangles, the match
 bun tools/psp.ts ctl "ui=start"    # host0:/duty/control.txt (the words are in psp/src/main.rs)
 bun tools/psp.ts bench             # a match played by the bench's player, 60 s of frame timings
+bun tools/psp.ts tour              # every start point, four headings, turning and walking: late frames by place
 bun tools/psp.ts capture
 ```
 
@@ -98,19 +99,28 @@ vendor/pocketjs      PocketJS and Pocket3D
 - **8 m cells, three levels of detail** a cell and material (meshopt, vertices shared between cells kept in place), **4 310 chunks** in all: 428 969, 162 308 and 57 310 triangles.
 - **Light at the vertex**: the exported sunless light scaled by how much sky the vertex sees, plus the sun where rays reach it. Edges are cut where the sun's shadow crosses a face. The result goes through the reference's tone table to a 16-bit colour.
 - **The ground's shadow** as one 512² picture over 128 m, multiplied in by a second pass.
-- **Clusters** of at most 32 triangles, grouped by facing, each with a sphere, a cone and a box: **43 270**. For each of 409 cells, the clusters any ray from the cell reaches (400 000 rays a cell, through all three levels at once: a frame mixes them).
+- **Clusters** of at most 32 triangles, grouped by facing, each with a sphere, a box and a cone: **43 270**. The cone has an apex behind the plane of every face, so an eye behind a flat cluster's plane leaves it out. For each of 409 cells, the clusters any ray from the cell reaches (400 000 rays a cell, through all three levels at once: a frame mixes them).
+- **A sphere and the longest edge of each large triangle** (339 568 of them, 8 bytes each): what the device asks before it reads a triangle's corners.
+- **A chunk's record is 128 bytes**, two lines of the PSP's data cache, with what a frame asks of a chunk it leaves out in the first.
 - **Textures**: 24 pictures with 256-colour palettes, 695 KiB.
 - **The walk grid**: only its largest connected part stays open (29 776 of 38 742 nodes), so every way a soldier asks for exists.
-- The pack is **27.6 MB**; `receipt.json` records its hash and counts.
+- The pack is **30.5 MB**; `receipt.json` records its hash and counts.
 
 ### The frame
 
 `psp/src/gfx.rs` draws what `duty_sim::view::select` chooses: the clusters the eye's cell can see, inside the view and not all turned away, at the level of detail their distance asks.
 
 - **Two depth passes.** The GE's depth is 16 bits. The cells within 12 m of the eye are drawn from 0.15 m in one part of the depth range; the rest from a few metres in another. A ray from the eye meets every near cell before every far one, so the passes never compare depths.
-- **The guard band.** The GE drops a triangle with a vertex outside its 4096-pixel space. A cluster's large triangles are tested when its box is not inside the band, and cut on the CPU when they are not.
-- **A budget of 20 000 triangles** a frame: over it, the levels of detail move in.
-- Soldiers and the held weapon are skinned by the GE with four bones a batch, and lit by the sun, where the ground's shadow picture says it reaches, and the sky.
+- **The guard band.** The GE drops a triangle with a vertex outside its 4096-pixel space. A triangle reaches from the view to outside the band only when its longest edge is more than half its distance from the eye. Of the large triangles of a cluster whose box is not inside the band, the ones that near are tested, and cut on the CPU when the GE cannot take them.
+- **A budget of 22 500 triangles and of 24.5 ms** a frame: over either, the levels of detail move in. A triangle of a soldier or of the held weapon counts for one and a half.
+- Soldiers and the held weapon are skinned by the GE with four bones a batch, and lit by the sun, where the ground's shadow picture says it reaches, and the sky. A soldier more than 16 m off is drawn from a model of 406 triangles in place of 696.
+
+What the console's parts cost decides how the frame is written (`probe=1` in `boot.txt` times them):
+
+- The CPU's floating point unit takes **20 cycles for a multiply and an add**. A chunk answers for its clusters where it can: a cluster is asked only about the sides of the view its chunk reaches across, and about the guard band only when its chunk is not inside it.
+- A line of the data cache fetched while the GE draws takes **about a microsecond**: the CPU and the GE share the bus. A cell out of the view answers for its chunks without their records being read, and the player's body keeps the triangles about it from step to step.
+- A word of the list `sceGu` writes is **a bus cycle of its own**. The world's commands are written through the cache into runs that the list calls.
+- The GE takes **0.7 ms for a thousand triangles** it is sent, drawn or not.
 
 ### The interface
 
@@ -123,11 +133,22 @@ bun tools/ui.ts test       # the flow through a mock renderer
 
 ## What is measured
 
-Host: `cargo test --workspace` (duty-sim 39 tests). `cargo run --release -p duty-sim --example match -- .pocket-build/duty/psp30/duty.pack 30` plays 30 minutes of matches with a player who aims at the nearest soldier in sight.
+Host: `cargo test --workspace` (duty-sim 43 tests, duty-cook 7). `cargo run --release -p duty-sim --example match -- .pocket-build/duty/psp30/duty.pack 30` plays 30 minutes of matches with a player who aims at the nearest soldier in sight; `--example view -- <pack> x y z yaw pitch` prints what a frame from a place draws and what becomes of its large triangles.
 
-Emulator (`bun tools/psp.ts emu`, PPSSPPHeadless with its software renderer): the title, a match, the menu, settings, a fall and the results draw as intended. A frame from the start point sends **17 400 triangles in 545 draws**, 2 272 of them the held rifle. The emulator's times count instructions and do not say what a console takes.
+Emulator (`bun tools/psp.ts emu`, PPSSPPHeadless with its software renderer): the title, a match, the menu, settings, a fall and the results draw as intended. The emulator's times count instructions: they miss what the floating point unit, the data cache and the bus cost a console, which is most of a frame.
 
-Console: no frame timing and no capture yet.
+Console (a PSP with 64 MB, over PSPLINK, 2026-10-13):
+
+| | |
+|---|---|
+| `bench --seconds 615`: a whole match played by the bench's player, who falls 4 times and wins 18 to 4 | **18 375 frames, 55 late (0.30%)**, 29.88 a second, the longest 103 ms |
+| The same with a player who cannot fall and stays near his start | 18 435 frames, 9 late (0.05%) |
+| `tour`: 8 start points × 4 headings, walking while the view turns | **2 250 frames, none late**; 3 late of 2 340 in another run |
+| A frame of the first match, on average | match 2.4 ms, choosing the draws 7.5 ms, the list 11.2 ms, the interface 2.9 ms (a turn is 9.7 ms, 9 a second), waiting for the GE 2.9 ms |
+| The GE, from the list's first word to its last pixel | 27 ms on average in that match: 19 000 triangles of the street, 6 soldiers, the weapon and the interface |
+| Memory | 38.9 MB of the program's 50.8 MB after the match, 38.2 MB at its start |
+
+The first run on the console took 35.7 ms a frame with one frame in six late. What changed is in "The frame" above.
 
 ## Licence
 

@@ -14,6 +14,7 @@
 //                                             # player's pad, `at=x,y,z,yaw,pitch` puts the player somewhere)
 //   bun tools/psp.ts capture [--out f.png]    # PSPLINK screenshot
 //   bun tools/psp.ts bench [--seconds 60]     # a match played by the bench's player: frame timings → .pocket-build/validation/psp/
+//   bun tools/psp.ts tour [--seconds 3]       # every start point, four headings, turning and walking: late frames by place
 //   bun tools/psp.ts package                  # dist/psp/PSP/GAME/PocketDuty for a Memory Stick
 //   bun tools/psp.ts emu [--frames 240] [--ctl "at=..."] [--out f.png] [--standalone] [--keep] [--no-interface]
 //                                             # the same PRX in PPSSPPHeadless (software GE): a frame and its status;
@@ -243,12 +244,13 @@ async function pspsh(text: string): Promise<string> {
 }
 
 function readStatus(): any {
-  // The device rewrites the file in place; a read can land in the middle.
+  // The device rewrites the file in place; a read can land in the middle. Its storage thread runs
+  // below the frame's: while frames come late the file can stand empty for seconds.
   for (let i = 0; ; i++) {
     try {
       return JSON.parse(readFileSync(`${app}/status.json`, "utf8"));
     } catch (e) {
-      if (i >= 40) throw new Error(`no status at ${app}/status.json: is the program running?`);
+      if (i >= 400) throw new Error(`no status at ${app}/status.json: is the program running?`);
       Bun.sleepSync(25);
     }
   }
@@ -309,7 +311,7 @@ async function bench(seconds: number, extra: string) {
   // nearest soldier in sight and fires, so soldiers, effects and sounds are all in the frames measured.
   ctl(`ui=title`);
   await Bun.sleep(1500);
-  ctl(`ui=start auto=1 ${extra}`);
+  ctl(`ui=start auto=1 god=0 ${extra}`);
   await Bun.sleep(4000);
   const first = readStatus();
   const build = JSON.parse(readFileSync(`${app}/build.json`, "utf8"));
@@ -320,7 +322,7 @@ async function bench(seconds: number, extra: string) {
     await Bun.sleep(1000);
     const s = readStatus();
     if (s.frames === prev.frames) continue;
-    samples.push({ t: (Date.now() - start) / 1000, frameMs: s.frameMs, worstMs: s.worstMs, late: s.late, frames: s.frames, cpuMs: s.cpuMs, gpuMs: s.gpuMs, draws: s.draws, tris: s.tris, figureTris: s.figureTris, clusters: s.clusters, cut: s.cut, nearer: s.nearer, eye: s.eye, match: s.match, interface: s.interface });
+    samples.push({ t: (Date.now() - start) / 1000, frameMs: s.frameMs, worstMs: s.worstMs, late: s.late, frames: s.frames, cpuMs: s.cpuMs, simUs: s.simUs, selectUs: s.selectUs, listUs: s.listUs, gpuMs: s.gpuMs, geMs: s.geMs, busyMs: s.busyMs, draws: s.draws, tris: s.tris, figureTris: s.figureTris, clusters: s.clusters, cut: s.cut, nearer: s.nearer, eye: s.eye, match: s.match, interface: s.interface });
     prev = s;
   }
   ctl("auto=0");
@@ -340,7 +342,16 @@ async function bench(seconds: number, extra: string) {
     triangles: { least: Math.min(...samples.map((s) => s.tris)), mean: Math.round(mean((s) => s.tris)), most: Math.max(...samples.map((s) => s.tris)) },
     draws: { mean: Math.round(mean((s) => s.draws)), most: Math.max(...samples.map((s) => s.draws)) },
     cpuMs: { sim: mean((s) => s.cpuMs.sim), select: mean((s) => s.cpuMs.select), list: mean((s) => s.cpuMs.list) },
+    // Microseconds a frame. The match: the player and his rounds, the ways, the soldiers, the rest.
+    simUs: [0, 1, 2, 3].map((k) => Math.round(mean((s) => s.simUs?.[k] ?? 0))),
+    // The list: sky, near pass, its shadows, far pass, its shadows, glass, soldiers, effects, held weapon, interface.
+    listUs: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((k) => Math.round(mean((s) => s.listUs?.[k] ?? 0))),
+    selectUs: Math.round(mean((s) => s.selectUs ?? 0)),
     gpuWaitMs: mean((s) => s.gpuMs),
+    // From the list's first word to the GE's last, in the frames the GE was waited for; and what a
+    // frame took of the CPU and the GE without its interface turn.
+    geMs: mean((s) => s.geMs ?? 0),
+    busyMs: mean((s) => s.busyMs ?? 0),
     nearer: { least: Math.min(...samples.map((s) => s.nearer)), mean: mean((s) => s.nearer) },
     match: last.match,
     interface: last.interface && {
@@ -358,6 +369,47 @@ async function bench(seconds: number, extra: string) {
   writeFileSync(`${dir}/device.json`, JSON.stringify({ summary, identity: { device: "psp:usb", ...build }, memory: readStatus().memory, samples }, null, 1));
   console.log(`${dir}/device.json`);
   console.log(JSON.stringify(summary, null, 1));
+}
+
+/** The level's start points (`cargo run --release -p duty-sim --example grid -- <pack>` prints them). */
+const STARTS = [[13.71, 0.01, 19.84], [15.54, 0.01, 27.64], [6.67, 0.01, 3.51], [-8.58, 0.01, -6.76], [-14.68, 0.01, -26.73], [-20.8, 0.01, -30.4], [12.19, 0.05, -0.65], [-12.25, 0.05, -2.16]];
+
+async function tour(seconds: number) {
+  // A player who cannot fall stands at each start point looking four ways in turn, and from each
+  // walks ahead while the view turns: what the bench's player, who stands still, does not ask of
+  // the frame. The east face button (32) turns the view.
+  ctl("ui=title");
+  await Bun.sleep(1500);
+  ctl("ui=start god=1 auto=0");
+  await Bun.sleep(4000);
+  const rows: any[] = [];
+  for (const [place, p] of STARTS.entries()) {
+    for (const yaw of [0, 90, 180, 270]) {
+      ctl(`at=${p[0]},${p[1]},${p[2]},${yaw},-4 pad=32,0,-100,${seconds * 30}`);
+      await Bun.sleep(600);
+      const first = readStatus();
+      const samples: any[] = [];
+      const end = Date.now() + seconds * 1000 - 600;
+      while (Date.now() < end) {
+        await Bun.sleep(400);
+        samples.push(readStatus());
+      }
+      const last = samples.at(-1) ?? first;
+      const mean = (f: (s: any) => number) => samples.reduce((n, s) => n + f(s), 0) / Math.max(samples.length, 1);
+      const row = { place, yaw, frames: last.frames - first.frames, late: last.late - first.late, busyMs: mean((s) => s.busyMs), geMs: mean((s) => s.geMs), cpuMs: { sim: mean((s) => s.cpuMs.sim), select: mean((s) => s.cpuMs.select), list: mean((s) => s.cpuMs.list), interface: mean((s) => s.interface.cpuMs) }, tris: Math.round(mean((s) => s.tris)), draws: Math.round(mean((s) => s.draws)), nearer: mean((s) => s.nearer) };
+      rows.push(row);
+      console.log(`place ${place} yaw ${String(yaw).padStart(3)}: ${String(row.late).padStart(3)} late of ${row.frames} | busy ${row.busyMs.toFixed(1)} ge ${row.geMs.toFixed(1)} | sim ${row.cpuMs.sim.toFixed(1)} select ${row.cpuMs.select.toFixed(1)} list ${row.cpuMs.list.toFixed(1)} interface ${row.cpuMs.interface.toFixed(1)} | ${row.tris} triangles in ${row.draws} draws, levels at ${row.nearer.toFixed(2)}`);
+    }
+  }
+  ctl("god=0");
+  const frames = rows.reduce((n, r) => n + r.frames, 0);
+  const late = rows.reduce((n, r) => n + r.late, 0);
+  const build = JSON.parse(readFileSync(`${app}/build.json`, "utf8"));
+  const dir = resolve(ROOT, `.pocket-build/validation/psp/tour-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(`${dir}/device.json`, JSON.stringify({ summary: { frames, lateFrames: late, lateShare: late / Math.max(frames, 1) }, identity: { device: "psp:usb", ...build }, rows }, null, 1));
+  console.log(`${dir}/device.json`);
+  console.log(`tour: ${late} late of ${frames} frames (${((late / Math.max(frames, 1)) * 100).toFixed(2)}%)`);
 }
 
 /** Runs `f` holding the PSP's lease; `--take` ends another holder first. */
@@ -441,6 +493,9 @@ switch (cmd) {
   case "bench":
     await device(() => bench(Number(opt("--seconds", "60")), opt("--ctl", "")));
     break;
+  case "tour":
+    await device(() => tour(Number(opt("--seconds", "3"))));
+    break;
   case "emu": {
     // PPSSPP mounts `--root` as host0:. Its software renderer follows the GE's clipping rules.
     const headless = process.env.PPSSPP_HEADLESS ?? `${process.env.HOME}/ppsspp-src/build/PPSSPPHeadless`;
@@ -487,6 +542,6 @@ switch (cmd) {
     break;
   }
   default:
-    console.log("usage: bun tools/psp.ts <build|serve|run|status|ctl|capture|bench|emu|package> [--share DIR] [--take]");
+    console.log("usage: bun tools/psp.ts <build|serve|run|status|ctl|capture|bench|tour|emu|package> [--share DIR] [--take]");
     process.exit(cmd ? 1 : 0);
 }

@@ -35,6 +35,9 @@ pub const WVTX: u32 = tag(b"WVTX");
 pub const WIDX: u32 = tag(b"WIDX");
 /// [`Cluster`] records: the runs of triangles a level of detail is drawn by.
 pub const CLUS: u32 = tag(b"CLUS");
+/// `Large` records, and for each cluster the number of its first one.
+pub const LTRI: u32 = tag(b"LTRI");
+pub const LTRO: u32 = tag(b"LTRO");
 /// What can be seen from where: one [`ViewCell`] per cell of the grid, the chunk numbers (`u16`)
 /// their lists hold, and their bits, one per cluster.
 pub const VCEL: u32 = tag(b"VCEL");
@@ -181,16 +184,16 @@ pub mod chunk {
     pub const LODS: usize = 3;
 }
 
-/// One level of detail of a chunk: where its vertices and indices start, how many indices there
-/// are, and the clusters that cut the index list into runs.
+/// One level of detail of a chunk: where its vertices and indices start, and the clusters that
+/// cut the index list into runs. A level without triangles has no clusters.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Lod {
     pub vertex: u32,
     pub index: u32,
-    pub indices: u32,
     pub cluster: u32,
-    pub clusters: u32,
+    pub clusters: u16,
+    pub pad: u16,
 }
 
 /// A run of a level's triangles that lie together and face alike: what the device decides to
@@ -207,8 +210,9 @@ pub struct Cluster {
     /// A sphere around its triangles.
     pub centre: [f32; 3],
     pub radius: f32,
-    /// Its faces' common direction, each component over 127, and the cosine (over 127) the eye's
-    /// direction makes with it at most when any face is turned to the eye. 127: seen from anywhere.
+    /// A cone that says when every face is turned away: its axis (each component over 127), the
+    /// cosine over 127 that the direction from the eye to the cone's apex makes with the axis at
+    /// least then, and with `apex` where the apex is. 127: seen from anywhere.
     pub axis: [i8; 3],
     pub cutoff: i8,
     /// Where its run starts in the level's index list, and how many indices it has.
@@ -220,7 +224,10 @@ pub struct Cluster {
     /// The box lies along the level's own axes (`Scene::level_x`, up, `Scene::level_z`), as the
     /// walls do: a wall's box is thin where its sphere is not.
     pub half: [u8; 3],
-    pub pad: u8,
+    /// How far behind `centre` the cone's apex is, against its axis, in sixteenths of `radius`.
+    /// The apex is behind the plane of every face, so an eye that sees the apex inside the cone
+    /// is behind them all.
+    pub apex: u8,
 }
 
 impl Cluster {
@@ -245,7 +252,53 @@ pub struct Chunk {
     pub pad: u8,
     pub uv_scale: [f32; 2],
     pub uv_offset: [f32; 2],
-    pub lod: [Lod; chunk::LODS],
+    /// The levels of detail, the coarsest first. A record is 128 bytes and the device holds the
+    /// section on a 64-byte boundary: what a frame asks of a chunk it leaves out, and of one it
+    /// draws at its coarsest level, is in one line of the data cache. On a PSP a line that has
+    /// to be fetched while the GE draws costs a microsecond.
+    levels: [Lod; chunk::LODS],
+    pub spare: [u32; 8],
+}
+
+impl Chunk {
+    /// A level of detail: 0 is the finest.
+    #[inline]
+    pub fn lod(&self, level: usize) -> &Lod {
+        &self.levels[chunk::LODS - 1 - level]
+    }
+
+    /// Every level, in no promised order.
+    pub fn levels(&self) -> &[Lod; chunk::LODS] {
+        &self.levels
+    }
+
+    #[inline]
+    pub fn lod_mut(&mut self, level: usize) -> &mut Lod {
+        &mut self.levels[chunk::LODS - 1 - level]
+    }
+}
+
+/// What the device asks of a large triangle before it reads the triangle's corners: a sphere
+/// about it and its longest edge. The triangle can reach from inside the view to outside the
+/// guard band only when its longest edge is a certain share of its distance from the eye
+/// (`duty_sim::clip::Guard::chord`), and it is at least as far as its sphere.
+///
+/// One record for each of a cluster's `large` triangles, in their order; `LTRO` has for every
+/// cluster where its first one is.
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Large {
+    /// Steps of `Scene::quantum` from the cell's centre, as a vertex's position.
+    pub centre: [i16; 3],
+    /// The sphere's radius and the longest edge, in `large::UNIT` steps, rounded up. 255: longer
+    /// than the number holds, and the triangle is tested whatever its distance.
+    pub radius: u8,
+    pub edge: u8,
+}
+
+pub mod large {
+    /// Steps of `Scene::quantum` in a unit of `Large::radius` and `Large::edge`.
+    pub const UNIT: u32 = 128;
 }
 
 /// What can be seen from inside a cell: `count` chunk numbers from `first` of the list section,
@@ -351,9 +404,13 @@ mod tests {
     fn records_keep_their_sizes() {
         assert_eq!(core::mem::size_of::<WorldVertex>(), 12);
         assert_eq!(core::mem::size_of::<Texture>(), 12);
-        assert_eq!(core::mem::size_of::<Lod>(), 20);
+        assert_eq!(core::mem::size_of::<Lod>(), 16);
         assert_eq!(core::mem::size_of::<Cluster>(), 32);
-        assert_eq!(core::mem::size_of::<Chunk>(), 108);
+        assert_eq!(core::mem::size_of::<Large>(), 8);
+        // A chunk is two cache lines, and the first holds everything but its two finer levels.
+        assert_eq!(core::mem::size_of::<Chunk>(), 128);
+        let c = Chunk::default();
+        assert_eq!(c.lod(chunk::LODS - 1) as *const Lod as usize - &c as *const Chunk as usize, 48);
         assert_eq!(core::mem::size_of::<Scene>() % 4, 0);
     }
 

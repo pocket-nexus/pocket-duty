@@ -233,6 +233,7 @@ unsafe fn remote(text: &str, ui: &mut interface::Ui, session: &mut Session, game
             }
             "skill" => game.skill = next() * 0.01,
             "budget" => gfx.budget = next() as u32,
+            "run" => gfx.run = (next() as u32).max(1),
             "option" => gfx.option = next() as u32,
             _ => {}
         }
@@ -352,9 +353,17 @@ fn sound(game: &Game, event: &Event, count: &mut u32) {
     }
 }
 
+/// Milliseconds a frame may take without its interface turn before the levels of detail come in.
+const BUSY: f32 = 24.5;
+
+fn micros() -> u32 {
+    unsafe { sceKernelGetSystemTimeLow() }
+}
+
 unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'static str> {
     scePowerSetClockFrequency(333, 333, 166);
     // Test runs: `boot.txt` on the share holds control words for the start, plus `title=0` (no title card),
+    // `probe=1` (time the frame's smallest pieces of work on this console and write `probe.json`),
     // `shot=N` (write frame N to `shot.raw`) and `exit=N` (leave at frame N).
     let mut boot_buf = [0u8; 512];
     let boot: &str = store::boot_text(&mut boot_buf).unwrap_or("");
@@ -429,6 +438,7 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
         *on_screen = true;
     }
     let mut game = Game::new(level, defs, 0x5eed_1234);
+    game.timer = Some(micros);
     let mut session = Session::new();
     // The map picture's corner, as the compiler laid it out about the level's origin.
     session.map = (scene.level_origin[0] - 80.0, scene.level_origin[2] - 80.0);
@@ -445,6 +455,14 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
     }
     let mut steer = Remote::default();
     remote(boot, ui, &mut session, &mut game, &mut gfx, &mut steer);
+    if file.host && word("probe") == Some(1.0) {
+        // What this console takes for the frame's smallest pieces of work.
+        let start = v3(scene.start[0], scene.start[1] + 1.6, scene.start[2]);
+        let costs = gfx.probe(&gfx::Camera { eye: start, yaw: scene.start[3], pitch: -0.3, roll: 0.0, fov: FOV });
+        let mut text = String::new();
+        let _ = write!(text, "{{\"nanoseconds\":{{\"command\":{},\"wordPastCache\":{},\"wordThroughCache\":{},\"flush64\":{},\"modelMatrix\":{},\"classify\":{},\"cut\":{},\"multiplyAdd\":{},\"divide\":{},\"farRead\":{},\"clock\":{}}}}}", costs[0], costs[1], costs[2], costs[3], costs[4], costs[5], costs[6], costs[7], costs[8], costs[9], costs[10]);
+        store::write_text(b"host0:/duty/probe.json\0", &text);
+    }
     // (a frame number no run reaches when the word is absent)
     let (shot_at, exit_at) = (word("shot").map_or(u32::MAX, |v| v as u32), word("exit").map_or(u32::MAX, |v| v as u32));
     let load_ms = sceKernelGetSystemTimeLow().wrapping_sub(t_load) / 1000;
@@ -460,7 +478,7 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
     let mut status = String::with_capacity(3072);
     let mut prefs: Option<String> = None;
     let mut timing = Timing { ms: [33.3; Timing::N], at: 0, late: 0, frames: 0 };
-    let (mut gpu_ms, mut sim_ms, mut ui_ms) = (0.0f32, 0.0f32, 0.0f32);
+    let (mut gpu_ms, mut sim_ms, mut ui_ms, mut ge_ms, mut ge_frames, mut busy_ms) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0u32, 0.0f32);
     let mut last_swap = sceKernelGetSystemTimeLow();
     let mut last_vcount = sceDisplayGetVcount();
     // Display refreshes a frame: 30 frames a second.
@@ -579,21 +597,36 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
         // The interface's turn, while the GE draws the previous frame: the pad as PocketJS's hosts
         // pass it (the pad's own bits, the stick packed x then y).
         let tu = sceKernelGetSystemTimeLow();
+        // A frame with no room for a turn waits a frame more for its readouts.
+        ui.readouts_every = if busy_ms > 27.0 { 3 } else { 2 };
         if gfx.option & 512 == 0 {
             ui.turn(ticks as f32 / 60.0, data.buttons.bits(), (data.lx as u32) << 8 | data.ly as u32, &session);
         }
         let turn_now = ms(tu);
         ui_ms = ui_ms * 0.9 + turn_now * 0.1;
-        // The frame's draws are chosen while the GE draws the frame before.
+        // The frame's draws are chosen while the GE draws the frame before. The levels of detail
+        // come in when the frames take more than `BUSY` of this CPU and the GE, the interface's
+        // turn apart: a turn is 9 ms, and a frame has 33.
+        gfx.load = busy_ms / BUSY;
+        gfx.figures = figures.as_ref().map_or(0, |f| f.triangles * 3 / 2);
         gfx.choose(&camera);
 
         // -------------------------------------------------------------- the previous frame leaves the GE
         let t1 = sceKernelGetSystemTimeLow();
         sceGuSync(GuSyncMode::Finish, GuSyncBehavior::Wait);
-        gpu_ms = gpu_ms * 0.9 + ms(t1) * 0.1;
+        let waited = ms(t1);
+        gpu_ms = gpu_ms * 0.9 + waited * 0.1;
+        // What the frame took of this CPU and the GE, the interface's turn apart.
+        busy_ms = busy_ms * 0.8 + (ms(last_swap) - turn_now) * 0.2;
+        // From the list's first word to the GE's last: what the GE took when it was waited for,
+        // and no more than that when it was not.
+        if frame > 0 && waited > 0.2 {
+            ge_ms = ge_ms * 0.9 + ms(gfx.list_from) * 0.1;
+            ge_frames += 1;
+        }
         // The GE has read the vertices of the interface's last list.
         pocketjs_psp::ge::reset_pool();
-        if frame == shot_at.wrapping_add(1) {
+        if shot_at != u32::MAX && frame == shot_at + 1 {
             store::write_shot(&gfx::pixels(gfx::DRAW_BUFFER));
         }
         if frame >= exit_at {
@@ -621,19 +654,22 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
             if let Some(figures) = figures.as_mut() {
                 figures.triangles = 0;
                 if stood {
-                    figures.soldiers(&gfx, &camera, &game);
+                    figures.soldiers(&mut gfx, &camera, &game);
                 }
             }
+            gfx.mark(6);
             gfx.effects(&camera);
+            gfx.mark(7);
             if let Some(figures) = figures.as_mut() {
                 if stood {
-                    if let Some(muzzle) = figures.held(&gfx, &view, &game) {
+                    if let Some(muzzle) = figures.held(&mut gfx, &view, &game) {
                         if game.arms.flash > 0 {
                             gfx.flash(muzzle + v3(0.0, 0.0, -0.06), 0.035 + 0.012 * game.arms.flash as f32);
                         }
                     }
                 }
             }
+            gfx.mark(8);
             gfx.finish(ui);
         }
         // A match nobody touches is still being watched: the console's idle timers start again.
@@ -648,9 +684,11 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
             let c = s.counts;
             let recent = ui.recent();
             let p = &game.player;
+            // (a frame's worth: the steps of the last fifteen frames)
+            let spent = core::mem::take(&mut game.spent).map(|us| us / 15);
             let _ = write!(
                 status,
-                "{{\"target\":\"psp\",\"stage\":\"running\",\"frames\":{},\"frameMs\":{:.2},\"worstMs\":{:.2},\"late\":{},\"mode\":\"{}\",\"draws\":{},\"tris\":{},\"figureTris\":{},\"clusters\":{{\"listed\":{},\"unseen\":{},\"outside\":{},\"turned\":{},\"drawn\":{},\"cut\":{},\"large\":{}}},\"cut\":{{\"tested\":{},\"cut\":{}}},\"nearer\":{:.2},\"farNear\":{:.2},\"budget\":{},\"gpuMs\":{:.2},\"cpuMs\":{{\"sim\":{:.2},\"select\":{:.2},\"list\":{:.2}}},\"words\":{},\"eye\":[{:.2},{:.2},{:.2}],\"yaw\":{:.1},\"pitch\":{:.1},\"match\":{{\"health\":{:.0},\"us\":{},\"them\":{},\"clock\":{:.0},\"standing\":{},\"kills\":{},\"deaths\":{},\"shots\":{},\"hits\":{},\"weapon\":{},\"magazine\":{}}},\"sound\":{},\"memory\":{{\"freeAtStart\":{},\"freeAfterLoad\":{},\"free\":{},\"resident\":{},\"arena\":{{\"capacity\":{},\"afterLoad\":{},\"now\":{}}},\"kernelBlocks\":{}}},\"loadMs\":{},\"pack\":{},\"interface\":{{\"up\":{},\"error\":\"{}\",\"turns\":{},\"turnMs\":{{\"script\":{:.2},\"layout\":{:.2},\"worst\":{:.2},\"recent\":{:.2}}},\"collections\":{},\"cpuMs\":{:.2},\"words\":{},\"bytes\":{}}}}}",
+                "{{\"target\":\"psp\",\"stage\":\"running\",\"frames\":{},\"frameMs\":{:.2},\"worstMs\":{:.2},\"late\":{},\"mode\":\"{}\",\"draws\":{},\"tris\":{},\"figureTris\":{},\"clusters\":{{\"listed\":{},\"unseen\":{},\"outside\":{},\"turned\":{},\"drawn\":{},\"cut\":{},\"large\":{}}},\"cut\":{{\"tested\":{},\"near\":{},\"corners\":{},\"cut\":{}}},\"nearer\":{:.2},\"farNear\":{:.2},\"budget\":{},\"gpuMs\":{:.2},\"busyMs\":{:.2},\"geMs\":{:.2},\"geWaited\":{},\"cpuMs\":{{\"sim\":{:.2},\"select\":{:.2},\"list\":{:.2}}},\"simUs\":[{},{},{},{}],\"near\":[{},{},{}],\"selectUs\":{},\"listUs\":[{},{},{},{},{},{},{},{},{},{}],\"words\":{},\"eye\":[{:.2},{:.2},{:.2}],\"yaw\":{:.1},\"pitch\":{:.1},\"match\":{{\"health\":{:.0},\"us\":{},\"them\":{},\"clock\":{:.0},\"standing\":{},\"kills\":{},\"deaths\":{},\"shots\":{},\"hits\":{},\"weapon\":{},\"magazine\":{}}},\"sound\":{},\"memory\":{{\"freeAtStart\":{},\"freeAfterLoad\":{},\"free\":{},\"resident\":{},\"arena\":{{\"capacity\":{},\"afterLoad\":{},\"now\":{}}},\"kernelBlocks\":{}}},\"loadMs\":{},\"pack\":{},\"interface\":{{\"up\":{},\"error\":\"{}\",\"turns\":{},\"why\":[{},{},{},{},{}],\"turnMs\":{{\"script\":{:.2},\"layout\":{:.2},\"news\":{:.2},\"quiet\":{:.2},\"ticks\":{:.2},\"worst\":{:.2},\"recent\":{:.2}}},\"collections\":{},\"cpuMs\":{:.2},\"words\":{},\"bytes\":{}}}}}",
                 timing.frames,
                 timing.avg(),
                 timing.worst(),
@@ -667,14 +705,37 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
                 c.cut,
                 c.large,
                 s.tested,
+                s.near,
+                s.corners,
                 s.cut,
                 gfx.nearer,
                 gfx.far_near,
                 gfx.budget,
                 gpu_ms,
+                busy_ms,
+                ge_ms,
+                core::mem::take(&mut ge_frames),
                 sim_ms,
                 s.select as f32 / 1000.0,
                 s.list as f32 / 1000.0,
+                spent[0],
+                spent[1],
+                spent[2],
+                spent[3],
+                game.near.gathered,
+                game.near.crowded,
+                game.near.held(),
+                s.chosen,
+                s.parts[0],
+                s.parts[1],
+                s.parts[2],
+                s.parts[3],
+                s.parts[4],
+                s.parts[5],
+                s.parts[6],
+                s.parts[7],
+                s.parts[8],
+                s.parts[9],
                 s.words,
                 camera.eye.x,
                 camera.eye.y,
@@ -706,8 +767,16 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
                 ui.up(),
                 ui.error,
                 ui.turns,
+                ui.pace.taken[0],
+                ui.pace.taken[1],
+                ui.pace.taken[2],
+                ui.pace.taken[3],
+                ui.pace.taken[4],
                 ui.script_ms,
                 ui.layout_ms,
+                ui.news_ms,
+                ui.quiet_ms,
+                ui.tick_ms,
                 ui.worst_ms,
                 recent[0] + recent[1],
                 ui.collections,

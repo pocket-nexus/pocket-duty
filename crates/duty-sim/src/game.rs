@@ -11,6 +11,7 @@
 //! reference's own demonstration brings them (`web/tools/demo-driver.js`),
 //! and the player is put back on his feet a few seconds after he falls.
 
+use crate::body::Near;
 use crate::event::{Event, Events};
 use crate::level::Level;
 use crate::math::*;
@@ -61,6 +62,8 @@ pub struct Grenade {
 pub struct Game<'a> {
     pub level: Level<'a>,
     pub player: Player,
+    /// The solid world about the player's body.
+    pub near: Near,
     pub arms: Arms,
     pub soldiers: [Soldier; MAX],
     pub squads: [Squad; SQUADS],
@@ -92,6 +95,10 @@ pub struct Game<'a> {
     pub hurt_mark: u32,
     /// The soldier whose round last hurt the player.
     last_by: Option<u8>,
+    /// A clock in microseconds, when the device wants to know where a step's time goes, and what
+    /// the steps since it last asked took: the player and his rounds, the ways, the soldiers, the rest.
+    pub timer: Option<fn() -> u32>,
+    pub spent: [u32; 4],
 }
 
 impl<'a> Game<'a> {
@@ -100,6 +107,7 @@ impl<'a> Game<'a> {
         let mut game = Game {
             level,
             player: Player::new(v3(start.pos[0], start.pos[1], start.pos[2]), start.yaw),
+            near: Near::new(),
             arms: Arms::new(defs),
             soldiers: [Soldier::NONE; MAX],
             squads: [Squad::default(); SQUADS],
@@ -122,6 +130,8 @@ impl<'a> Game<'a> {
             hit_mark: 0,
             hurt_mark: 0,
             last_by: None,
+            timer: None,
+            spent: [0; 4],
         };
         game.garrison();
         game
@@ -129,15 +139,17 @@ impl<'a> Game<'a> {
 
     /// A new match on the same ground, with the settings kept.
     pub fn restart(&mut self) {
-        let (skill, assist, turn, invert, analog) = (
+        let (skill, assist, turn, invert, analog, timer) = (
             self.skill,
             self.assist,
             self.player.turn,
             self.player.invert,
             self.player.analog_look,
+            self.timer,
         );
         let seed = self.rng.u32();
         *self = Game::new(self.level, self.arms.defs, seed);
+        self.timer = timer;
         self.skill = skill;
         self.assist = assist;
         self.player.turn = turn;
@@ -508,6 +520,8 @@ impl<'a> Game<'a> {
         self.tick += 1;
         self.time += DT;
         self.clock -= DT;
+        let now = |timer: Option<fn() -> u32>| timer.map_or(0, |f| f());
+        let t0 = now(self.timer);
         if let Phase::Down { wait } = &mut self.phase {
             *wait -= DT;
             if *wait <= 0.0 {
@@ -518,7 +532,7 @@ impl<'a> Game<'a> {
         self.help_aim(input);
         let still = Input::default();
         let pad = if self.player.dead { &still } else { input };
-        self.player.step(&self.level, pad, &mut self.events);
+        self.player.step(&self.level, &mut self.near, pad, &mut self.events);
         let round = self.arms.step(
             &mut self.player,
             pad.buttons,
@@ -547,9 +561,11 @@ impl<'a> Game<'a> {
         }
 
         // ---- the soldiers
+        let t1 = now(self.timer);
         if let Some((owner, path)) = self.paths.step(&self.level, self.path_budget) {
             self.soldiers[owner as usize].take_path(path);
         }
+        let t2 = now(self.timer);
         let mut others = [(V3::ZERO, false, None); MAX];
         for (o, s) in others.iter_mut().zip(&self.soldiers) {
             *o = (s.pos, s.alive(), s.cover);
@@ -602,6 +618,7 @@ impl<'a> Game<'a> {
         }
 
         // ---- the grenades
+        let t3 = now(self.timer);
         for k in 0..GRENADES {
             let mut g = self.grenades[k];
             if !g.live {
@@ -652,6 +669,10 @@ impl<'a> Game<'a> {
             let won = self.score[0] > self.score[1];
             self.phase = Phase::Over { won };
             self.events.push(Event::Over { won });
+        }
+        let t4 = now(self.timer);
+        for (spent, (from, to)) in self.spent.iter_mut().zip([(t0, t1), (t1, t2), (t2, t3), (t3, t4)]) {
+            *spent += to.wrapping_sub(from);
         }
     }
 }

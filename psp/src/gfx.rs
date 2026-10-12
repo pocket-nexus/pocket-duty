@@ -21,15 +21,33 @@
 //!
 //! The GE clips at the near plane and nowhere else: a triangle with a corner
 //! outside its guard band is dropped whole. `duty_sim::view` marks the
-//! clusters whose large triangles could be; those are tested here and cut on
-//! the CPU (`duty_sim::clip`).
+//! clusters whose large triangles could be; of those the ones near enough for
+//! their size (`duty_pack::Large`) are tested here and cut on the CPU
+//! (`duty_sim::clip`).
+//!
+//! What a console takes for this, measured on one with 64 MB (`probe=1` in
+//! `boot.txt`, and the frame's own timers):
+//!
+//! - **A multiply and an add are 20 cycles** of the 333 MHz CPU's floating
+//!   point unit, a divide 45. What is asked of every cluster and triangle is
+//!   asked with as few of them as it can be.
+//! - **A line of the data cache fetched while the GE draws is about a
+//!   microsecond**, three times what it is with the GE idle: the two share
+//!   the bus. The frame reads the pack in order where it can, and keeps what
+//!   it asks again (`Near`, `Seen`).
+//! - **A word of `sceGu`'s list is a bus cycle of its own**, written past the
+//!   cache. The world's commands go through the cache into runs the list
+//!   calls (`Sub`).
+//! - **The GE takes 0.7 ms for a thousand triangles** it is sent, drawn or
+//!   not, and is slower while this CPU reads memory. Under 20 000 triangles
+//!   and 33 ms a frame, the levels of detail come in (`Gfx::nearer`).
 
 use core::ffi::c_void;
 use core::ptr;
 
 use alloc::vec::Vec;
-use duty_pack::{self as pack, chunk, texture, Chunk, Cluster, Scene, Texture, ViewCell, WorldVertex};
-use duty_sim::clip::{ClipVertex, Guard, Verdict, MAX_OUT};
+use duty_pack::{self as pack, chunk, large, texture, Chunk, Cluster, Large, Scene, Texture, ViewCell, WorldVertex};
+use duty_sim::clip::{ClipVertex, Corner, Guard, Verdict, MAX_OUT, MAX_POLY};
 use duty_sim::fx::{self, Fx, FxVertex};
 use duty_sim::mat::{self, Mat4};
 use duty_sim::math::*;
@@ -59,6 +77,8 @@ const FAR_NEAR: f32 = 0.55;
 const NEAR_REACH: f32 = 44.0;
 pub const NEAR: f32 = 0.15;
 const FAR: f32 = 420.0;
+/// The nearest the levels of detail are pulled in: the finest within 3 m, the second within 10 m.
+const NEARER_LEAST: f32 = 0.35;
 /// Vertices of triangles cut on the CPU that a frame holds at most.
 const CUT_VERTICES: usize = 1536;
 
@@ -125,13 +145,23 @@ pub struct Stats {
     pub draws: u32,
     pub triangles: u32,
     pub counts: view::Counts,
-    /// Large triangles tested, and of them the ones cut.
+    /// Large triangles of the clusters that reach out of the band; of them the ones near enough
+    /// for their size to have their corners looked at; the corners the guard worked out (the
+    /// others it had seen); and the triangles cut.
     pub tested: u32,
+    pub near: u32,
+    pub corners: u32,
     pub cut: u32,
     /// Microseconds choosing the draws, and writing the list.
     pub select: u32,
     pub list: u32,
     pub words: u32,
+    /// Microseconds of `select` in the choice itself, and of `list` in its parts: the sky, the
+    /// near pass, its shadows, the far pass, its shadows, the glass, the soldiers, the effects,
+    /// the held weapon, the interface.
+    pub chosen: u32,
+    pub parts: [u32; 10],
+    marked: u32,
 }
 
 /// This frame's vertices and indices that are computed on the CPU: one block of ordinary memory,
@@ -165,15 +195,139 @@ unsafe fn flush<T>(p: *const T, bytes: usize) {
     sceKernelDcacheWritebackRange(p as *const c_void, bytes as u32);
 }
 
+/// Commands for the GE that are written through the data cache and called from the frame's list.
+///
+/// The list `sceGu` writes is addressed past the cache, and each of its words is a bus cycle of
+/// its own. On the console measured that is 18 ns a word while the GE is idle and four times that
+/// while it draws, which it does for most of the time the list is written: 250 draws of the far pass took
+/// 1.45 ms, and 0.36 ms with the GE held. Words written here reach memory a cache line at a
+/// time, when `close` flushes a run of them and the frame's list calls it.
+pub struct Sub {
+    _mem: Vec<u32>,
+    first: *mut u32,
+    at: *mut u32,
+    /// Where the run being written starts.
+    open: *mut u32,
+    end: *mut u32,
+    draws: u32,
+    /// Draws in a run: the GE is handed the run when it is this long.
+    pub run: u32,
+}
+
+impl Default for Sub {
+    fn default() -> Sub {
+        Sub { _mem: Vec::new(), first: ptr::null_mut(), at: ptr::null_mut(), open: ptr::null_mut(), end: ptr::null_mut(), draws: 0, run: 48 }
+    }
+}
+
+impl Sub {
+    const WORDS: usize = 48 * 1024;
+    /// Words a draw takes at most with everything that can go before it: a picture with eight
+    /// levels, the surface's state, a cell's matrix, the picture's scale.
+    const UNIT: usize = 96;
+    fn new() -> Sub {
+        let mut mem = alloc::vec![0u32; Sub::WORDS + 32];
+        let first = ((mem.as_mut_ptr() as usize + 63) & !63) as *mut u32;
+        Sub { _mem: mem, first, at: first, open: first, end: unsafe { first.add(Sub::WORDS) }, draws: 0, run: 48 }
+    }
+
+    /// A new frame: the GE has read everything the last one wrote.
+    fn rewind(&mut self) {
+        self.at = self.first;
+        self.open = self.first;
+        self.draws = 0;
+    }
+
+    /// Whether another draw fits.
+    #[inline(always)]
+    pub fn room(&self) -> bool {
+        (self.end as usize - self.at as usize) / 4 > Sub::UNIT
+    }
+
+    #[inline(always)]
+    pub unsafe fn i(&mut self, command: GeCommand, argument: u32) {
+        self.at.write((command as u32) << 24 | (argument & 0x00ff_ffff));
+        self.at = self.at.add(1);
+    }
+
+    #[inline(always)]
+    pub unsafe fn f(&mut self, command: GeCommand, value: f32) {
+        self.i(command, value.to_bits() >> 8);
+    }
+
+    /// A command that takes an address: its high bits go in `Base` first.
+    #[inline(always)]
+    pub unsafe fn address(&mut self, command: GeCommand, at: usize) {
+        self.i(GeCommand::Base, (at as u32 >> 8) & 0xf0000);
+        self.i(command, at as u32);
+    }
+
+    /// A matrix of three rows: its four columns, as `sceGuSetMatrix` sends them.
+    #[inline(always)]
+    pub unsafe fn matrix(&mut self, number: GeCommand, data: GeCommand, first: u32, columns: &[[f32; 3]; 4]) {
+        self.i(number, first);
+        for column in columns {
+            self.f(data, column[0]);
+            self.f(data, column[1]);
+            self.f(data, column[2]);
+        }
+    }
+
+    /// One draw of triangles from the vertices last pointed at: indexed, or the vertices in order
+    /// when `indices` is null.
+    #[inline(always)]
+    pub unsafe fn triangles(&mut self, indices: *const u16, count: u32) {
+        if !indices.is_null() {
+            self.address(GeCommand::Iaddr, indices as usize);
+        }
+        self.i(GeCommand::Prim, (GuPrimitive::Triangles as u32) << 16 | count);
+        self.draws += 1;
+        if self.draws >= self.run {
+            self.close();
+        }
+    }
+
+    /// A fan of the next `count` vertices at `vertices` (float vertices cut on the CPU).
+    #[inline(always)]
+    pub unsafe fn fan(&mut self, vertices: *const u8, count: u32) {
+        self.address(GeCommand::Vaddr, vertices as usize);
+        self.i(GeCommand::Prim, (GuPrimitive::TriangleFan as u32) << 16 | count);
+    }
+
+    /// Ends the run: flushes it and has the frame's list call it. What `sceGu` writes next comes
+    /// after it.
+    pub unsafe fn close(&mut self) {
+        if self.at == self.open {
+            return;
+        }
+        self.i(GeCommand::Ret, 0);
+        flush(self.open, self.at as usize - self.open as usize);
+        sceGuCallList(self.open as *const c_void);
+        // The next run starts on a cache line of its own.
+        self.at = ((self.at as usize + 63) & !63) as *mut u32;
+        self.open = self.at;
+        self.draws = 0;
+    }
+}
+
 /// A ground batch as the first pass sent it, to be sent again under the shadow picture.
 #[derive(Clone, Copy)]
 struct Sent {
-    /// The cell its positions count from; `u32::MAX` for cut triangles, whose positions count from the eye.
+    /// The cell its positions count from; `u32::MAX` for cut triangles, whose positions count
+    /// from the eye: `count` fans, their sizes at `indices` as bytes.
     cell: u32,
     vertices: *const u8,
     indices: *const u16,
     count: u32,
     near: bool,
+}
+
+/// A vertex the guard has looked at, kept for the other triangles that have it.
+#[derive(Clone, Copy)]
+struct Seen {
+    /// The vertex's index, and which run of triangles it was looked at for (0: none).
+    key: u32,
+    corner: Corner,
 }
 
 pub struct Gfx {
@@ -182,6 +336,9 @@ pub struct Gfx {
     texels: Kept<u8>,
     chunks: Kept<Chunk>,
     clusters: Kept<Cluster>,
+    larges: Kept<Large>,
+    larges_at: Kept<u32>,
+    by_cell: view::Cells,
     vertices: Kept<WorldVertex>,
     indices: Kept<u16>,
     cells: Kept<ViewCell>,
@@ -197,21 +354,32 @@ pub struct Gfx {
     sky_ib: Vec<u16>,
     quad_ib: Vec<u16>,
     scratch: Scratch,
+    pub sub: Sub,
+    /// Draws of the world in a run of `sub`.
+    pub run: u32,
     pub fx: Fx,
     pub stats: Stats,
-    /// How far the levels of detail are pulled in to keep a frame's triangles under `budget`.
+    /// How far the levels of detail are pulled in to keep a frame's triangles under `budget`,
+    /// and its time under what the caller says a frame may take (`load`: the share of that the
+    /// frame before took).
     pub nearer: f32,
     pub budget: u32,
+    pub load: f32,
+    /// What the soldiers and the held weapon of the frame before count for in the budget: the GE
+    /// blends four bones and two lights into each of their corners, so a triangle of theirs
+    /// counts for one and a half of the world's.
+    pub figures: u32,
     pub resident_bytes: usize,
     /// Development switches (`option=` on the control line): 1 no culling of back faces, 2 the
     /// other winding, 4 every chunk and cluster the view holds, 8 no haze, 16 no shadow pass,
     /// 32 no texture, 64 no cutting on the CPU, 128 no sky, 256 no interface in the list,
     /// 512 no turn for the interface, 1024 no effects, 2048 large triangles the GE cannot take
-    /// are left out, not cut (what the cutting costs is the difference).
+    /// are left out, not cut (what the cutting costs is the difference), 4096 faces seen from
+    /// behind are cut like the others.
     pub option: u32,
     /// What `choose` kept for `world`, and when the list was begun.
     chosen: Option<(Camera, Mat4, Guard, Guard)>,
-    list_from: u32,
+    pub list_from: u32,
 }
 
 /// Starts the GE: two 16-bit frame buffers, the depth buffer, and the state every frame assumes.
@@ -280,25 +448,6 @@ pub unsafe fn interlude(ui: &Ui) {
     swap();
 }
 
-/// Sends one draw of indexed triangles from the vertices last pointed at. Every 24th one goes
-/// through `sceGuDrawArray`, which also tells the GE how far the list has grown.
-unsafe fn send(indices: *const u16, count: u32, since_stall: &mut u32) {
-    *since_stall += 1;
-    if *since_stall >= 24 {
-        *since_stall = 0;
-        sceGuDrawArray(GuPrimitive::Triangles, VertexType::empty(), count as i32, indices as *const c_void, ptr::null());
-    } else {
-        sceGuSendCommandi(GeCommand::Base, ((indices as u32 >> 8) & 0xf0000) as i32);
-        sceGuSendCommandi(GeCommand::Iaddr, (indices as u32 & 0x00ff_ffff) as i32);
-        sceGuSendCommandi(GeCommand::Prim, ((GuPrimitive::Triangles as i32) << 16) | count as i32);
-    }
-}
-
-unsafe fn point_at(vertices: *const u8) {
-    sceGuSendCommandi(GeCommand::Base, ((vertices as u32 >> 8) & 0xf0000) as i32);
-    sceGuSendCommandi(GeCommand::Vaddr, (vertices as u32 & 0x00ff_ffff) as i32);
-}
-
 impl Gfx {
     /// Reads what the world is drawn from. `init` has set the GE up, or will.
     pub unsafe fn load(file: &store::PackFile, scene: Scene, progress: &mut dyn FnMut(&str)) -> Result<Gfx, &'static str> {
@@ -311,6 +460,12 @@ impl Gfx {
         progress("Reading the street");
         let chunks: Kept<Chunk> = file.resident(pack::CHNK)?;
         let clusters: Kept<Cluster> = file.resident(pack::CLUS)?;
+        let larges: Kept<Large> = file.resident(pack::LTRI)?;
+        let larges_at: Kept<u32> = file.resident(pack::LTRO)?;
+        if chunks.as_ptr() as usize & 63 != 0 || larges_at.len() != clusters.len() {
+            return Err("the pack's chunks");
+        }
+        let by_cell = view::Cells::new(&scene, &chunks);
         let vertices: Kept<WorldVertex> = file.resident(pack::WVTX)?;
         let indices: Kept<u16> = file.resident(pack::WIDX)?;
         progress("Reading what is seen from where");
@@ -362,7 +517,7 @@ impl Gfx {
             quad_ib.extend_from_slice(&[q * 4, q * 4 + 1, q * 4 + 2, q * 4, q * 4 + 2, q * 4 + 3]);
         }
         let far_near = SPLIT * FAR_NEAR;
-        let resident_bytes = texels.len() + chunks.len() * core::mem::size_of::<Chunk>() + clusters.len() * core::mem::size_of::<Cluster>() + vertices.len() * 12 + indices.len() * 2 + lists.len() * 2 + bits.len();
+        let resident_bytes = texels.len() + chunks.len() * core::mem::size_of::<Chunk>() + clusters.len() * core::mem::size_of::<Cluster>() + larges.len() * 8 + larges_at.len() * 4 + vertices.len() * 12 + indices.len() * 2 + lists.len() * 2 + bits.len();
         sceKernelDcacheWritebackAll();
         Ok(Gfx {
             scene,
@@ -370,6 +525,9 @@ impl Gfx {
             texels,
             chunks,
             clusters,
+            larges,
+            larges_at,
+            by_cell,
             vertices,
             indices,
             cells,
@@ -382,10 +540,14 @@ impl Gfx {
             sky_ib,
             quad_ib,
             scratch: Scratch::new(),
+            sub: Sub::new(),
+            run: 48,
             fx: Fx::new(),
             stats: Stats::default(),
             nearer: 1.0,
-            budget: 20_000,
+            budget: 22_500,
+            load: 0.0,
+            figures: 0,
             resident_bytes,
             far_near,
             option: 0,
@@ -414,6 +576,33 @@ impl Gfx {
         }
     }
 
+    /// The same, into a run of `sub`.
+    unsafe fn bind_in(&self, sub: &mut Sub, index: u32) {
+        const ADDRESS: [GeCommand; 8] = [GeCommand::TexAddr0, GeCommand::TexAddr1, GeCommand::TexAddr2, GeCommand::TexAddr3, GeCommand::TexAddr4, GeCommand::TexAddr5, GeCommand::TexAddr6, GeCommand::TexAddr7];
+        const WIDTH: [GeCommand; 8] = [GeCommand::TexBufWidth0, GeCommand::TexBufWidth1, GeCommand::TexBufWidth2, GeCommand::TexBufWidth3, GeCommand::TexBufWidth4, GeCommand::TexBufWidth5, GeCommand::TexBufWidth6, GeCommand::TexBufWidth7];
+        const SIZE: [GeCommand; 8] = [GeCommand::TexSize0, GeCommand::TexSize1, GeCommand::TexSize2, GeCommand::TexSize3, GeCommand::TexSize4, GeCommand::TexSize5, GeCommand::TexSize6, GeCommand::TexSize7];
+        let t = &self.textures[index as usize];
+        let base = self.texels.as_ptr().add(t.offset as usize) as u32;
+        sub.i(GeCommand::ClutFormat, ClutPixelFormat::Psm8888 as u32 | 0xff << 8);
+        sub.i(GeCommand::ClutAddr, base);
+        sub.i(GeCommand::ClutAddrUpper, (base >> 8) & 0xf0000);
+        sub.i(GeCommand::LoadClut, 32);
+        sub.i(GeCommand::TexMode, (t.levels as u32 - 1) << 16 | 1);
+        sub.i(GeCommand::TexFormat, TexturePixelFormat::PsmT8 as u32);
+        sub.i(GeCommand::TexFlush, 0);
+        for l in 0..(t.levels as usize).min(8) {
+            let (at, _) = t.level(l as u32);
+            let (w, h) = ((t.width as u32 >> l).max(1), (t.height as u32 >> l).max(1));
+            let texels = base + at as u32;
+            sub.i(ADDRESS[l], texels);
+            sub.i(WIDTH[l], (texels >> 8) & 0x0f0000 | w);
+            sub.i(SIZE[l], (31 - (h & 0x3ff).leading_zeros()) << 8 | (31 - (w & 0x3ff).leading_zeros()));
+            sub.i(GeCommand::TexFlush, 0);
+        }
+        let wrap = if t.flags & texture::CLAMP != 0 { GuTexWrapMode::Clamp as u32 } else { GuTexWrapMode::Repeat as u32 };
+        sub.i(GeCommand::TexWrap, wrap << 8 | wrap);
+    }
+
     /// A texel of the ground's shadow picture at a place: how much of the sun is left there, 0…1.
     pub fn sunlit(&self, x: f32, z: f32) -> f32 {
         let (t, r) = (&self.textures[self.scene.shadow_texture as usize], &self.scene.shadow_rows);
@@ -430,7 +619,7 @@ impl Gfx {
     }
 
     fn pack_world(&self) -> view::World<'_> {
-        view::World { scene: &self.scene, chunks: &self.chunks, clusters: &self.clusters, cells: &self.cells, lists: &self.lists, bits: &self.bits }
+        view::World { scene: &self.scene, chunks: &self.chunks, clusters: &self.clusters, larges_at: &self.larges_at, cells: &self.cells, lists: &self.lists, bits: &self.bits }
     }
 
     /// Chooses the frame's draws. The GE may still be drawing the frame before.
@@ -445,38 +634,60 @@ impl Gfx {
         let near_guard = Guard::new(&vp, NEAR, 480.0, 272.0, 2048.0).boxes_along(&self.scene.level_x, &self.scene.level_z);
         // The triangles of the frame before say how far in the levels of detail come.
         let mut draws = core::mem::take(&mut self.draws);
-        let counts = view::select(&self.pack_world(), &planes, camera.eye, &near_guard, &view::Options { nearer: self.nearer, everything: self.option & 4 != 0 }, &mut draws);
+        let mut by_cell = core::mem::replace(&mut self.by_cell, view::Cells::none());
+        let counts = view::select(&self.pack_world(), &mut by_cell, &planes, camera.eye, &near_guard, &view::Options { nearer: self.nearer, everything: self.option & 4 != 0 }, &mut draws);
+        self.by_cell = by_cell;
+        self.stats.chosen = sceKernelGetSystemTimeLow().wrapping_sub(t0);
         // Which of the frame's passes takes each draw: the near one for the cells about the eye
         // (bit 0), the glass's (bit 1).
         self.pass_of.clear();
         // The far pass's near plane goes under the nearest of its chunks: a chunk's triangles may
         // reach out of its cell's square, and nearer the eye than the square is.
-        let mut least = SPLIT;
+        let mut least = SPLIT * SPLIT;
+        let (mut chunk, mut pass) = (u32::MAX, 0u8);
         for d in &draws {
-            let c = &self.chunks[d.chunk as usize];
-            let near = near_cell(&self.scene, camera.eye, c.cell as u32);
-            if !near {
-                least = min(least, mat::box_distance(camera.eye, &c.min, &c.max));
+            // (a chunk's draws follow each other)
+            if d.chunk as u32 != chunk {
+                chunk = d.chunk as u32;
+                let c = &self.chunks[d.chunk as usize];
+                let near = near_cell(&self.scene, camera.eye, c.cell as u32);
+                if !near {
+                    least = min(least, mat::box_distance2(camera.eye, &c.min, &c.max));
+                }
+                pass = near as u8 | ((c.flags & chunk::BLEND != 0) as u8) << 1;
             }
-            self.pass_of.push(near as u8 | ((c.flags & chunk::BLEND != 0) as u8) << 1);
+            self.pass_of.push(pass);
         }
+        let least = sqrt(least);
         self.far_near = max(least * FAR_NEAR, 1.0);
         self.draws = draws;
-        let over = counts.triangles as f32 / self.budget.max(1) as f32;
-        self.nearer = clamp(self.nearer * if over > 1.0 { 1.0 / (1.0 + (over - 1.0) * 0.5) } else { 1.0 + (1.0 - over) * 0.08 }, 0.4, 1.0);
+        // Over the budget of triangles, or of time: the frame before took `load` of what a frame may.
+        let over = max((counts.triangles + self.figures) as f32 / self.budget.max(1) as f32, self.load);
+        self.nearer = clamp(self.nearer * if over > 1.0 { 1.0 / (1.0 + (over - 1.0) * 0.5) } else { 1.0 + (1.0 - over) * 0.08 }, NEARER_LEAST, 1.0);
         let far_guard = Guard::new(&vp, self.far_near, 480.0, 272.0, 2048.0).boxes_along(&self.scene.level_x, &self.scene.level_z);
         self.stats.counts = counts;
         self.chosen = Some((*camera, view, near_guard, far_guard));
         self.stats.select = sceKernelGetSystemTimeLow().wrapping_sub(t0);
     }
 
+    /// Ends a part of the list's work: the time since the last mark is that part's.
+    pub unsafe fn mark(&mut self, part: usize) {
+        let now = sceKernelGetSystemTimeLow();
+        self.stats.parts[part] += now.wrapping_sub(self.stats.marked);
+        self.stats.marked = now;
+    }
+
     /// The model matrix of a cell's stored positions, the eye being the origin.
-    unsafe fn cell_matrix(&self, cell: u32, eye: V3) {
+    unsafe fn cell_matrix(&self, sub: &mut Sub, cell: u32, eye: V3) {
         let c = self.scene.cell_centre(cell);
         // A position is a signed 16-bit number of lattice steps: the GE reads it as -1…1.
         let s = 32768.0 * self.scene.quantum;
-        let m = ScePspFMatrix4 { x: vec4(s, 0.0, 0.0, 0.0), y: vec4(0.0, s, 0.0, 0.0), z: vec4(0.0, 0.0, s, 0.0), w: vec4(c[0] - eye.x, c[1] - eye.y, c[2] - eye.z, 1.0) };
-        sceGuSetMatrix(MatrixMode::Model, &m);
+        sub.matrix(GeCommand::WorldMatrixNumber, GeCommand::WorldMatrixData, 0, &[[s, 0.0, 0.0], [0.0, s, 0.0], [0.0, 0.0, s], [c[0] - eye.x, c[1] - eye.y, c[2] - eye.z]]);
+    }
+
+    /// The model matrix of positions counted from the eye.
+    unsafe fn eye_matrix_in(sub: &mut Sub) {
+        sub.matrix(GeCommand::WorldMatrixNumber, GeCommand::WorldMatrixData, 0, &[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 0.0]]);
     }
 
     unsafe fn eye_matrix(&self) {
@@ -484,71 +695,89 @@ impl Gfx {
         sceGuSetMatrix(MatrixMode::Model, &id);
     }
 
-    /// The solid world of one pass: `near` for the chunks about the eye.
+    /// The solid world of one pass: `near` for the chunks about the eye. Its commands go through
+    /// `sub`; the last run is closed when this returns.
     unsafe fn pass(&mut self, near: bool, eye: V3, guard: &Guard, blend: bool) {
         let scene = self.scene;
+        let mut sub = core::mem::take(&mut self.sub);
+        sub.run = self.run;
         let (mut bound, mut cell, mut chunk_at, mut vertices_at, mut flags) = (u32::MAX, u32::MAX, u32::MAX, ptr::null::<u8>(), u16::MAX);
-        let mut since_stall = 0u32;
-        // The triangles cut on the CPU, picture by picture.
+        // The triangles cut on the CPU, picture by picture: the corners of what is left of each,
+        // and how many corners that is.
         let cut = self.scratch.take(CUT_VERTICES * core::mem::size_of::<ClipVertex>()) as *mut ClipVertex;
-        let (mut cut_n, mut cut_first, mut cut_ground) = (0usize, 0usize, false);
-        let no_cut = self.option & 64 != 0 || cut.is_null();
+        let fans = self.scratch.take(CUT_VERTICES / 3);
+        let (mut cut_n, mut fan_n, mut cut_first, mut fan_first, mut cut_ground) = (0usize, 0usize, 0usize, 0usize, false);
+        let no_cut = self.option & 64 != 0 || cut.is_null() || fans.is_null();
+        // The corners the guard has looked at: a cluster's large triangles share most of theirs,
+        // and a vertex read from the pack is a cache line the GE's own reading has to make way for.
+        let mut seen = [Seen { key: 0, corner: Corner { clip: [0.0; 3], out: 0 } }; 64];
+        let (mut run, mut run_vertices, mut run_cell) = (0u32, ptr::null::<u8>(), u32::MAX);
+        // The eye among the cell's stored positions, in sixteenths of a unit of the large
+        // triangles' records, and how many of those sixteenths of distance a unit of edge asks
+        // for (times 256): a triangle whose sphere is farther than its longest edge over
+        // `Guard::chord` cannot reach from the view to outside the band.
+        const FINE: i32 = large::UNIT as i32 / 8;
+        let mut eye_in = [0i32; 3];
+        let per_edge = (8.0 / guard.chord().max(0.05) * 256.0) as u32 + 1;
         // The guard for positions as the cell stores them.
         let (mut stored, mut stored_cell) = (guard.stored([0.0; 3], 1.0), u32::MAX);
-        let mut tested = 0u32;
+        let (mut tested, mut looked_at, mut looked, mut draws, mut triangles) = (0u32, 0u32, 0u32, 0u32, 0u32);
         let want = near as u8 | (blend as u8) << 1;
+        // (the texture stage doubles what it makes while the world is drawn)
+        let doubled = 0x10000u32;
         for i in 0..self.draws.len() {
             if *self.pass_of.get_unchecked(i) != want {
                 continue;
+            }
+            if !sub.room() {
+                break;
             }
             let d = *self.draws.get_unchecked(i);
             // (the chunks stand still for the program's life)
             let c = &*self.chunks.as_ptr().add(d.chunk as usize);
             if c.texture as u32 != bound {
                 // The cut triangles of the picture before go out before it is replaced.
-                self.send_cut(cut, cut_first, cut_n, near, cut_ground);
-                cut_first = cut_n;
+                self.send_cut(&mut sub, cut.add(cut_first), fans.add(fan_first), fan_n - fan_first, near, cut_ground);
+                (cut_first, fan_first, cut_ground) = (cut_n, fan_n, false);
                 bound = c.texture as u32;
-                self.bind(bound);
+                self.bind_in(&mut sub, bound);
                 flags = u16::MAX;
                 cell = u32::MAX;
+                chunk_at = u32::MAX;
                 vertices_at = ptr::null();
             }
             let state = c.flags & (chunk::TWO_SIDED | chunk::CUTOUT | chunk::BLEND);
             if state != flags {
                 flags = state;
-                if state & chunk::TWO_SIDED != 0 || self.option & 1 != 0 {
-                    sceGuDisable(GuState::CullFace);
-                } else {
-                    sceGuEnable(GuState::CullFace);
-                }
-                if state & chunk::CUTOUT != 0 {
-                    sceGuEnable(GuState::AlphaTest);
-                    sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
-                } else {
-                    sceGuDisable(GuState::AlphaTest);
-                    sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgb);
-                }
+                sub.i(GeCommand::CullFaceEnable, (state & chunk::TWO_SIDED == 0 && self.option & 1 == 0) as u32);
+                let cutout = state & chunk::CUTOUT != 0;
+                sub.i(GeCommand::AlphaTestEnable, cutout as u32);
+                let component = if cutout { TextureColorComponent::Rgba } else { TextureColorComponent::Rgb };
+                sub.i(GeCommand::TexFunc, (component as u32) << 8 | TextureEffect::Modulate as u32 | doubled);
             }
             if blend {
                 // Glass: its colour by its opacity over what is behind it.
                 let a = c.opacity as u32;
-                sceGuBlendFunc(BlendOp::Add, BlendFactor::Fix, BlendFactor::Fix, a | a << 8 | a << 16, (255 - a) | (255 - a) << 8 | (255 - a) << 16);
+                sub.i(GeCommand::BlendMode, BlendFactor::Fix as u32 | (BlendFactor::Fix as u32) << 4 | (BlendOp::Add as u32) << 8);
+                sub.i(GeCommand::BlendFixedA, a | a << 8 | a << 16);
+                sub.i(GeCommand::BlendFixedB, (255 - a) | (255 - a) << 8 | (255 - a) << 16);
             }
             if c.cell as u32 != cell {
                 cell = c.cell as u32;
-                self.cell_matrix(cell, eye);
+                self.cell_matrix(&mut sub, cell, eye);
             }
             if d.chunk as u32 != chunk_at {
                 chunk_at = d.chunk as u32;
-                sceGuTexScale(c.uv_scale[0], c.uv_scale[1]);
-                sceGuTexOffset(c.uv_offset[0], c.uv_offset[1]);
+                sub.f(GeCommand::TexScaleU, c.uv_scale[0]);
+                sub.f(GeCommand::TexScaleV, c.uv_scale[1]);
+                sub.f(GeCommand::TexOffsetU, c.uv_offset[0]);
+                sub.f(GeCommand::TexOffsetV, c.uv_offset[1]);
             }
-            let lod = &c.lod[d.lod as usize];
+            let lod = c.lod(d.lod as usize);
             let vertices = self.vertices.as_ptr().add(lod.vertex as usize) as *const u8;
             if vertices != vertices_at {
                 vertices_at = vertices;
-                point_at(vertices);
+                sub.address(GeCommand::Vaddr, vertices as usize);
             }
             let ground = c.flags & chunk::GROUND != 0;
             let indices = self.indices.as_ptr().add((lod.index + d.first) as usize);
@@ -560,132 +789,213 @@ impl Gfx {
                 if cell != stored_cell {
                     stored_cell = cell;
                     stored = guard.stored(centre, scene.quantum);
+                    eye_in = [((eye.x - centre[0]) / scene.quantum) as i32, ((eye.y - centre[1]) / scene.quantum) as i32, ((eye.z - centre[2]) / scene.quantum) as i32];
                 }
-                let keep = self.scratch.take(d.large as usize * 6) as *mut u16;
-                let mut kept = 0usize;
                 let records = vertices as *const WorldVertex;
-                let world = |v: &WorldVertex| v3(centre[0] + v.pos[0] as f32 * scene.quantum, centre[1] + v.pos[1] as f32 * scene.quantum, centre[2] + v.pos[2] as f32 * scene.quantum);
-                let steps = |v: &WorldVertex| v3(v.pos[0] as f32, v.pos[1] as f32, v.pos[2] as f32);
-                tested += d.large as u32;
-                for t in 0..d.large as usize {
-                    let corner = [*indices.add(t * 3), *indices.add(t * 3 + 1), *indices.add(t * 3 + 2)];
-                    let v = [&*records.add(corner[0] as usize), &*records.add(corner[1] as usize), &*records.add(corner[2] as usize)];
-                    let clip = [stored.to_clip(steps(v[0])), stored.to_clip(steps(v[1])), stored.to_clip(steps(v[2]))];
-                    match stored.classify(&clip) {
-                        Verdict::Culled => {}
-                        Verdict::Clip if self.option & 2048 != 0 => {}
-                        Verdict::Clip if cut_n + MAX_OUT <= CUT_VERTICES => {
-                            let p = [world(v[0]), world(v[1]), world(v[2])];
-                            let full = |k: usize| {
-                                let (r, g, b) = ((v[k].colour & 31) as u8, ((v[k].colour >> 5) & 63) as u8, (v[k].colour >> 11) as u8);
-                                ClipVertex { uv: [v[k].uv[0] as f32 * (c.uv_scale[0] / 32768.0) + c.uv_offset[0], v[k].uv[1] as f32 * (c.uv_scale[1] / 32768.0) + c.uv_offset[1]], color: [(r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2), 255], pos: [p[k].x, p[k].y, p[k].z] }
-                            };
-                            let n = guard.clip(&[full(0), full(1), full(2)], &clip, core::slice::from_raw_parts_mut(cut.add(cut_n), MAX_OUT));
-                            // The pieces are sent with the eye as the origin.
-                            for piece in core::slice::from_raw_parts_mut(cut.add(cut_n), n) {
-                                piece.pos = [piece.pos[0] - eye.x, piece.pos[1] - eye.y, piece.pos[2] - eye.z];
-                            }
-                            cut_n += n;
-                            cut_ground |= ground;
-                            self.stats.cut += 1;
-                        }
-                        _ if !keep.is_null() => {
-                            ptr::copy_nonoverlapping(corner.as_ptr(), keep.add(kept), 3);
+                let spheres = self.larges.as_ptr().add(d.tri as usize);
+                if vertices != run_vertices || cell != run_cell {
+                    (run, run_vertices, run_cell) = (run + 1, vertices, cell);
+                }
+                let large = d.large as usize;
+                // The triangles the GE takes as they are: copied only from the first one it cannot.
+                let (mut keep, mut kept) = (ptr::null_mut::<u16>(), 0usize);
+                tested += large as u32;
+                for t in 0..large {
+                    // Far enough for its size: the GE has it without a look at its corners.
+                    let sphere = &*spheres.add(t);
+                    let (dx, dy, dz) = ((sphere.centre[0] as i32 - eye_in[0]) / FINE, (sphere.centre[1] as i32 - eye_in[1]) / FINE, (sphere.centre[2] as i32 - eye_in[2]) / FINE);
+                    let reach = sphere.radius as u32 * 8 + ((sphere.edge as u32 * per_edge) >> 8) + 3;
+                    if sphere.radius != 255 && sphere.edge != 255 && (dx * dx) as u32 + (dy * dy) as u32 + (dz * dz) as u32 >= reach * reach {
+                        if !keep.is_null() {
+                            ptr::copy_nonoverlapping(indices.add(t * 3), keep.add(kept), 3);
                             kept += 3;
                         }
-                        _ => {}
+                        continue;
+                    }
+                    looked_at += 1;
+                    let index = [*indices.add(t * 3), *indices.add(t * 3 + 1), *indices.add(t * 3 + 2)];
+                    let mut corner = [Corner { clip: [0.0; 3], out: 0 }; 3];
+                    for k in 0..3 {
+                        let slot = seen.get_unchecked_mut(index[k] as usize & 63);
+                        let key = run << 16 | index[k] as u32;
+                        if slot.key != key {
+                            let v = &*records.add(index[k] as usize);
+                            slot.key = key;
+                            looked += 1;
+                            slot.corner = stored.corner(v3(v.pos[0] as f32, v.pos[1] as f32, v.pos[2] as f32));
+                        }
+                        corner[k] = slot.corner;
+                    }
+                    let verdict = stored.judge(&corner[0], &corner[1], &corner[2]);
+                    if verdict == Verdict::Safe {
+                        if !keep.is_null() {
+                            ptr::copy_nonoverlapping(index.as_ptr(), keep.add(kept), 3);
+                            kept += 3;
+                        }
+                        continue;
+                    }
+                    if keep.is_null() {
+                        keep = self.scratch.take(large * 6) as *mut u16;
+                        if keep.is_null() {
+                            break;
+                        }
+                        ptr::copy_nonoverlapping(indices, keep, t * 3);
+                        kept = t * 3;
+                    }
+                    if verdict == Verdict::Culled || self.option & 2048 != 0 || cut_n + MAX_POLY > CUT_VERTICES {
+                        continue;
+                    }
+                    let clip = [corner[0].clip, corner[1].clip, corner[2].clip];
+                    // A face seen from behind that the GE would not draw is not worth the cut.
+                    if c.flags & chunk::TWO_SIDED == 0 && self.option & (1 | 4096) == 0 && Guard::turned(&clip) != (self.option & 2 != 0) {
+                        continue;
+                    }
+                    // The pieces are sent with the eye as the origin.
+                    let from = [centre[0] - eye.x, centre[1] - eye.y, centre[2] - eye.z];
+                    let full = |k: usize| {
+                        let v = &*records.add(index[k] as usize);
+                        let (r, g, b) = ((v.colour & 31) as u8, ((v.colour >> 5) & 63) as u8, (v.colour >> 11) as u8);
+                        ClipVertex {
+                            uv: [v.uv[0] as f32 * (c.uv_scale[0] / 32768.0) + c.uv_offset[0], v.uv[1] as f32 * (c.uv_scale[1] / 32768.0) + c.uv_offset[1]],
+                            color: [(r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2), 255],
+                            pos: [from[0] + v.pos[0] as f32 * scene.quantum, from[1] + v.pos[1] as f32 * scene.quantum, from[2] + v.pos[2] as f32 * scene.quantum],
+                        }
+                    };
+                    let n = stored.cut(&[full(0), full(1), full(2)], &clip, &mut *(cut.add(cut_n) as *mut [ClipVertex; MAX_POLY]));
+                    if n >= 3 {
+                        *fans.add(fan_n) = n as u8;
+                        fan_n += 1;
+                        cut_n += n;
+                        cut_ground |= ground;
+                        triangles += n as u32 - 2;
+                        self.stats.cut += 1;
                     }
                 }
-                if kept > 0 {
-                    flush(keep, kept * 2);
-                    send(keep, kept as u32, &mut since_stall);
-                    if ground {
-                        self.ground.push(Sent { cell, vertices, indices: keep, count: kept as u32, near });
+                if keep.is_null() {
+                    // Every one of them is the GE's: the run goes out whole.
+                } else {
+                    if kept > 0 {
+                        flush(keep, kept * 2);
+                        sub.triangles(keep, kept as u32);
+                        if ground {
+                            self.ground.push(Sent { cell, vertices, indices: keep, count: kept as u32, near });
+                        }
+                        draws += 1;
+                        triangles += kept as u32 / 3;
                     }
-                    self.stats.draws += 1;
-                    self.stats.triangles += kept as u32 / 3;
+                    first = large as u32 * 3;
                 }
-                first = d.large as u32 * 3;
             }
             // The rest of the run, as it is: at most 65 535 indices in one draw.
             let mut at = first;
             while at < d.count {
                 let count = (d.count - at).min(65_532);
-                send(indices.add(at as usize), count, &mut since_stall);
+                sub.triangles(indices.add(at as usize), count);
                 if ground {
                     self.ground.push(Sent { cell, vertices, indices: indices.add(at as usize), count, near });
                 }
                 at += count;
-                self.stats.draws += 1;
-                self.stats.triangles += count / 3;
+                draws += 1;
+                triangles += count / 3;
             }
         }
         self.stats.tested += tested;
-        self.send_cut(cut, cut_first, cut_n, near, cut_ground);
+        self.stats.near += looked_at;
+        self.stats.corners += looked;
+        self.stats.draws += draws;
+        self.stats.triangles += triangles;
+        if !no_cut {
+            self.send_cut(&mut sub, cut.add(cut_first), fans.add(fan_first), fan_n - fan_first, near, cut_ground);
+        }
+        sub.close();
+        self.sub = sub;
     }
 
-    /// Sends the triangles cut on the CPU since `first`: float vertices with the eye as the origin.
-    unsafe fn send_cut(&mut self, cut: *mut ClipVertex, first: usize, end: usize, near: bool, ground: bool) {
-        if end <= first {
+    /// Sends `count` pieces cut on the CPU, each a fan of as many corners as its byte at `fans`
+    /// says: float vertices from `at` on, with the eye as the origin.
+    unsafe fn send_cut(&mut self, sub: &mut Sub, at: *const ClipVertex, fans: *const u8, count: usize, near: bool, ground: bool) {
+        if count == 0 {
             return;
         }
-        let at = cut.add(first);
-        flush(at, (end - first) * core::mem::size_of::<ClipVertex>());
-        self.eye_matrix();
-        sceGuTexScale(1.0, 1.0);
-        sceGuTexOffset(0.0, 0.0);
-        sceGuDrawArray(GuPrimitive::Triangles, vtype_float(), (end - first) as i32, ptr::null(), at as *const c_void);
-        sceGuSendCommandi(GeCommand::VertexType, vtype_world().bits());
+        Gfx::eye_matrix_in(sub);
+        sub.f(GeCommand::TexScaleU, 1.0);
+        sub.f(GeCommand::TexScaleV, 1.0);
+        sub.f(GeCommand::TexOffsetU, 0.0);
+        sub.f(GeCommand::TexOffsetV, 0.0);
+        sub.i(GeCommand::VertexType, vtype_float().bits() as u32);
+        let corners = Gfx::fans_in(sub, at, fans, count);
+        sub.i(GeCommand::VertexType, vtype_world().bits() as u32);
+        flush(at, corners * core::mem::size_of::<ClipVertex>());
         if ground {
-            self.ground.push(Sent { cell: u32::MAX, vertices: at as *const u8, indices: ptr::null(), count: (end - first) as u32, near });
+            self.ground.push(Sent { cell: u32::MAX, vertices: at as *const u8, indices: fans as *const u16, count: count as u32, near });
         }
-        self.stats.draws += 1;
-        self.stats.triangles += (end - first) as u32 / 3;
+        self.stats.draws += count as u32;
+    }
+
+    /// The fans themselves; returns how many corners they have between them.
+    unsafe fn fans_in(sub: &mut Sub, at: *const ClipVertex, fans: *const u8, count: usize) -> usize {
+        let mut corner = 0usize;
+        for k in 0..count {
+            if !sub.room() {
+                break;
+            }
+            let n = *fans.add(k) as usize;
+            sub.fan(at.add(corner) as *const u8, n as u32);
+            corner += n;
+        }
+        corner
     }
 
     /// The ground of one pass once more, under the shadow picture.
     unsafe fn shadows(&mut self, near: bool, eye: V3) {
         let (r, s) = (self.scene.shadow_rows, 32768.0 * self.scene.quantum);
+        let mut sub = core::mem::take(&mut self.sub);
         let mut cell = u32::MAX - 1;
         let mut vertices_at = ptr::null::<u8>();
-        let mut since_stall = 0u32;
+        let mut draws = 0;
         for i in 0..self.ground.len() {
-            let g = self.ground[i];
+            let g = *self.ground.get_unchecked(i);
             if g.near != near {
                 continue;
+            }
+            if !sub.room() {
+                break;
             }
             if g.cell != cell {
                 cell = g.cell;
                 // Where a stored position stands in the world, and from that in the picture.
                 let (scale, at) = if cell == u32::MAX {
-                    self.eye_matrix();
+                    Gfx::eye_matrix_in(&mut sub);
                     (1.0, [eye.x, eye.y, eye.z])
                 } else {
-                    self.cell_matrix(cell, eye);
+                    self.cell_matrix(&mut sub, cell, eye);
                     (s, self.scene.cell_centre(cell))
                 };
-                let m = ScePspFMatrix4 {
-                    x: vec4(r[0][0] * scale, r[1][0] * scale, 0.0, 0.0),
-                    y: vec4(0.0, 0.0, 0.0, 0.0),
-                    z: vec4(r[0][1] * scale, r[1][1] * scale, 0.0, 0.0),
-                    w: vec4(r[0][0] * at[0] + r[0][1] * at[2] + r[0][2], r[1][0] * at[0] + r[1][1] * at[2] + r[1][2], 1.0, 0.0),
-                };
-                sceGuSetMatrix(MatrixMode::Texture, &m);
+                sub.matrix(
+                    GeCommand::TGenMatrixNumber,
+                    GeCommand::TGenMatrixData,
+                    0,
+                    &[[r[0][0] * scale, r[1][0] * scale, 0.0], [0.0, 0.0, 0.0], [r[0][1] * scale, r[1][1] * scale, 0.0], [r[0][0] * at[0] + r[0][1] * at[2] + r[0][2], r[1][0] * at[0] + r[1][1] * at[2] + r[1][2], 1.0]],
+                );
                 vertices_at = ptr::null();
             }
-            if g.indices.is_null() {
-                sceGuDrawArray(GuPrimitive::Triangles, vtype_float(), g.count as i32, ptr::null(), g.vertices as *const c_void);
-                sceGuSendCommandi(GeCommand::VertexType, vtype_world().bits());
+            if g.cell == u32::MAX {
+                sub.i(GeCommand::VertexType, vtype_float().bits() as u32);
+                Gfx::fans_in(&mut sub, g.vertices as *const ClipVertex, g.indices as *const u8, g.count as usize);
+                sub.i(GeCommand::VertexType, vtype_world().bits() as u32);
                 vertices_at = ptr::null();
             } else {
                 if g.vertices != vertices_at {
                     vertices_at = g.vertices;
-                    point_at(g.vertices);
+                    sub.address(GeCommand::Vaddr, g.vertices as usize);
                 }
-                send(g.indices, g.count, &mut since_stall);
+                sub.triangles(g.indices, g.count);
             }
-            self.stats.draws += 1;
+            draws += 1;
         }
+        self.stats.draws += draws;
+        sub.close();
+        self.sub = sub;
     }
 
     /// Starts the list of the frame chosen and writes the sky and the world into it. No list is in
@@ -694,6 +1004,8 @@ impl Gfx {
     pub unsafe fn world(&mut self) -> Option<(Camera, Mat4)> {
         let (camera, view, near_guard, far_guard) = self.chosen.take()?;
         self.list_from = sceKernelGetSystemTimeLow();
+        self.stats.marked = self.list_from;
+        self.sub.rewind();
         self.scratch.at = 0;
         self.ground.clear();
         let (eye, aspect) = (camera.eye, 480.0 / 272.0);
@@ -739,6 +1051,8 @@ impl Gfx {
             sceGuDepthMask(0);
         }
 
+        self.mark(0);
+
         // ------------------------------------------------------------ the world
         sceGuEnable(GuState::DepthTest);
         sceGuFrontFace(if self.option & 2 == 0 { FrontFaceDirection::CounterClockwise } else { FrontFaceDirection::Clockwise });
@@ -762,6 +1076,7 @@ impl Gfx {
             }
             sceGuTexFilter(TextureFilter::LinearMipmapNearest, TextureFilter::Linear);
             self.pass(near, eye, if near { &near_guard } else { &far_guard }, false);
+            self.mark(if near { 1 } else { 3 });
             // The ground once more: what is there times the shadow picture, where the depth is the ground's own.
             if self.option & 16 == 0 && !self.ground.is_empty() {
                 sceGuEnable(GuState::Blend);
@@ -785,6 +1100,7 @@ impl Gfx {
                     sceGuEnable(GuState::Fog);
                 }
             }
+            self.mark(if near { 2 } else { 4 });
         }
         // The glass, over everything solid, farthest pass first.
         sceGuEnable(GuState::Blend);
@@ -808,6 +1124,7 @@ impl Gfx {
         sceGuTexOffset(0.0, 0.0);
 
         sceGuEnable(GuState::CullFace);
+        self.mark(5);
         Some((camera, view))
     }
 
@@ -918,7 +1235,121 @@ impl Gfx {
             sceGuTexWrap(GuTexWrapMode::Clamp, GuTexWrapMode::Clamp);
             ui.draw();
         }
+        self.mark(9);
         self.stats.words = (sceGuFinish() / 4) as u32;
         self.stats.list = sceKernelGetSystemTimeLow().wrapping_sub(self.list_from);
+    }
+
+    /// What this console takes for the frame's smallest pieces of work, in nanoseconds each
+    /// (`probe=1` in `boot.txt`): a command through `sceGuSendCommandi`; a word written past the
+    /// cache; a word written through it and flushed; a flush of 64 bytes; a model matrix; a large
+    /// triangle's three corners carried to clip space and judged; a triangle cut; a multiply and
+    /// add; a divide; a read from a far place of the pack; a call of the kernel's clock.
+    pub unsafe fn probe(&mut self, camera: &Camera) -> [u32; 11] {
+        const N: usize = 16384;
+        static mut WORDS: [u32; N] = [0; N];
+        let words = ptr::addr_of_mut!(WORDS) as *mut u32;
+        let mut out = [0u32; 11];
+        let per = |from: u32, n: usize| (sceKernelGetSystemTimeLow().wrapping_sub(from) as u64 * 1000 / n as u64) as u32;
+        // 0: commands through the library.
+        sceGuStart(GuContextType::Direct, DisplayList::as_mut_ptr(ptr::addr_of_mut!(LIST)));
+        let t = sceKernelGetSystemTimeLow();
+        for _ in 0..N {
+            sceGuSendCommandi(GeCommand::Nop, 0);
+        }
+        out[0] = per(t, N);
+        // 4: model matrices.
+        let m = ScePspFMatrix4 { x: vec4(1.0, 0.0, 0.0, 0.0), y: vec4(0.0, 1.0, 0.0, 0.0), z: vec4(0.0, 0.0, 1.0, 0.0), w: vec4(0.0, 0.0, 0.0, 1.0) };
+        let t = sceKernelGetSystemTimeLow();
+        for _ in 0..1024 {
+            sceGuSetMatrix(MatrixMode::Model, &m);
+        }
+        out[4] = per(t, 1024);
+        sceGuFinish();
+        sceGuSync(GuSyncMode::Finish, GuSyncBehavior::Wait);
+        // 1: words past the cache.
+        sceKernelDcacheWritebackInvalidateRange(words as *const c_void, (N * 4) as u32);
+        let past = (words as usize | 0x4000_0000) as *mut u32;
+        let t = sceKernelGetSystemTimeLow();
+        for i in 0..N {
+            past.add(i).write_volatile(i as u32);
+        }
+        out[1] = per(t, N);
+        // 2: words through the cache, flushed once.
+        let t = sceKernelGetSystemTimeLow();
+        for i in 0..N {
+            words.add(i).write_volatile(i as u32 ^ 0x5555);
+        }
+        flush(words, N * 4);
+        out[2] = per(t, N);
+        // 3: flushes of 64 bytes.
+        let t = sceKernelGetSystemTimeLow();
+        for i in 0..1024 {
+            words.add((i & 255) * 16).write_volatile(i as u32);
+            flush(words.add((i & 255) * 16), 64);
+        }
+        out[3] = per(t, 1024);
+        // 5 and 6: the guard's work on the pack's own triangles.
+        let look = forward(camera.yaw, camera.pitch);
+        let view = mat::view(camera.eye, look, camera.roll);
+        let vp = mat::mul(&mat::perspective(camera.fov, 480.0 / 272.0, NEAR, FAR), &view);
+        let guard = Guard::new(&vp, NEAR, 480.0, 272.0, 2048.0);
+        let cell = self.scene.cell_at(camera.eye.x, camera.eye.z).unwrap_or(0);
+        let stored = guard.stored(self.scene.cell_centre(cell), self.scene.quantum);
+        let (vn, mut seed, mut sum) = (self.vertices.len().min(60_000), 12345u32, 0u32);
+        let mut next = || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as usize
+        };
+        let t = sceKernelGetSystemTimeLow();
+        for _ in 0..8192 {
+            let at = next() % (vn - 3);
+            let v = [&self.vertices[at], &self.vertices[at + 1], &self.vertices[at + 2]];
+            let steps = |v: &WorldVertex| v3(v.pos[0] as f32, v.pos[1] as f32, v.pos[2] as f32);
+            let clip = [stored.to_clip(steps(v[0])), stored.to_clip(steps(v[1])), stored.to_clip(steps(v[2]))];
+            sum += (stored.classify(&clip) == Verdict::Safe) as u32;
+        }
+        out[5] = per(t, 8192);
+        let corner = |x: f32, y: f32, z: f32| {
+            let p = camera.eye + v3(x, y, z);
+            ClipVertex { uv: [x, z], color: [200, 150, 100, 255], pos: [p.x, p.y, p.z] }
+        };
+        let right = look.cross(V3::UP).norm_or(v3(1.0, 0.0, 0.0));
+        let (a, b, c) = (look * 3.0 - right * 40.0, look * 3.0 + right * 2.0, look * -2.0 + right * 1.0 - V3::UP * 1.5);
+        let tri = [corner(a.x, a.y, a.z), corner(b.x, b.y, b.z), corner(c.x, c.y, c.z)];
+        let clip = tri.map(|v| guard.to_clip(v3(v.pos[0], v.pos[1], v.pos[2])));
+        let mut pieces = [ClipVertex::default(); MAX_OUT];
+        let t = sceKernelGetSystemTimeLow();
+        for _ in 0..1024 {
+            sum += guard.clip(&tri, &clip, &mut pieces) as u32;
+        }
+        out[6] = per(t, 1024);
+        // 7 and 8: the floating point unit.
+        let (mut acc, a, b) = (1.0f32, core::hint::black_box(0.999f32), core::hint::black_box(0.001f32));
+        let t = sceKernelGetSystemTimeLow();
+        for _ in 0..65536 {
+            acc = core::hint::black_box(acc * a + b);
+        }
+        out[7] = per(t, 65536);
+        let t = sceKernelGetSystemTimeLow();
+        for _ in 0..65536 {
+            acc = core::hint::black_box(b / (acc + a));
+        }
+        out[8] = per(t, 65536);
+        // 9: reads from far places.
+        let all = self.vertices.len();
+        let t = sceKernelGetSystemTimeLow();
+        for _ in 0..N {
+            sum = sum.wrapping_add(self.vertices[next() % all].colour as u32);
+        }
+        out[9] = per(t, N);
+        // 10: the clock itself.
+        let t = sceKernelGetSystemTimeLow();
+        for _ in 0..1024 {
+            sum = sum.wrapping_add(sceKernelGetSystemTimeLow());
+        }
+        out[10] = per(t, 1024);
+        core::hint::black_box((sum, acc));
+        out
     }
 }

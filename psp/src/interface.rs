@@ -50,7 +50,11 @@ pub struct Ui {
     /// What it last drew, for the frames between its turns.
     words: (*const u32, usize),
     /// Which of the turns it is offered are taken.
-    pace: Pace,
+    pub pace: Pace,
+    /// Of the turns that would bring it nothing but new readouts, one in this many is taken.
+    pub readouts_every: u8,
+    /// Turns offered and not taken since the last one taken: the core's clock is owed them.
+    skipped: u32,
     /// Buttons a control message presses, and for how many more turns: a press is held two turns and
     /// let go for one; a rest holds nothing.
     presses: VecDeque<(u32, u8)>,
@@ -60,6 +64,11 @@ pub struct Ui {
     /// layout and its list.
     pub script_ms: f32,
     pub layout_ms: f32,
+    /// The script of a turn that had news to read and of one that had none, and of the layout
+    /// the core's ticks alone, smoothed the same way.
+    pub news_ms: f32,
+    pub quiet_ms: f32,
+    pub tick_ms: f32,
     /// The longest turn so far, milliseconds, and the longest since `recent` last asked.
     pub worst_ms: f32,
     /// The longest turn since `recent` last asked: its script, its layout, and of its script the collection.
@@ -92,7 +101,7 @@ impl Ui {
     /// No interface: the pad keeps the flow itself.
     pub fn none(why: &str) -> Ui {
         unsafe { channel().close() };
-        Ui { guest: None, owed: TURN, latched: 0, collected: 0, words: (core::ptr::null(), 0), pace: Pace::default(), presses: VecDeque::new(), error: why.into(), script_ms: 0.0, layout_ms: 0.0, worst_ms: 0.0, recent_ms: [0.0; 3], collections: 0, collect_ms: 0.0, turns: 0, bytes: 0 }
+        Ui { guest: None, owed: TURN, latched: 0, collected: 0, words: (core::ptr::null(), 0), pace: Pace::default(), readouts_every: 2, skipped: 0, presses: VecDeque::new(), error: why.into(), script_ms: 0.0, layout_ms: 0.0, news_ms: 0.0, quiet_ms: 0.0, tick_ms: 0.0, worst_ms: 0.0, recent_ms: [0.0; 3], collections: 0, collect_ms: 0.0, turns: 0, bytes: 0 }
     }
 
     /// Boots the guest: `script` is the bundle, NUL-terminated (not needed once this returns), `pak`
@@ -128,7 +137,7 @@ impl Ui {
         }
         host::drain_jobs(rt);
         JS_RunGC(rt);
-        Ui { guest: Some((rt, ctx, global, frame)), owed: TURN, latched: 0, collected: arena::stats().bump_bytes, words: (core::ptr::null(), 0), pace: Pace::default(), presses: VecDeque::new(), error: String::new(), script_ms: 0.0, layout_ms: 0.0, worst_ms: 0.0, recent_ms: [0.0; 3], collections: 0, collect_ms: 0.0, turns: 0, bytes: 0 }
+        Ui { guest: Some((rt, ctx, global, frame)), owed: TURN, latched: 0, collected: arena::stats().bump_bytes, words: (core::ptr::null(), 0), pace: Pace::default(), readouts_every: 2, skipped: 0, presses: VecDeque::new(), error: String::new(), script_ms: 0.0, layout_ms: 0.0, news_ms: 0.0, quiet_ms: 0.0, tick_ms: 0.0, worst_ms: 0.0, recent_ms: [0.0; 3], collections: 0, collect_ms: 0.0, turns: 0, bytes: 0 }
     }
 
     /// The guest is on the screen.
@@ -161,10 +170,12 @@ impl Ui {
             return;
         }
         self.owed -= TURN;
-        if !self.pace.due(session, self.latched) && self.presses.is_empty() {
+        if !self.pace.due(session, self.latched, self.readouts_every) && self.presses.is_empty() {
             self.latched = 0;
+            self.skipped += 1;
             return;
         }
+        let news = channel().news();
         let start = sceKernelGetSystemTimeLow();
         let mut buttons = core::mem::take(&mut self.latched);
         if let Some((pressed, turns)) = self.presses.front_mut() {
@@ -200,9 +211,11 @@ impl Ui {
         }
         let scripted = sceKernelGetSystemTimeLow();
         let core = ffi::ui();
-        for _ in 0..TICKS {
+        // The turns passed over were time too: what fades keeps its pace.
+        for _ in 0..TICKS * (1 + core::mem::take(&mut self.skipped).min(3)) {
             core.tick();
         }
+        let ticked = sceKernelGetSystemTimeLow().wrapping_sub(scripted) as f32 / 1000.0;
         let list = core.draw();
         self.words = (list.words.as_ptr(), list.words.len());
         let (script, layout) = (scripted.wrapping_sub(start) as f32 / 1000.0, sceKernelGetSystemTimeLow().wrapping_sub(scripted) as f32 / 1000.0);
@@ -211,6 +224,12 @@ impl Ui {
         if self.turns > 8 {
             self.script_ms += (script - self.script_ms) * 0.1;
             self.layout_ms += (layout - self.layout_ms) * 0.1;
+            self.tick_ms += (ticked - self.tick_ms) * 0.1;
+            if news {
+                self.news_ms += (script - collect - self.news_ms) * 0.1;
+            } else {
+                self.quiet_ms += (script - collect - self.quiet_ms) * 0.1;
+            }
             self.worst_ms = self.worst_ms.max(script + layout);
             if script + layout > self.recent_ms[0] + self.recent_ms[1] {
                 self.recent_ms = [script, layout, collect];

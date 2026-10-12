@@ -223,6 +223,59 @@ pub fn contained(planes: &[[f32; 4]; 6], min: &[f32; 3], max: &[f32; 3]) -> bool
     true
 }
 
+/// For each plane and axis, 1 where the plane's normal points up the axis: which of a box's
+/// two corners along that axis is the one farthest inside the plane.
+pub fn plane_signs(planes: &[[f32; 4]; 6]) -> [[usize; 3]; 6] {
+    planes.map(|p| [(p[0] >= 0.0) as usize, (p[1] >= 0.0) as usize, (p[2] >= 0.0) as usize])
+}
+
+/// Which of the first `count` planes a box reaches across, one bit a plane; `None` when the box
+/// is wholly outside one of them. `bounds` is the box's least corner, then its greatest;
+/// `signs` is `plane_signs` of the planes.
+#[inline]
+pub fn box_across(
+    planes: &[[f32; 4]; 6],
+    signs: &[[usize; 3]; 6],
+    count: usize,
+    bounds: &[[f32; 3]; 2],
+) -> Option<u32> {
+    let mut across = 0;
+    for k in 0..count {
+        let (p, s) = (&planes[k], &signs[k]);
+        // The corner farthest inside this plane.
+        if p[0] * bounds[s[0]][0] + p[1] * bounds[s[1]][1] + p[2] * bounds[s[2]][2] + p[3] < 0.0 {
+            return None;
+        }
+        // The corner farthest out.
+        if p[0] * bounds[1 - s[0]][0] + p[1] * bounds[1 - s[1]][1] + p[2] * bounds[1 - s[2]][2] + p[3]
+            < 0.0
+        {
+            across |= 1 << k;
+        }
+    }
+    Some(across)
+}
+
+/// The square of the distance from `p` to a box (0 inside).
+#[inline]
+pub fn box_distance2(p: V3, min: &[f32; 3], max: &[f32; 3]) -> f32 {
+    let d = |v: f32, lo: f32, hi: f32| {
+        if v < lo {
+            lo - v
+        } else if v > hi {
+            v - hi
+        } else {
+            0.0
+        }
+    };
+    let (x, y, z) = (
+        d(p.x, min[0], max[0]),
+        d(p.y, min[1], max[1]),
+        d(p.z, min[2], max[2]),
+    );
+    x * x + y * y + z * z
+}
+
 /// Distance from `p` to a box (0 inside).
 pub fn box_distance(p: V3, min: &[f32; 3], max: &[f32; 3]) -> f32 {
     let d = |v: f32, lo: f32, hi: f32| {

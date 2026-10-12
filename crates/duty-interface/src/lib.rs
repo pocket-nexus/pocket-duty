@@ -483,4 +483,41 @@ mod tests {
         assert_eq!(interface.next(), Some(Command::Menu(true)));
         assert_eq!(interface.next(), None);
     }
+
+    #[test]
+    fn readouts_alone_are_worth_one_turn_in_so_many_and_anything_else_the_next_one() {
+        // (the one channel of the process: no other test here takes it)
+        let interface = unsafe { channel() };
+        *interface = Interface::default();
+        assert!(interface.open("pocket.overlay"));
+        let mut session = Session::new();
+        session.mode = Mode::Play;
+        session.idle = true;
+        interface.state.mode = Mode::Play;
+        interface.poll();
+        let mut pace = Pace::new();
+        // Nothing new: no turn.
+        assert!(!pace.due(&session, 0, 2));
+        // The numbers move at every frame: a turn at every second one.
+        let mut taken = 0;
+        for frame in 0..10 {
+            interface.state.t[t::HEADING] = frame + 1;
+            if pace.due(&session, 0, 2) {
+                interface.poll();
+                taken += 1;
+            }
+        }
+        assert_eq!(taken, 5);
+        // A line of the feed is not a readout: the next turn, and the ones in which it settles.
+        interface.state.t[t::HEADING] = 90;
+        assert!(!pace.due(&session, 0, 2));
+        interface.state.feed.push(Kill { id: 1, by: "YOU", whom: "VANGUARD", head: false, mine: 1 });
+        assert!(pace.due(&session, 0, 2));
+        interface.poll();
+        // What follows it settles at the readouts' pace, to the last of those turns.
+        let settling = (0..12).filter(|_| pace.due(&session, 0, 2)).count();
+        assert_eq!(settling, 6);
+        assert!(!pace.due(&session, 0, 2));
+        *interface = Interface::default();
+    }
 }

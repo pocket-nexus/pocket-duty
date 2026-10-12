@@ -14,7 +14,136 @@
 use crate::bvh::nearest_segment_triangle;
 use crate::level::Level;
 use crate::math::*;
+use crate::math::min as min_f;
 use crate::tune::player::{SLOPE, SNAP};
+
+/// The solid world's triangles about a body, kept from step to step.
+///
+/// A body moves a hand's width in a step and asks the same of the world each time: what its
+/// capsule touches, and what is under its feet. Asked of the tree, that is some three hundred
+/// lines of the data cache a step, each a microsecond on a PSP while the GE draws. Here the
+/// triangles of a box about the body are read once and the steps that stay inside it ask those.
+pub struct Near {
+    /// The box the triangles were gathered in; nothing was while `max` is under `min`.
+    min: [f32; 3],
+    max: [f32; 3],
+    /// Triangles held; `HOLDS + 1` when the box has more than that, and the world is asked itself.
+    count: usize,
+    corners: [[V3; 3]; Near::HOLDS],
+    tags: [u32; Near::HOLDS],
+    /// Times the triangles were gathered so far, and of them the times the place had too many.
+    pub gathered: u32,
+    pub crowded: u32,
+}
+
+impl Default for Near {
+    fn default() -> Near {
+        Near::new()
+    }
+}
+
+impl Near {
+    const HOLDS: usize = 160;
+    /// Metres the gathered box reaches past what was asked for, to the sides and up and down.
+    const AROUND: [f32; 3] = [0.6, 0.35, 0.6];
+
+    pub const fn new() -> Near {
+        Near { min: [0.0; 3], max: [-1.0; 3], count: 0, corners: [[V3::ZERO; 3]; Near::HOLDS], tags: [0; Near::HOLDS], gathered: 0, crowded: 0 }
+    }
+
+    /// Triangles held now.
+    pub fn held(&self) -> usize {
+        self.count
+    }
+
+    /// Forgets what it holds: the body was put somewhere else, or the world is another.
+    pub fn clear(&mut self) {
+        self.max = [-1.0; 3];
+        self.min = [0.0; 3];
+        self.count = 0;
+    }
+
+    /// Makes what is held cover the box `lo`…`hi`. False when the place has too many triangles
+    /// to hold: the caller asks the world.
+    fn covers(&mut self, level: &Level, lo: &[f32; 3], hi: &[f32; 3]) -> bool {
+        let inside = (0..3).all(|a| lo[a] >= self.min[a] && hi[a] <= self.max[a]);
+        if !inside {
+            self.min = core::array::from_fn(|a| lo[a] - Near::AROUND[a]);
+            self.max = core::array::from_fn(|a| hi[a] + Near::AROUND[a]);
+            let (min, max) = (self.min, self.max);
+            let mut count = 0usize;
+            let (corners, tags) = (&mut self.corners, &mut self.tags);
+            level.solid.within(&min, &max, |tri| {
+                if count > Near::HOLDS {
+                    return;
+                }
+                let p = [level.solid.corner(tri, 0), level.solid.corner(tri, 1), level.solid.corner(tri, 2)];
+                // Its own box against this one: a leaf holds triangles that reach elsewhere.
+                if outside(&p, &min, &max) {
+                    return;
+                }
+                if count < Near::HOLDS {
+                    corners[count] = p;
+                    tags[count] = level.solid.tris[tri as usize].tag;
+                }
+                count += 1;
+            });
+            self.count = count;
+            self.gathered += 1;
+            self.crowded += (count > Near::HOLDS) as u32;
+        }
+        self.count <= Near::HOLDS
+    }
+}
+
+/// Whether a triangle is wholly to one side of a box.
+#[inline]
+fn outside(p: &[V3; 3], min: &[f32; 3], max: &[f32; 3]) -> bool {
+    (p[0].x < min[0] && p[1].x < min[0] && p[2].x < min[0])
+        || (p[0].x > max[0] && p[1].x > max[0] && p[2].x > max[0])
+        || (p[0].y < min[1] && p[1].y < min[1] && p[2].y < min[1])
+        || (p[0].y > max[1] && p[1].y > max[1] && p[2].y > max[1])
+        || (p[0].z < min[2] && p[1].z < min[2] && p[2].z < min[2])
+        || (p[0].z > max[2] && p[1].z > max[2] && p[2].z > max[2])
+}
+
+/// The first of `triangles` a point falling from (`x`, `top`, `z`) meets within `far`: how far
+/// down, how much of its unit normal points up, and its tag. Both faces of a triangle count, as
+/// they do for a ray.
+fn drop_on(triangles: &[[V3; 3]], tags: &[u32], x: f32, top: f32, z: f32, far: f32) -> Option<(f32, f32, u32)> {
+    let mut best: Option<(f32, usize)> = None;
+    for (i, [a, b, c]) in triangles.iter().enumerate() {
+        // Over it at all: its box about the point, seen from above.
+        if (a.x < x && b.x < x && c.x < x) || (a.x > x && b.x > x && c.x > x) || (a.z < z && b.z < z && c.z < z) || (a.z > z && b.z > z && c.z > z) {
+            continue;
+        }
+        // Where the point is in the triangle, seen from above.
+        let (e1x, e1z, e2x, e2z) = (b.x - a.x, b.z - a.z, c.x - a.x, c.z - a.z);
+        let det = e1x * e2z - e1z * e2x;
+        if det > -1e-9 && det < 1e-9 {
+            continue;
+        }
+        let inv = 1.0 / det;
+        let (px, pz) = (x - a.x, z - a.z);
+        let u = (px * e2z - pz * e2x) * inv;
+        if !(0.0..=1.0).contains(&u) {
+            continue;
+        }
+        let v = (e1x * pz - e1z * px) * inv;
+        if v < 0.0 || u + v > 1.0 {
+            continue;
+        }
+        let t = top - (a.y + (b.y - a.y) * u + (c.y - a.y) * v);
+        if t > 0.0 && t <= far && best.is_none_or(|b| t < b.0) {
+            best = Some((t, i));
+        }
+    }
+    best.map(|(t, i)| {
+        let [a, b, c] = triangles[i];
+        let n = (b - a).cross(c - a);
+        (t, abs(n.y) / sqrt(n.len2()), tags[i])
+    })
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Body {
@@ -58,8 +187,15 @@ impl Body {
         )
     }
 
-    /// Moves by its velocity for `dt` seconds.
-    pub fn advance(&mut self, level: &Level, dt: f32) {
+    /// The box everything a step asks of the world is in: the capsule with the room its pushes
+    /// take, and under the feet as far down as ground still holds them.
+    fn asks(&self) -> ([f32; 3], [f32; 3]) {
+        let side = self.radius + 0.13;
+        ([self.pos.x - side, self.pos.y - SNAP - 0.1, self.pos.z - side], [self.pos.x + side, self.pos.y + max(self.height, self.step + 2.0 * self.radius) + 0.13, self.pos.z + side])
+    }
+
+    /// Moves by its velocity for `dt` seconds. `near` is this body's own from step to step.
+    pub fn advance(&mut self, level: &Level, near: &mut Near, dt: f32) {
         self.landed = 0.0;
         self.blocked = false;
         // Standing on ground that does not move, he stays where he is: nothing to ask the world.
@@ -70,36 +206,76 @@ impl Body {
         let h = dt / pieces as f32;
         for _ in 0..pieces {
             self.pos += self.vel * h;
-            self.push_out(level);
-            self.find_ground(level, h);
+            self.push_out(level, near);
+            self.find_ground(level, near, h);
         }
     }
 
     /// Out of every wall and ceiling the capsule is in, the deepest first.
-    pub fn push_out(&mut self, level: &Level) {
+    ///
+    /// The triangles that could touch it are picked once, a little wider than the capsule, and
+    /// each push looks at those alone. A triangle whose plane the capsule's whole axis is
+    /// farther from than its radius is left out by two products: the nearest points of a
+    /// segment and a triangle are some 350 operations of a floating point unit that takes
+    /// twenty cycles for a multiply and an add, and beside a wall a body's box holds fifty
+    /// triangles of window frames and planks that do not touch it.
+    pub fn push_out(&mut self, level: &Level, near: &mut Near) {
+        /// Triangles a push looks at at most; the ones past that are the world's finest pieces.
+        const PICKED: usize = 48;
+        /// How far the pushes of one call may move the capsule between them.
+        const ROOM: f32 = 0.12;
         let r = self.radius;
+        let (a, b) = self.axis();
+        let reach = r + ROOM;
+        let (min, max) = ([a.x - reach, a.y - reach, a.z - reach], [b.x + reach, b.y + reach, b.z + reach]);
+        let mut picked = [[V3::ZERO; 3]; PICKED];
+        let mut count = 0usize;
+        let mut offer = |p: &[V3; 3]| {
+            if count == PICKED || outside(p, &min, &max) {
+                return;
+            }
+            // Its plane against the axis: both ends on one side of it and farther than the reach.
+            let n = (p[1] - p[0]).cross(p[2] - p[0]);
+            let (da, db) = (n.dot(a - p[0]), n.dot(b - p[0]));
+            if (da > 0.0) == (db > 0.0) && min_f(da * da, db * db) > reach * reach * n.len2() {
+                return;
+            }
+            picked[count] = *p;
+            count += 1;
+        };
+        let (lo, hi) = self.asks();
+        if near.covers(level, &lo, &hi) {
+            for p in &near.corners[..near.count] {
+                offer(p);
+            }
+        } else {
+            level.solid.within(&min, &max, |tri| offer(&[level.solid.corner(tri, 0), level.solid.corner(tri, 1), level.solid.corner(tri, 2)]));
+        }
+        if count == 0 {
+            return;
+        }
         for _ in 0..4 {
             let (a, b) = self.axis();
-            let (min, max) = ([a.x - r, a.y - r, a.z - r], [b.x + r, b.y + r, b.z + r]);
             let mut deepest = (0.0f32, V3::ZERO);
-            level.solid.within(&min, &max, |tri| {
-                let (p, q, s) = (
-                    level.solid.corner(tri, 0),
-                    level.solid.corner(tri, 1),
-                    level.solid.corner(tri, 2),
-                );
+            for [p, q, s] in &picked[..count] {
+                let (p, q, s) = (*p, *q, *s);
+                let n = (q - p).cross(s - p);
+                let (da, db) = (n.dot(a - p), n.dot(b - p));
+                if (da > 0.0) == (db > 0.0) && min_f(da * da, db * db) >= r * r * n.len2() {
+                    continue;
+                }
                 let (on_axis, on_triangle) = nearest_segment_triangle(a, b, p, q, s);
                 let d = on_axis - on_triangle;
                 let dist2 = d.len2();
                 if dist2 >= r * r {
-                    return;
+                    continue;
                 }
                 let dist = sqrt(dist2);
-                let n = if dist > 1e-4 {
+                let out = if dist > 1e-4 {
                     d * (1.0 / dist)
                 } else {
                     // The axis is in the triangle: out the way the triangle faces the capsule's middle.
-                    let n = (q - p).cross(s - p).norm_or(V3::UP);
+                    let n = n.norm_or(V3::UP);
                     if n.dot((a + b) * 0.5 - p) < 0.0 {
                         -n
                     } else {
@@ -107,9 +283,9 @@ impl Body {
                     }
                 };
                 if r - dist > deepest.0 {
-                    deepest = (r - dist, n);
+                    deepest = (r - dist, out);
                 }
-            });
+            }
             let (depth, n) = deepest;
             if depth <= 1e-4 {
                 break;
@@ -126,7 +302,7 @@ impl Body {
     }
 
     /// Finds the ground under the feet and stands on it.
-    fn find_ground(&mut self, level: &Level, h: f32) {
+    fn find_ground(&mut self, level: &Level, near: &mut Near, h: f32) {
         let was = self.grounded;
         let top = self.pos.y + self.step + 0.05;
         // How far below the feet ground still holds them: a walker stays on a stair going down, a
@@ -142,6 +318,10 @@ impl Body {
         // first, a ledge is left by the last. The two feet to the sides are asked only when none
         // of those found ground.
         let way = self.vel.flat().norm_or(v3(1.0, 0.0, 0.0)) * k;
+        let far = self.step + 0.05 + reach;
+        // The triangles the feet can be over, when they are few enough to hold.
+        let (lo, hi) = self.asks();
+        let held = near.covers(level, &lo, &hi) && top - far >= lo[1];
         for (i, (dx, dz)) in [(0.0, 0.0), (way.x, way.z), (-way.x, -way.z), (-way.z, way.x), (way.z, -way.x)]
             .into_iter()
             .enumerate()
@@ -149,15 +329,16 @@ impl Body {
             if i == 3 && best.is_some() {
                 break;
             }
-            if let Some(hit) = level.solid.raycast(
-                v3(self.pos.x + dx, top, self.pos.z + dz),
-                v3(0.0, -1.0, 0.0),
-                self.step + 0.05 + reach,
-                0,
-            ) {
-                let y = top - hit.t;
-                if hit.n.y >= SLOPE && best.is_none_or(|b| y > b.0) {
-                    best = Some((y, hit.tag));
+            let (x, z) = (self.pos.x + dx, self.pos.z + dz);
+            let under = if held {
+                drop_on(&near.corners[..near.count], &near.tags[..near.count], x, top, z, far)
+            } else {
+                level.solid.raycast(v3(x, top, z), v3(0.0, -1.0, 0.0), far, 0).map(|hit| (hit.t, hit.n.y, hit.tag))
+            };
+            if let Some((t, up, tag)) = under {
+                let y = top - t;
+                if up >= SLOPE && best.is_none_or(|b| y > b.0) {
+                    best = Some((y, tag));
                 }
             }
         }
@@ -269,13 +450,18 @@ pub(crate) mod tests {
     }
 
     fn walk(body: &mut Body, level: &Level, velocity: V3, seconds: f32) {
+        let mut near = Near::new();
+        walk_with(body, level, &mut near, velocity, seconds);
+    }
+
+    fn walk_with(body: &mut Body, level: &Level, near: &mut Near, velocity: V3, seconds: f32) {
         for _ in 0..(seconds * 60.0) as u32 {
             body.vel.x = velocity.x;
             body.vel.z = velocity.z;
             if !body.grounded {
                 body.vel.y -= 20.6 / 60.0;
             }
-            body.advance(level, 1.0 / 60.0);
+            body.advance(level, near, 1.0 / 60.0);
         }
     }
 
@@ -297,6 +483,27 @@ pub(crate) mod tests {
             body.pos.x
         );
         assert!(body.grounded && body.blocked);
+    }
+
+    #[test]
+    fn the_triangles_it_keeps_move_it_as_the_world_asked_each_step_does() {
+        let yard = yard();
+        let level = yard.level();
+        // The same walk twice: once keeping the triangles about it, once asking the tree at
+        // every step (a `Near` that says its place holds too many).
+        let (mut kept, mut asked) = (Near::new(), Near::new());
+        asked.min = [f32::MIN; 3];
+        asked.max = [f32::MAX; 3];
+        asked.count = Near::HOLDS + 1;
+        let (mut a, mut b) = (Body::new(v3(0.0, 0.5, 0.0), 0.32, 1.78, 0.42), Body::new(v3(0.0, 0.5, 0.0), 0.32, 1.78, 0.42));
+        // Down onto the floor, into the wall and along it, back, up the stairs, off their side, into the crate.
+        for (velocity, seconds) in [(V3::ZERO, 0.5), (v3(4.57, 0.0, 1.0), 2.0), (v3(-4.57, 0.0, 0.3), 0.9), (v3(0.0, 0.0, 4.57), 0.9), (v3(3.0, 0.0, 0.0), 0.8), (v3(-4.57, 0.0, -2.2), 2.5), (v3(-7.0, 0.0, 0.0), 1.0)] {
+            walk_with(&mut a, &level, &mut kept, velocity, seconds);
+            walk_with(&mut b, &level, &mut asked, velocity, seconds);
+            assert!((a.pos - b.pos).len() < 1e-4 && a.grounded == b.grounded && a.blocked == b.blocked, "{:?} and {:?} after {velocity:?}", a.pos, b.pos);
+        }
+        // The first kept what it met on the way and the second never held a triangle.
+        assert!(kept.count > 0 && kept.count <= Near::HOLDS && asked.count == Near::HOLDS + 1);
     }
 
     #[test]

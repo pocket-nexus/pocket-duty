@@ -39,6 +39,14 @@ pub struct Guard {
     reach: [[f32; 3]; 3],
     /// How far a sphere reaches along each row for each unit of its radius.
     lengths: [f32; 3],
+    /// How far a box along the world's axes reaches along each row for each unit of its half sides.
+    axes: [[f32; 3]; 3],
+    /// A box whose diagonal, squared, is under this share of the square of its distance from
+    /// the eye cannot hold both a point in the view and a point outside the band (`far_safe`).
+    spread: f32,
+    /// The square of the distance from the eye past which everything inside the band is also in
+    /// front of the near plane.
+    clear: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,6 +58,15 @@ pub enum Verdict {
     Culled,
     /// In view with a vertex the rasterizer cannot take.
     Clip,
+}
+
+/// A vertex as the guard sees it: its clip coordinates, and which limits it is outside of.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Corner {
+    pub clip: [f32; 3],
+    /// Bit 0: behind the near plane. Bits 1 to 4: outside the band to the left, right, bottom,
+    /// top. Bits 5 to 8: outside the view on those sides.
+    pub out: u16,
 }
 
 /// The frustum the pieces are cut to, in units of the view's.
@@ -70,15 +87,33 @@ impl Guard {
     /// `vp` is projection × view; `width` and `height` are the screen's pixels and
     /// `band` the guard band's half-size in pixels (2048 on the PSP).
     pub fn new(vp: &Mat4, near: f32, width: f32, height: f32, band: f32) -> Guard {
+        use crate::math::{atan2, min, sin, sqrt};
         let row = |i: usize| [vp[i * 4], vp[i * 4 + 1], vp[i * 4 + 2], vp[i * 4 + 3]];
+        let lengths =
+            [row(0), row(1), row(3)].map(|r| sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]));
+        let (gx, gy) = (band / (width * 0.5) * 0.9, band / (height * 0.5) * 0.9);
+        // The angle from the view's middle to its corner, and to the nearest point outside the
+        // band. Two points at least `d` from the eye and that angle apart are at least
+        // `2 d sin(angle / 2)` from each other.
+        let (lx, ly, lw) = (lengths[0].max(1e-6), lengths[1].max(1e-6), lengths[2]);
+        let corner = atan2(sqrt(lw * lw / (lx * lx) + lw * lw / (ly * ly)), 1.0);
+        let outside = atan2(min(gx * lw / lx, gy * lw / ly), 1.0);
+        let chord = 2.0 * sin((outside - corner).max(0.0) * 0.5);
+        let axes = [row(0), row(1), row(3)].map(|r| [r[0].abs(), r[1].abs(), r[2].abs()]);
         Guard {
             rows: [row(0), row(1), row(3)],
             near: near * 1.02,
-            gx: band / (width * 0.5) * 0.9,
-            gy: band / (height * 0.5) * 0.9,
-            reach: [row(0), row(1), row(3)].map(|r| [r[0].abs(), r[1].abs(), r[2].abs()]),
-            lengths: [row(0), row(1), row(3)]
-                .map(|r| crate::math::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2])),
+            gx,
+            gy,
+            reach: axes,
+            lengths,
+            axes,
+            // (a tenth less, for the rounding of the angles)
+            spread: chord * chord * 0.9,
+            clear: {
+                let (tx, ty) = (gx * lw / lx, gy * lw / ly);
+                near * near * 1.1 * (1.0 + tx * tx + ty * ty)
+            },
         }
     }
 
@@ -93,6 +128,12 @@ impl Guard {
             ]
         });
         self
+    }
+
+    /// The share of its distance from the eye that a triangle's longest edge must pass before the
+    /// triangle can reach from the view to outside the band.
+    pub fn chord(&self) -> f32 {
+        crate::math::sqrt(self.spread)
     }
 
     /// The pass's near distance, with the margin `classify` uses.
@@ -112,13 +153,52 @@ impl Guard {
 
     /// The same for a box about `centre` with sides twice `half`, lying as `boxes_along` said.
     pub fn box_safe(&self, centre: V3, half: &[f32; 3]) -> bool {
+        self.clip_box_safe(&self.to_clip(centre), half, &self.reach)
+    }
+
+    fn clip_box_safe(&self, clip: &[f32; 3], half: &[f32; 3], reach: &[[f32; 3]; 3]) -> bool {
         use crate::math::abs;
-        let [x, y, w] = self.to_clip(centre);
-        let reach = |r: &[f32; 3]| r[0] * half[0] + r[1] * half[1] + r[2] * half[2];
-        let near = w - reach(&self.reach[2]);
+        let [x, y, w] = *clip;
+        let along = |r: &[f32; 3]| r[0] * half[0] + r[1] * half[1] + r[2] * half[2];
+        let near = w - along(&reach[2]);
         near >= self.near
-            && abs(x) + reach(&self.reach[0]) <= near * self.gx
-            && abs(y) + reach(&self.reach[1]) <= near * self.gy
+            && abs(x) + along(&reach[0]) <= near * self.gx
+            && abs(y) + along(&reach[1]) <= near * self.gy
+    }
+
+    /// Whether a cluster's triangles are all the rasterizer's to draw: its sphere is inside the
+    /// band, or its box is. `half` is asked for only when the sphere is not.
+    #[inline]
+    pub fn cluster_safe(&self, centre: V3, radius: f32, half: impl FnOnce() -> [f32; 3]) -> bool {
+        use crate::math::abs;
+        let clip = self.to_clip(centre);
+        let near = clip[2] - radius * self.lengths[2];
+        (near >= self.near
+            && abs(clip[0]) + radius * self.lengths[0] <= near * self.gx
+            && abs(clip[1]) + radius * self.lengths[1] <= near * self.gy)
+            || self.clip_box_safe(&clip, &half(), &self.reach)
+    }
+
+    /// Whether everything in a box along the world's axes is the rasterizer's to draw.
+    /// `distance2` is the square of the box's distance from the eye: a box far off for its size
+    /// is not asked about the band at all.
+    #[inline]
+    pub fn far_safe(&self, min: &[f32; 3], max: &[f32; 3], distance2: f32) -> bool {
+        let side = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+        // Too small for its distance to reach from the view to the band's edge: when any of it
+        // is in view all of it is inside the band, and that far off in front of the near plane.
+        if distance2 >= self.clear
+            && side[0] * side[0] + side[1] * side[1] + side[2] * side[2] < self.spread * distance2
+        {
+            return true;
+        }
+        let centre = V3 {
+            x: (min[0] + max[0]) * 0.5,
+            y: (min[1] + max[1]) * 0.5,
+            z: (min[2] + max[2]) * 0.5,
+        };
+        let half = [side[0] * 0.5, side[1] * 0.5, side[2] * 0.5];
+        self.clip_box_safe(&self.to_clip(centre), &half, &self.axes)
     }
 
     /// This guard for positions stored as steps of `quantum` from `centre`: `to_clip` then takes
@@ -139,6 +219,9 @@ impl Guard {
             gy: self.gy,
             reach: self.reach,
             lengths: self.lengths,
+            axes: self.axes,
+            spread: self.spread,
+            clear: self.clear,
         }
     }
 
@@ -150,6 +233,37 @@ impl Guard {
             r[1][0] * p.x + r[1][1] * p.y + r[1][2] * p.z + r[1][3],
             r[2][0] * p.x + r[2][1] * p.y + r[2][2] * p.z + r[2][3],
         ]
+    }
+
+    /// A vertex's clip coordinates with what `judge` needs to know of them. Triangles share
+    /// vertices: the caller keeps a vertex's corner and hands it to each triangle that has it.
+    #[inline]
+    pub fn corner(&self, p: V3) -> Corner {
+        let [x, y, w] = self.to_clip(p);
+        let (bx, by) = (w * self.gx, w * self.gy);
+        let out = (w < self.near) as u16
+            | ((x < -bx) as u16) << 1
+            | ((x > bx) as u16) << 2
+            | ((y < -by) as u16) << 3
+            | ((y > by) as u16) << 4
+            | ((x < -w) as u16) << 5
+            | ((x > w) as u16) << 6
+            | ((y < -w) as u16) << 7
+            | ((y > w) as u16) << 8;
+        Corner { clip: [x, y, w], out }
+    }
+
+    /// `classify` from three corners. A triangle with every corner in front of the near plane and
+    /// inside the band is `Safe` without another look, in view or not: the rasterizer may have it.
+    #[inline]
+    pub fn judge(&self, a: &Corner, b: &Corner, c: &Corner) -> Verdict {
+        if (a.out | b.out | c.out) & 0b11111 == 0 {
+            return Verdict::Safe;
+        }
+        if a.out & b.out & c.out & 0b1_1110_0001 != 0 {
+            return Verdict::Culled;
+        }
+        self.classify(&[a.clip, b.clip, c.clip])
     }
 
     #[inline]
@@ -214,6 +328,29 @@ impl Guard {
     /// Cuts a triangle to the near plane and the enlarged frustum and writes the
     /// pieces as a triangle list. Returns the number of vertices written.
     pub fn clip(&self, tri: &[ClipVertex; 3], c: &[[f32; 3]; 3], out: &mut [ClipVertex]) -> usize {
+        let mut corners = [ClipVertex::default(); MAX_POLY];
+        let n = self.cut(tri, c, &mut corners);
+        let mut k = 0;
+        for i in 1..n.max(1) - 1 {
+            if k + 3 > out.len() {
+                break;
+            }
+            out[k] = corners[0];
+            out[k + 1] = corners[i];
+            out[k + 2] = corners[i + 1];
+            k += 3;
+        }
+        k
+    }
+
+    /// Cuts a triangle to the near plane and the enlarged frustum. Writes the corners of what is
+    /// left, in order (a fan from the first is the piece), and returns how many: 0 when nothing
+    /// is left, at most `MAX_POLY`.
+    ///
+    /// Every side the triangle leaves the enlarged frustum on is cut, though the rasterizer
+    /// could take a piece that reaches to the band: it shades a triangle by the screen, not by
+    /// depth, and over a piece many screens wide the baked light slides off its place.
+    pub fn cut(&self, tri: &[ClipVertex; 3], c: &[[f32; 3]; 3], out: &mut [ClipVertex; MAX_POLY]) -> usize {
         use core::mem::MaybeUninit;
         // Two polygons, one read while the other is written; only the corners in use hold anything.
         let mut store: [MaybeUninit<[P; MAX_POLY]>; 2] = [MaybeUninit::uninit(), MaybeUninit::uninit()];
@@ -226,25 +363,23 @@ impl Guard {
                 from.add(i).write(P { v: tri[i], c: c[i] });
             }
             let near = self.near;
-            // How far inside one of the five planes a vertex is.
-            #[inline(always)]
-            fn inside(plane: usize, c: &[f32; 3], near: f32) -> f32 {
-                match plane {
-                    0 => c[2] - near,
-                    1 => c[0] + c[2] * CUT,
-                    2 => c[2] * CUT - c[0],
-                    3 => c[1] + c[2] * CUT,
-                    _ => c[2] * CUT - c[1],
-                }
-            }
             for plane in 0..5 {
-                // Most triangles cross one plane or two: the others cost a look at each corner.
+                // How far inside the plane each corner is. Most triangles cross one plane or two:
+                // the others cost a look at each corner.
                 let mut d = [0.0f32; MAX_POLY];
                 let (mut crossed, mut kept) = (false, false);
                 for i in 0..n {
-                    d[i] = inside(plane, &(*from.add(i)).c, near);
-                    crossed |= d[i] < 0.0;
-                    kept |= d[i] >= 0.0;
+                    let c = &(*from.add(i)).c;
+                    let inside = match plane {
+                        0 => c[2] - near,
+                        1 => c[0] + c[2] * CUT,
+                        2 => c[2] * CUT - c[0],
+                        3 => c[1] + c[2] * CUT,
+                        _ => c[2] * CUT - c[1],
+                    };
+                    d[i] = inside;
+                    crossed |= inside < 0.0;
+                    kept |= inside >= 0.0;
                 }
                 if !kept {
                     return 0;
@@ -284,18 +419,19 @@ impl Guard {
                     return 0;
                 }
             }
-            let mut k = 0;
-            for i in 1..n - 1 {
-                if k + 3 > out.len() {
-                    break;
-                }
-                out[k] = (*from).v;
-                out[k + 1] = (*from.add(i)).v;
-                out[k + 2] = (*from.add(i + 1)).v;
-                k += 3;
+            for i in 0..n {
+                out[i] = (*from.add(i)).v;
             }
-            k
+            n
         }
+    }
+
+    /// Whether a triangle is seen from behind: the sign of its area on the screen, which the
+    /// clip coordinates give without the divide, and so for corners behind the eye too.
+    #[inline]
+    pub fn turned(c: &[[f32; 3]; 3]) -> bool {
+        let [a, b, d] = c;
+        a[0] * (b[1] * d[2] - d[1] * b[2]) - a[1] * (b[0] * d[2] - d[0] * b[2]) + a[2] * (b[0] * d[1] - d[0] * b[1]) < 0.0
     }
 }
 
@@ -401,5 +537,100 @@ mod tests {
             // The attributes follow the position: uv was set to (x, z).
             assert!((p.uv[0] - p.pos[0]).abs() < 1e-3 && (p.uv[1] - p.pos[2]).abs() < 1e-3);
         }
+    }
+
+    #[test]
+    fn a_box_far_safe_passes_holds_nothing_the_rasterizer_drops_when_any_of_it_is_in_view() {
+        use crate::rng::Rng;
+        let mut rng = Rng::new(7);
+        let (mut passed, mut by_size) = (0, 0);
+        for _ in 0..4000 {
+            let eye = v3(rng.range(-20.0, 20.0), rng.range(0.5, 6.0), rng.range(-20.0, 20.0));
+            let (yaw, pitch) = (rng.range(-3.1, 3.1), rng.range(-1.2, 1.2));
+            let look = crate::math::forward(yaw, pitch);
+            // (the widest view a sprint gives, and the narrowest of the sights)
+            let fov = rng.range(40.0, 74.0);
+            let vp = mat::mul(&mat::perspective(fov, 480.0 / 272.0, 0.15, 420.0), &mat::view(eye, look, 0.0));
+            let g = Guard::new(&vp, 0.15, 480.0, 272.0, 2048.0);
+            let centre = eye + v3(rng.range(-30.0, 30.0), rng.range(-6.0, 8.0), rng.range(-30.0, 30.0));
+            let half = [rng.range(0.2, 9.0), rng.range(0.2, 5.0), rng.range(0.2, 9.0)];
+            let (min, max) = ([centre.x - half[0], centre.y - half[1], centre.z - half[2]], [centre.x + half[0], centre.y + half[1], centre.z + half[2]]);
+            let distance2 = mat::box_distance2(eye, &min, &max);
+            if !g.far_safe(&min, &max, distance2) {
+                continue;
+            }
+            passed += 1;
+            let side = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+            by_size += (side[0] * side[0] + side[1] * side[1] + side[2] * side[2] < g.spread * distance2) as u32;
+            // Points of the box, its corners among them.
+            let (mut in_view, mut dropped) = (false, false);
+            for i in 0..5 {
+                for j in 0..5 {
+                    for k in 0..5 {
+                        let p = v3(min[0] + side[0] * i as f32 / 4.0, min[1] + side[1] * j as f32 / 4.0, min[2] + side[2] * k as f32 / 4.0);
+                        let [x, y, w] = g.to_clip(p);
+                        in_view |= w >= 0.15 && x.abs() <= w && y.abs() <= w;
+                        // (the band itself, without the tenth `Guard` keeps clear of it)
+                        dropped |= w < 0.15 || x.abs() > w * g.gx / 0.9 || y.abs() > w * g.gy / 0.9;
+                    }
+                }
+            }
+            assert!(!(in_view && dropped), "eye {eye:?} look {look:?} fov {fov} box {min:?} {max:?}");
+        }
+        // The test asked both ways of passing.
+        assert!(passed > 400 && by_size > 100 && by_size < passed, "{passed} {by_size}");
+    }
+
+    #[test]
+    fn judge_agrees_with_classify_and_what_cut_leaves_is_inside_the_band() {
+        use crate::rng::Rng;
+        let g = guard();
+        let mut rng = Rng::new(11);
+        let (mut cut, mut safe, mut quick) = (0, 0, 0);
+        for _ in 0..20000 {
+            let at = v3(rng.range(-8.0, 8.0), rng.range(-1.0, 4.0), rng.range(-14.0, 6.0));
+            let size = rng.range(0.3, 9.0);
+            let p = [0, 1, 2].map(|_| at + v3(rng.range(-size, size), rng.range(-size, size), rng.range(-size, size)));
+            let (v, c) = tri(&g, p);
+            let corners = p.map(|p| g.corner(p));
+            let (judged, classified) = (g.judge(&corners[0], &corners[1], &corners[2]), g.classify(&c));
+            match judged {
+                // (a triangle out of view and inside the band is the rasterizer's either way)
+                Verdict::Safe => assert!(classified != Verdict::Clip, "{p:?}"),
+                other => assert_eq!(other, classified, "{p:?}"),
+            }
+            safe += (judged == Verdict::Safe) as u32;
+            quick += ((corners[0].out | corners[1].out | corners[2].out) & 31 == 0) as u32;
+            if judged != Verdict::Clip {
+                continue;
+            }
+            cut += 1;
+            let mut out = [ClipVertex::default(); MAX_POLY];
+            let n = g.cut(&v, &c, &mut out);
+            assert!(n == 0 || n >= 3);
+            for piece in &out[..n] {
+                let [x, y, w] = g.to_clip(v3(piece.pos[0], piece.pos[1], piece.pos[2]));
+                // In front of the near plane and inside the band, with room for rounding.
+                assert!(w >= g.near * 0.999, "{p:?} -> w {w}");
+                assert!(x.abs() <= w * g.gx * 1.001 + 1e-3 && y.abs() <= w * g.gy * 1.001 + 1e-3, "{p:?} -> {x} {y} {w}");
+            }
+        }
+        assert!(cut > 1000 && safe > 1000 && quick > 500, "{cut} {safe} {quick}");
+    }
+
+    #[test]
+    fn a_triangle_is_turned_when_its_corners_go_the_other_way_round_on_the_screen() {
+        let g = guard();
+        // Counter-clockwise on the screen (x to the right, y up), 5 m ahead.
+        let p = [v3(-1.0, 1.0, -5.0), v3(1.0, 1.0, -5.0), v3(0.0, 2.5, -5.0)];
+        let (_, c) = tri(&g, p);
+        let (_, back) = tri(&g, [p[0], p[2], p[1]]);
+        assert_ne!(Guard::turned(&c), Guard::turned(&back));
+        // The same answer with a corner behind the eye.
+        let q = [v3(-1.0, 1.0, -5.0), v3(1.0, 1.0, -5.0), v3(0.0, 1.2, 3.0)];
+        let (_, c2) = tri(&g, q);
+        let (_, back2) = tri(&g, [q[0], q[2], q[1]]);
+        assert_ne!(Guard::turned(&c2), Guard::turned(&back2));
+        assert!(!Guard::turned(&c));
     }
 }
