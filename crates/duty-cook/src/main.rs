@@ -7,8 +7,10 @@
 //! `cook` lowers the DutyIR to `DIR/duty.pack` and writes `DIR/receipt.json`. `shot` draws a frame
 //! of that pack on this computer.
 
+mod audio;
 mod chunks;
 mod collision;
+mod figures;
 mod ground;
 mod ir;
 mod light;
@@ -199,6 +201,11 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     }
     println!("shadow and sky: {} pictures, {} KiB of texels ({:.1} s)", texels.records.len(), texels.bytes.len() / 1024, t4.elapsed().as_secs_f32());
 
+    // ---- the figures and the sounds
+    let figure_bytes = figures::cook(ir, profile)?;
+    let (sounds, samples) = audio::cook(ir, profile)?;
+    println!("figures: {} KiB; sounds: {} in {} KiB", figure_bytes.len() / 1024, sounds.len(), samples.len() / 1024);
+
     // ---- the pack
     let mut writer = pack::Writer::default();
     writer.add(pack::SCEN, &[scene]);
@@ -214,6 +221,13 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     writer.add(pack::COLV, &collision.verts);
     writer.add(pack::COLT, &collision.tris);
     writer.add(pack::COLN, &collision.nodes);
+    if !figure_bytes.is_empty() {
+        writer.add(pack::FIGS, &figure_bytes);
+    }
+    if !sounds.is_empty() {
+        writer.add(pack::SNDS, &sounds);
+        writer.add(pack::SNDD, &samples);
+    }
     let bytes = writer.finish();
     std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
     std::fs::write(out.join("duty.pack"), &bytes).map_err(|e| e.to_string())?;

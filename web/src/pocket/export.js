@@ -9,12 +9,16 @@
 //   collision.dir  the physics system's triangles and their surface types
 //   nav.dir        the AI's walk grid, its cover points and the spawn points
 //   sky.dir        the sky as six HDR faces, the sun and the lamps
-//   scene.json     what the other files need to be read: sun, hour, bounds, spawn points, tuning
+//   figures.dir    the soldiers and the held weapons: meshes, bones, sampled clips (figures.js)
+//   audio.dir      every sound, rendered by the reference's synthesis (audio.js)
+//   scene.json     what the other files need to be read: bounds, spawn points, the level's axes
 //
 //   export.html?sink=http://127.0.0.1:5291[&only=world,collision,…]
 import * as THREE from 'three';
 import { boot } from './boot.js';
 import { Bundle } from './bundle.js';
+import { exportFigures } from './figures.js';
+import { exportAudio } from './audio.js';
 
 const params = new URLSearchParams(location.search);
 const SINK = params.get('sink');
@@ -456,7 +460,9 @@ async function exportScene() {
   log('scene: written');
 }
 
-const steps = [['tone', exportTone], ['world', exportWorld], ['collision', exportCollision], ['nav', exportNav], ['sky', exportSky], ['scene', exportScene]];
+// What the steps kept in their own files work with.
+const ctx = { THREE, engine, pump, system, renderer, put, log, png, Bundle, readTexture, prepare, bakeVertices };
+const steps = [['tone', exportTone], ['world', exportWorld], ['collision', exportCollision], ['nav', exportNav], ['sky', exportSky], ['figures', () => exportFigures(ctx)], ['audio', () => exportAudio(ctx)], ['scene', exportScene]];
 for (const [name, step] of steps) {
   if (!wants(name)) continue;
   const t0 = performance.now();

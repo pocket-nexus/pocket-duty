@@ -13,6 +13,9 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+pub mod figure;
+pub mod sound;
+
 pub const MAGIC: u32 = u32::from_le_bytes(*b"DUTY");
 /// Raised by any change to a record or to what a section holds.
 pub const VERSION: u32 = 1;
@@ -41,6 +44,14 @@ pub const VBIT: u32 = tag(b"VBIT");
 pub const COLV: u32 = tag(b"COLV");
 pub const COLT: u32 = tag(b"COLT");
 pub const COLN: u32 = tag(b"COLN");
+/// The soldiers and the held weapons: models, clips and their points (`figure`).
+pub const FIGS: u32 = tag(b"FIGS");
+/// The sounds' records and their samples (`sound`).
+pub const SNDS: u32 = tag(b"SNDS");
+pub const SNDD: u32 = tag(b"SNDD");
+/// The weapons' numbers and the walk grid (`duty_sim`).
+pub const WEAP: u32 = tag(b"WEAP");
+pub const NAVG: u32 = tag(b"NAVG");
 /// The compile receipt's identity: the text of `receipt.json`'s `id`.
 pub const META: u32 = tag(b"META");
 
