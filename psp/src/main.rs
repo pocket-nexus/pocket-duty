@@ -40,6 +40,7 @@ use duty_sim::event::Event;
 use duty_sim::game::Game;
 use duty_sim::level::Level;
 use duty_sim::math::*;
+use duty_sim::nav::{Path, Pathfinder};
 use duty_sim::tune::{WeaponDef, DT};
 use duty_sim::weapon::{self, WEAPONS};
 use pocketjs_psp::{arena, host};
@@ -164,6 +165,20 @@ struct Remote {
     auto: bool,
     /// Nothing hurts the player: for looking at soldiers up close.
     god: bool,
+    /// Frames still to be filmed, the frames filmed so far, and the buffer a frame is copied to.
+    film: u32,
+    filmed: u32,
+    reel: alloc::vec::Vec<u8>,
+    /// The bench's legs: where the player is walked to and how far the stick is pushed, the way
+    /// there over the walk grid, and the search that finds it.
+    go: Option<(V3, f32)>,
+    way: Path,
+    way_at: u8,
+    way_asked: bool,
+    finder: Option<Pathfinder>,
+    /// Where the legs stood a frame ago, and for how many frames they have stood still.
+    stood: V3,
+    still: u8,
 }
 
 /// The words of a control text. In `boot.txt`, `@<frame>:<word>` says a word at that frame, so a
@@ -175,7 +190,11 @@ struct Remote {
 /// `near=<soldier>,<metres>` puts him in front of a soldier, `auto=1` hands his aim and trigger to
 /// the bench, `god=1` keeps him whole, `hurt=<points>` hits him from ahead, `clock=<seconds>` sets
 /// what is left of the match, `skill=<hundredths>` sets how hard the soldiers hit,
-/// `budget=<triangles>` and `option=<bits>` are the renderer's.
+/// `budget=<triangles>` and `option=<bits>` are the renderer's, `film=<frames>` writes the picture
+/// of each of the next frames to `host0:/duty/film/` (480 × 272 texels of 16 bits a file) and
+/// steps the match two sixtieths of a second a frame while it does, whatever the writing takes,
+/// `go=<x>,<z>[,<stick>]` walks the player there over the walk grid as a soldier would find his
+/// way, the stick pushed that many hundredths (100 runs).
 unsafe fn remote(text: &str, ui: &mut interface::Ui, session: &mut Session, game: &mut Game, gfx: &mut gfx::Gfx, state: &mut Remote) {
     for word in text.split_ascii_whitespace() {
         // (a word for a later frame is the loop's to say when its frame comes)
@@ -221,6 +240,14 @@ unsafe fn remote(text: &str, ui: &mut interface::Ui, session: &mut Session, game
                 game.player.hurt(next(), from, &mut game.events);
             }
             "god" => state.god = next() != 0.0,
+            "film" => state.film = next() as u32,
+            "go" => {
+                let (x, z, stick) = (next(), next(), next());
+                state.go = Some((v3(x, 0.0, z), if stick > 0.0 { stick * 0.01 } else { 1.0 }));
+                state.way = Path::default();
+                state.way_at = 0;
+                state.way_asked = false;
+            }
             "near" => {
                 // In front of a soldier, a few metres off, looking at him.
                 let (i, d) = (next() as usize, next());
@@ -365,7 +392,8 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
     // Test runs: `boot.txt` on the share holds control words for the start, plus `title=0` (no title card),
     // `probe=1` (time the frame's smallest pieces of work on this console and write `probe.json`),
     // `shot=N` (write frame N to `shot.raw`) and `exit=N` (leave at frame N).
-    let mut boot_buf = [0u8; 512];
+    // (a film's script is longer than a test run's words: `BOOT_MAX` in tools/psp.ts is this size)
+    let mut boot_buf = [0u8; 2048];
     let boot: &str = store::boot_text(&mut boot_buf).unwrap_or("");
     let word = |key: &str| boot.split_ascii_whitespace().find_map(|w| w.strip_prefix(key).and_then(|w| w.strip_prefix('=')).and_then(parse_f32));
     if word("title") != Some(0.0) {
@@ -540,6 +568,56 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
                 }
             }
         }
+        if let Some((to, stick)) = steer.go.filter(|_| session.mode == Mode::Play) {
+            // The bench's legs: one way asked of the walk grid, then the stick toward its next
+            // point. The view turns that way too unless the bench's aim has it.
+            let level = &game.level;
+            let at = game.player.body.pos;
+            let finder = steer.finder.get_or_insert_with(|| Pathfinder::new(level.flags.len()));
+            if !steer.way_asked {
+                steer.way_asked = true;
+                match (level.nearest_open(at.x, at.z, at.y), level.nearest_below(to.x, to.z)) {
+                    (Some(from), Some(goal)) => finder.ask(0, from, goal),
+                    _ => steer.go = None,
+                }
+            }
+            if let Some((_, way)) = finder.step(level, 3000) {
+                steer.way = way;
+                steer.way_at = 0;
+                if way.len == 0 {
+                    steer.go = None;
+                }
+            }
+            if steer.way_at < steer.way.len {
+                let toward = (steer.way.points[steer.way_at as usize] - at).flat();
+                if toward.len2() < 0.4 * 0.4 {
+                    steer.way_at += 1;
+                    // A way holds sixteen points: a long walk asks again from where one ends.
+                    if steer.way_at == steer.way.len {
+                        if (to - at).flat().len2() > 1.5 * 1.5 {
+                            steer.way_asked = false;
+                        } else {
+                            steer.go = None;
+                        }
+                    }
+                } else {
+                    let toward = toward.norm_or(V3::ZERO);
+                    if !steer.auto {
+                        game.player.yaw = ease_angle(game.player.yaw, yaw_of(toward), 4.0, ticks as f32 * DT);
+                    }
+                    let ahead = forward(game.player.yaw, 0.0);
+                    let right = ahead.cross(V3::UP).norm_or(v3(1.0, 0.0, 0.0));
+                    pad.sx = toward.dot(right) * stick;
+                    pad.sy = toward.dot(ahead) * stick;
+                    // The grid lets a soldier over what is no taller than a knee; the player jumps it.
+                    steer.still = if (at - steer.stood).flat().len2() < 0.02 * 0.02 { steer.still.saturating_add(1) } else { 0 };
+                    steer.stood = at;
+                    if steer.still > 5 {
+                        pad.held |= pad::UP;
+                    }
+                }
+            }
+        }
         let ts = sceKernelGetSystemTimeLow();
         {
             let fx = &mut gfx.fx;
@@ -629,6 +707,16 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
         if shot_at != u32::MAX && frame == shot_at + 1 {
             store::write_shot(&gfx::pixels(gfx::DRAW_BUFFER));
         }
+        // A film's frame: the list just drawn, before it is shown. The file takes longer than a
+        // frame, so the match does not follow the wall clock while a film runs (`ticks` below).
+        let filming = file.host && steer.film > 0 && frame > 0;
+        if filming {
+            steer.reel.resize(480 * 272 * 2, 0);
+            gfx::read_pixels(gfx::DRAW_BUFFER, &mut steer.reel);
+            store::write_frame(steer.filmed, &steer.reel);
+            steer.filmed += 1;
+            steer.film -= 1;
+        }
         if frame >= exit_at {
             sceKernelDelayThread(300_000);
             store::note(&status);
@@ -641,11 +729,11 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
         gfx::swap();
         let vcount = sceDisplayGetVcount();
         let refreshes = (vcount.wrapping_sub(last_vcount) & 0xffff) as u32;
-        // A late frame catches up, by one refresh at most.
-        ticks = refreshes.clamp(1, pace + 1);
+        // A late frame catches up, by one refresh at most. A filmed frame is one thirtieth of a second.
+        ticks = if filming { pace } else { refreshes.clamp(1, pace + 1) };
         last_vcount = vcount;
         let now = sceKernelGetSystemTimeLow();
-        timing.push(now.wrapping_sub(last_swap) as f32 / 1000.0, refreshes > pace);
+        timing.push(now.wrapping_sub(last_swap) as f32 / 1000.0, refreshes > pace && !filming);
         last_swap = now;
 
         // -------------------------------------------------------------- this frame's list
