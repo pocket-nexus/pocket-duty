@@ -110,26 +110,46 @@ pub fn compute(scene: &Scene, chunks: &[Chunk], clusters: &[Cluster], vertices: 
                 return None;
             }
             let mut bits = vec![0u8; bytes];
-            for (level, (verts, tris, nodes)) in worlds.iter().enumerate() {
-                let world = Bvh { nodes, tris, verts };
-                let mut random = Random(0x9e37_79b9_7f4a_7c15 ^ (cell as u64 * 3 + level as u64 + 1).wrapping_mul(0xbf58_476d_1ce4_e5b9));
-                let jitter = scene.cell / scene.cell.ceil();
-                for _ in 0..set.rays {
-                    let place = places[(random.next() * places.len() as f32) as usize % places.len()];
-                    // Anywhere a head can be over that floor: crouched, standing, at the top of a jump.
-                    let mut from = place + v3((random.next() - 0.5) * jitter, 0.9 + random.next() * 1.5, (random.next() - 0.5) * jitter);
-                    let (u, phi) = (random.next() * 2.0 - 1.0, random.next() * core::f32::consts::TAU);
-                    let r = (1.0 - u * u).max(0.0).sqrt();
-                    let d = v3(r * phi.cos(), u, r * phi.sin());
-                    // Through glass and leaves, to the first thing that stops sight.
+            let levels: Vec<Bvh> = worlds.iter().map(|(verts, tris, nodes)| Bvh { nodes, tris, verts }).collect();
+            let mut random = Random(0x9e37_79b9_7f4a_7c15 ^ (cell as u64 + 1).wrapping_mul(0xbf58_476d_1ce4_e5b9));
+            let jitter = scene.cell / scene.cell.ceil();
+            for _ in 0..set.rays {
+                let place = places[(random.next() * places.len() as f32) as usize % places.len()];
+                // Anywhere a head can be over that floor: crouched, standing, at the top of a jump.
+                let from = place + v3((random.next() - 0.5) * jitter, 0.9 + random.next() * 1.5, (random.next() - 0.5) * jitter);
+                let (u, phi) = (random.next() * 2.0 - 1.0, random.next() * core::f32::consts::TAU);
+                let r = (1.0 - u * u).max(0.0).sqrt();
+                let d = v3(r * phi.cos(), u, r * phi.sin());
+                // A frame mixes the levels: what is near is drawn fine, what is far coarse, and the
+                // device moves the line between them with the frame's load. So what hides a thing
+                // at one level may not be there to hide it: along a ray, every level's clusters
+                // count as seen as far as the farthest of the three levels' first walls.
+                let mut reach = 0.0f32;
+                for world in &levels {
+                    let (mut at, mut gone) = (from, 0.0f32);
+                    let mut wall = 400.0;
                     for _ in 0..6 {
-                        let Some(hit) = world.raycast(from, d, 400.0, 0) else { break };
-                        let id = (hit.tag & !CLEAR) as usize;
-                        bits[id >> 3] |= 1 << (id & 7);
+                        let Some(hit) = world.raycast(at, d, 400.0 - gone, 0) else { break };
+                        gone += hit.t + 0.01;
                         if hit.tag & CLEAR == 0 {
+                            wall = gone;
                             break;
                         }
-                        from = from + d * (hit.t + 0.01);
+                        at = from + d * gone;
+                    }
+                    reach = reach.max(wall);
+                }
+                for world in &levels {
+                    let (mut at, mut gone) = (from, 0.0f32);
+                    for _ in 0..12 {
+                        let Some(hit) = world.raycast(at, d, (reach + 0.05 - gone).max(0.0), 0) else { break };
+                        let id = (hit.tag & !CLEAR) as usize;
+                        bits[id >> 3] |= 1 << (id & 7);
+                        gone += hit.t + 0.01;
+                        if gone >= reach {
+                            break;
+                        }
+                        at = from + d * gone;
                     }
                 }
             }

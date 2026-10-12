@@ -103,6 +103,8 @@ pub fn select(
             return;
         }
         counts.chunks += 1;
+        // A chunk wholly in view: none of its clusters is asked about the view again.
+        let whole = mat::contained(planes, &c.min, &c.max);
         let distance = mat::box_distance(eye, &c.min, &c.max);
         let lod = if distance < scene.lod[0] * options.nearer {
             0
@@ -123,7 +125,7 @@ pub fn select(
             }
             // A sphere that reaches across a side of the view may hold a box that does not.
             let half = cl.half();
-            if !mat::cluster_visible(planes, &reach, &cl.centre, cl.radius, &half) {
+            if !whole && !mat::cluster_visible(planes, &reach, &cl.centre, cl.radius, &half) {
                 counts.outside += 1;
                 continue;
             }

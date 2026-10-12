@@ -9,7 +9,7 @@
 //! Only a triangle with a long edge can reach from inside the view to outside
 //! the guard band. The world compiler puts each cluster's large triangles at
 //! the start of its run. A cluster whose sphere is inside the band
-//! (`sphere_safe`) is drawn as it is. For any other, `classify` decides from
+//! (`sphere_safe`, `box_safe`) is drawn as it is. For any other, `classify` decides from
 //! each large triangle's clip coordinates whether the GE may draw it; if not,
 //! `clip` cuts it against a frustum twice the view's size, well inside the
 //! guard band, and the device draws the pieces as float vertices.
@@ -37,11 +37,14 @@ pub struct Guard {
     gy: f32,
     /// How far a box reaches along each row for each unit of its half sides (`boxes_along`).
     reach: [[f32; 3]; 3],
+    /// How far a sphere reaches along each row for each unit of its radius.
+    lengths: [f32; 3],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Verdict {
-    /// Every vertex is in front of the near plane and inside the guard band.
+    /// Every vertex the rasterizer ends with is inside the guard band: the triangle's own in
+    /// front of the near plane, and the ones its cut at that plane makes.
     Safe,
     /// Outside the view.
     Culled,
@@ -74,6 +77,8 @@ impl Guard {
             gx: band / (width * 0.5) * 0.9,
             gy: band / (height * 0.5) * 0.9,
             reach: [row(0), row(1), row(3)].map(|r| [r[0].abs(), r[1].abs(), r[2].abs()]),
+            lengths: [row(0), row(1), row(3)]
+                .map(|r| crate::math::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2])),
         }
     }
 
@@ -99,15 +104,10 @@ impl Guard {
     /// band: the rasterizer takes any triangle in it.
     pub fn sphere_safe(&self, centre: V3, radius: f32) -> bool {
         let [x, y, w] = self.to_clip(centre);
-        let r = &self.rows;
-        // How far the sphere reaches along each row.
-        let reach = |row: &[f32; 4]| {
-            radius * crate::math::sqrt(row[0] * row[0] + row[1] * row[1] + row[2] * row[2])
-        };
-        let near = w - reach(&r[2]);
+        let near = w - radius * self.lengths[2];
         near >= self.near
-            && crate::math::abs(x) + reach(&r[0]) <= near * self.gx
-            && crate::math::abs(y) + reach(&r[1]) <= near * self.gy
+            && crate::math::abs(x) + radius * self.lengths[0] <= near * self.gx
+            && crate::math::abs(y) + radius * self.lengths[1] <= near * self.gy
     }
 
     /// The same for a box about `centre` with sides twice `half`, lying as `boxes_along` said.
@@ -138,6 +138,7 @@ impl Guard {
             gx: self.gx,
             gy: self.gy,
             reach: self.reach,
+            lengths: self.lengths,
         }
     }
 
@@ -153,7 +154,7 @@ impl Guard {
 
     #[inline]
     pub fn classify(&self, c: &[[f32; 3]; 3]) -> Verdict {
-        let mut safe = true;
+        let (mut safe, mut behind) = (true, 0);
         // Bits: left, right, bottom, top, near.
         let mut all = 0b11111u32;
         for [x, y, w] in c {
@@ -174,8 +175,9 @@ impl Guard {
                 out |= 16;
             }
             all &= out;
-            if *w < self.near
-                || *x < -*w * self.gx
+            if *w < self.near {
+                behind += 1;
+            } else if *x < -*w * self.gx
                 || *x > *w * self.gx
                 || *y < -*w * self.gy
                 || *y > *w * self.gy
@@ -184,8 +186,25 @@ impl Guard {
             }
         }
         if all != 0 {
-            Verdict::Culled
-        } else if safe {
+            return Verdict::Culled;
+        }
+        if safe && behind > 0 {
+            // The rasterizer cuts at its near plane itself. What it then draws has a vertex where
+            // each edge crosses that plane, and those must be inside the band too: the ground
+            // under a standing eye crosses it below the band, a wall ahead crosses it inside.
+            let (lx, ly) = (self.near * self.gx, self.near * self.gy);
+            for i in 0..3 {
+                let (p, q) = (&c[i], &c[(i + 1) % 3]);
+                if (p[2] < self.near) != (q[2] < self.near) {
+                    let t = (self.near - p[2]) / (q[2] - p[2]);
+                    let (x, y) = (p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t);
+                    if x < -lx || x > lx || y < -ly || y > ly {
+                        safe = false;
+                    }
+                }
+            }
+        }
+        if safe {
             Verdict::Safe
         } else {
             Verdict::Clip
@@ -195,70 +214,88 @@ impl Guard {
     /// Cuts a triangle to the near plane and the enlarged frustum and writes the
     /// pieces as a triangle list. Returns the number of vertices written.
     pub fn clip(&self, tri: &[ClipVertex; 3], c: &[[f32; 3]; 3], out: &mut [ClipVertex]) -> usize {
-        let mut a = [P { v: tri[0], c: c[0] }; MAX_POLY];
-        let mut b = a;
+        use core::mem::MaybeUninit;
+        // Two polygons, one read while the other is written; only the corners in use hold anything.
+        let mut store: [MaybeUninit<[P; MAX_POLY]>; 2] = [MaybeUninit::uninit(), MaybeUninit::uninit()];
+        let (mut from, mut to) = (store[0].as_mut_ptr() as *mut P, store[1].as_mut_ptr() as *mut P);
         let mut n = 3;
-        for i in 0..3 {
-            a[i] = P { v: tri[i], c: c[i] };
-        }
-        let near = self.near;
-        let planes: [&dyn Fn(&[f32; 3]) -> f32; 5] = [
-            &|c| c[2] - near,
-            &|c| c[0] + c[2] * CUT,
-            &|c| c[2] * CUT - c[0],
-            &|c| c[1] + c[2] * CUT,
-            &|c| c[2] * CUT - c[1],
-        ];
-        for plane in planes {
-            let mut m = 0;
-            for i in 0..n {
-                let (p, q) = (&a[i], &a[(i + 1) % n]);
-                let (dp, dq) = (plane(&p.c), plane(&q.c));
-                if dp >= 0.0 {
-                    if m < MAX_POLY {
-                        b[m] = *p;
+        // SAFETY: `from` and `to` each point at room for `MAX_POLY` corners; `n` and `m` stay at or
+        // under `MAX_POLY`, and a corner is read only after it was written.
+        unsafe {
+            for i in 0..3 {
+                from.add(i).write(P { v: tri[i], c: c[i] });
+            }
+            let near = self.near;
+            // How far inside one of the five planes a vertex is.
+            #[inline(always)]
+            fn inside(plane: usize, c: &[f32; 3], near: f32) -> f32 {
+                match plane {
+                    0 => c[2] - near,
+                    1 => c[0] + c[2] * CUT,
+                    2 => c[2] * CUT - c[0],
+                    3 => c[1] + c[2] * CUT,
+                    _ => c[2] * CUT - c[1],
+                }
+            }
+            for plane in 0..5 {
+                // Most triangles cross one plane or two: the others cost a look at each corner.
+                let mut d = [0.0f32; MAX_POLY];
+                let (mut crossed, mut kept) = (false, false);
+                for i in 0..n {
+                    d[i] = inside(plane, &(*from.add(i)).c, near);
+                    crossed |= d[i] < 0.0;
+                    kept |= d[i] >= 0.0;
+                }
+                if !kept {
+                    return 0;
+                }
+                if !crossed {
+                    continue;
+                }
+                let mut m = 0;
+                for i in 0..n {
+                    let j = if i + 1 == n { 0 } else { i + 1 };
+                    let (p, q) = (&*from.add(i), &*from.add(j));
+                    let (dp, dq) = (d[i], d[j]);
+                    if dp >= 0.0 && m < MAX_POLY {
+                        to.add(m).write(*p);
+                        m += 1;
+                    }
+                    if (dp >= 0.0) != (dq >= 0.0) && m < MAX_POLY {
+                        let t = dp / (dp - dq);
+                        let l = |x: f32, y: f32| x + (y - x) * t;
+                        // The colour's four parts in whole numbers: 256 steps of the way.
+                        let step = (t * 256.0) as i32;
+                        let part = |k: usize| (p.v.color[k] as i32 + (((q.v.color[k] as i32 - p.v.color[k] as i32) * step) >> 8)) as u8;
+                        to.add(m).write(P {
+                            v: ClipVertex {
+                                uv: [l(p.v.uv[0], q.v.uv[0]), l(p.v.uv[1], q.v.uv[1])],
+                                color: [part(0), part(1), part(2), part(3)],
+                                pos: [l(p.v.pos[0], q.v.pos[0]), l(p.v.pos[1], q.v.pos[1]), l(p.v.pos[2], q.v.pos[2])],
+                            },
+                            c: [l(p.c[0], q.c[0]), l(p.c[1], q.c[1]), l(p.c[2], q.c[2])],
+                        });
                         m += 1;
                     }
                 }
-                if (dp >= 0.0) != (dq >= 0.0) && m < MAX_POLY {
-                    let t = dp / (dp - dq);
-                    let l = |x: f32, y: f32| x + (y - x) * t;
-                    let mut v = ClipVertex {
-                        uv: [l(p.v.uv[0], q.v.uv[0]), l(p.v.uv[1], q.v.uv[1])],
-                        color: [0; 4],
-                        pos: [
-                            l(p.v.pos[0], q.v.pos[0]),
-                            l(p.v.pos[1], q.v.pos[1]),
-                            l(p.v.pos[2], q.v.pos[2]),
-                        ],
-                    };
-                    for k in 0..4 {
-                        v.color[k] = (l(p.v.color[k] as f32, q.v.color[k] as f32) + 0.5) as u8;
-                    }
-                    b[m] = P {
-                        v,
-                        c: [l(p.c[0], q.c[0]), l(p.c[1], q.c[1]), l(p.c[2], q.c[2])],
-                    };
-                    m += 1;
+                core::mem::swap(&mut from, &mut to);
+                n = m;
+                if n < 3 {
+                    return 0;
                 }
             }
-            core::mem::swap(&mut a, &mut b);
-            n = m;
-            if n < 3 {
-                return 0;
+            let mut k = 0;
+            for i in 1..n - 1 {
+                if k + 3 > out.len() {
+                    break;
+                }
+                out[k] = (*from).v;
+                out[k + 1] = (*from.add(i)).v;
+                out[k + 2] = (*from.add(i + 1)).v;
+                k += 3;
             }
+            k
         }
-        let mut k = 0;
-        for i in 1..n - 1 {
-            if k + 3 > out.len() {
-                break;
-            }
-            out[k] = a[0].v;
-            out[k + 1] = a[i].v;
-            out[k + 2] = a[i + 1].v;
-            k += 3;
-        }
-        k
     }
 }
 
@@ -299,6 +336,33 @@ mod tests {
             ],
         );
         assert_eq!(g.classify(&c), Verdict::Safe);
+    }
+
+    #[test]
+    fn a_wall_that_passes_the_eye_is_left_to_the_rasterizer_and_the_ground_under_it_is_not() {
+        let g = guard();
+        // A wall face 0.6 m to the right, from 3 m behind the eye to 6 m ahead of it: it crosses
+        // the near plane 0.6 m from the view's middle, inside the band.
+        let (_, wall) = tri(
+            &g,
+            [
+                v3(0.6, 0.0, 3.0),
+                v3(0.6, 3.0, -6.0),
+                v3(0.6, 0.0, -6.0),
+            ],
+        );
+        assert_eq!(g.classify(&wall), Verdict::Safe);
+        // The ground 12 m wide, from behind the eye to far ahead: it crosses the near plane
+        // 6 m to the side, and 0.4 m ahead the band ends well short of that.
+        let (_, ground) = tri(
+            &g,
+            [
+                v3(-6.0, 0.0, 3.0),
+                v3(6.0, 0.0, 3.0),
+                v3(0.0, 0.0, -30.0),
+            ],
+        );
+        assert_eq!(g.classify(&ground), Verdict::Clip);
     }
 
     #[test]

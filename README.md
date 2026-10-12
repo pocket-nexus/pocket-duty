@@ -17,7 +17,7 @@ Tools: Bun, Rust, Chrome (the export drives it through `playwright-core`), and t
 ```
 bun run setup                      # the submodule, the tools' packages, the reference's packages
 bun tools/duty.ts export           # the reference in Chrome → .pocket-build/duty/ir (DutyIR, 119 MB)
-bun tools/duty.ts cook             # DutyIR → .pocket-build/duty/psp30/duty.pack and receipt.json (2 minutes)
+bun tools/duty.ts cook             # DutyIR → .pocket-build/duty/psp30/duty.pack and receipt.json (4 minutes)
 bun tools/duty.ts shot --png f.png # a frame of the cooked pack, drawn on this computer
 bun tools/psp.ts build             # ui/ + psp/ → dist/psp/{EBOOT.PBP,duty.js,duty.pak}
 bun tools/psp.ts emu               # the same EBOOT in PPSSPPHeadless: a frame and its status
@@ -98,10 +98,10 @@ vendor/pocketjs      PocketJS and Pocket3D
 - **8 m cells, three levels of detail** a cell and material (meshopt, vertices shared between cells kept in place), **4 310 chunks** in all: 428 969, 162 308 and 57 310 triangles.
 - **Light at the vertex**: the exported sunless light scaled by how much sky the vertex sees, plus the sun where rays reach it. Edges are cut where the sun's shadow crosses a face. The result goes through the reference's tone table to a 16-bit colour.
 - **The ground's shadow** as one 512² picture over 128 m, multiplied in by a second pass.
-- **Clusters** of at most 32 triangles, grouped by facing, each with a sphere, a cone and a box: **43 270**. For each of 409 cells, the clusters any ray from the cell reaches (400 000 rays a cell).
+- **Clusters** of at most 32 triangles, grouped by facing, each with a sphere, a cone and a box: **43 270**. For each of 409 cells, the clusters any ray from the cell reaches (400 000 rays a cell, through all three levels at once: a frame mixes them).
 - **Textures**: 24 pictures with 256-colour palettes, 695 KiB.
 - **The walk grid**: only its largest connected part stays open (29 776 of 38 742 nodes), so every way a soldier asks for exists.
-- The pack is **26.9 MB**; `receipt.json` records its hash and counts.
+- The pack is **27.6 MB**; `receipt.json` records its hash and counts.
 
 ### The frame
 
@@ -123,9 +123,9 @@ bun tools/ui.ts test       # the flow through a mock renderer
 
 ## What is measured
 
-Host: `cargo test --workspace` (duty-sim 38 tests). `cargo run --release -p duty-sim --example match -- .pocket-build/duty/psp30/duty.pack 30` plays 30 minutes of matches with a player who aims at the nearest soldier in sight.
+Host: `cargo test --workspace` (duty-sim 39 tests). `cargo run --release -p duty-sim --example match -- .pocket-build/duty/psp30/duty.pack 30` plays 30 minutes of matches with a player who aims at the nearest soldier in sight.
 
-Emulator (`bun tools/psp.ts emu`, PPSSPPHeadless with its software renderer): the title, a match, the menu, settings, a fall and the results draw as intended. A frame from the start point sends **15 900 triangles in 516 draws**, 2 272 of them the held rifle. The emulator's times count instructions and do not say what a console takes.
+Emulator (`bun tools/psp.ts emu`, PPSSPPHeadless with its software renderer): the title, a match, the menu, settings, a fall and the results draw as intended. A frame from the start point sends **17 400 triangles in 545 draws**, 2 272 of them the held rifle. The emulator's times count instructions and do not say what a console takes.
 
 Console: no frame timing and no capture yet.
 

@@ -209,6 +209,20 @@ pub fn visible(planes: &[[f32; 4]; 6], min: &[f32; 3], max: &[f32; 3]) -> bool {
     true
 }
 
+/// Whether a box is wholly inside the frustum.
+pub fn contained(planes: &[[f32; 4]; 6], min: &[f32; 3], max: &[f32; 3]) -> bool {
+    for p in planes {
+        // The corner farthest out along this plane.
+        let x = if p[0] >= 0.0 { min[0] } else { max[0] };
+        let y = if p[1] >= 0.0 { min[1] } else { max[1] };
+        let z = if p[2] >= 0.0 { min[2] } else { max[2] };
+        if p[0] * x + p[1] * y + p[2] * z + p[3] < 0.0 {
+            return false;
+        }
+    }
+    true
+}
+
 /// Distance from `p` to a box (0 inside).
 pub fn box_distance(p: V3, min: &[f32; 3], max: &[f32; 3]) -> f32 {
     let d = |v: f32, lo: f32, hi: f32| {

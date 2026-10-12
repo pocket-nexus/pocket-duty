@@ -206,7 +206,8 @@ pub struct Gfx {
     /// Development switches (`option=` on the control line): 1 no culling of back faces, 2 the
     /// other winding, 4 every chunk and cluster the view holds, 8 no haze, 16 no shadow pass,
     /// 32 no texture, 64 no cutting on the CPU, 128 no sky, 256 no interface in the list,
-    /// 512 no turn for the interface, 1024 no effects.
+    /// 512 no turn for the interface, 1024 no effects, 2048 large triangles the GE cannot take
+    /// are left out, not cut (what the cutting costs is the difference).
     pub option: u32,
     /// What `choose` kept for `world`, and when the list was begun.
     chosen: Option<(Camera, Mat4, Guard, Guard)>,
@@ -572,6 +573,7 @@ impl Gfx {
                     let clip = [stored.to_clip(steps(v[0])), stored.to_clip(steps(v[1])), stored.to_clip(steps(v[2]))];
                     match stored.classify(&clip) {
                         Verdict::Culled => {}
+                        Verdict::Clip if self.option & 2048 != 0 => {}
                         Verdict::Clip if cut_n + MAX_OUT <= CUT_VERTICES => {
                             let p = [world(v[0]), world(v[1]), world(v[2])];
                             let full = |k: usize| {
