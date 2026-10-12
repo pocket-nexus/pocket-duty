@@ -1,0 +1,12 @@
+[package]
+name = "duty-pack"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "The pack Pocket Duty's compiler writes and its runtimes read: the section table, the records and the vertex layouts"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]

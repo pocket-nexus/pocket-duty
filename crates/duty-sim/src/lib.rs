@@ -1,0 +1,18 @@
+//! Deterministic simulation core of Pocket Duty.
+//!
+//! The same crate runs in the compiler (which casts its rays for the light
+//! it bakes, and builds the collision tree the pack carries) and on the
+//! device, where it is the game: the collision world, the player, the
+//! weapons, the soldiers and the match.
+
+#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(feature = "hw-sqrt", feature(core_intrinsics), allow(internal_features))]
+
+extern crate alloc;
+
+pub mod bvh;
+pub mod clip;
+pub mod fastmath;
+pub mod mat;
+pub mod math;
+pub mod view;

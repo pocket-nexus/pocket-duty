@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/duty-pack", "crates/duty-sim", "crates/duty-cook", "crates/duty-interface"]
+# The device app builds with its own toolchain and lockfile.
+exclude = ["psp", "vendor", "web"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 1

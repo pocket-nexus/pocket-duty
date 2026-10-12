@@ -1,0 +1,19 @@
+[package]
+name = "duty-sim"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Deterministic simulation core of Pocket Duty: the collision world, the player, the weapons, the soldiers, the match, and what a frame draws"
+
+[features]
+default = ["std"]
+# Without `std` the crate needs only `core` and `alloc` (the PSP build).
+std = ["duty-pack/std"]
+# The FPU's square root instead of libm's loop (the same bits; needs a nightly compiler).
+hw-sqrt = []
+# Transcendentals that never use f64, for an FPU without doubles (the PSP). Not bit-identical to libm.
+single-float = []
+
+[dependencies]
+duty-pack = { path = "../duty-pack", default-features = false }
+libm = "0.2"

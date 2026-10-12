@@ -1,0 +1,16 @@
+# Build output
+/target/
+/psp/target/
+/dist/
+node_modules/
+/web/dist/
+
+# DutyIR, cooked packs, PSPLINK share, validation captures
+/.pocket-build/
+
+.DS_Store
+
+# The interface: what tools/ui.ts writes from the export, and PocketJS's build state
+/ui/app/generated/
+/ui/.pocket/
+/ui/app/images.json

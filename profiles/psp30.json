@@ -1,0 +1,25 @@
+{
+  "target": "psp",
+  "frames": 30,
+  "cell": 8,
+  "quantum": 0.0009765625,
+  "drop": ["prop_pock", "prop_dust_skirt"],
+  "lod": {
+    "error": [0.04, 0.12, 0.4],
+    "distance": [9, 28],
+    "largest": [6, 10, 0],
+    "shadowEdge": [1.0, 3, 0],
+    "minArea": [0, 0.002, 0.02]
+  },
+  "sight": { "rays": 400000, "near": 3 },
+  "clip": { "largeEdge": 0.9 },
+  "cluster": { "triangles": 32, "cone": 0.25 },
+  "ground": {
+    "families": ["sand", "dirt", "gravel", "asphalt", "concrete"],
+    "below": 0.75,
+    "shadow": { "extent": 128, "side": 512 }
+  },
+  "light": { "rays": 48, "openFloor": 0.3 },
+  "textures": { "side": 128, "levels": 4, "sides": { "glass": 32, "rubber": 64, "burlap": 64, "fabric": 64, "metal_brushed": 64, "foliage": 64 } },
+  "sky": { "columns": 4, "width": 256, "height": 128, "floor": -0.12, "top": 0.95 }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "pocket-duty",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "setup": "git submodule update --init && bun install && bun install --cwd web",
+    "duty": "bun tools/duty.ts",
+    "dev": "bun run --cwd web dev",
+    "ui": "bun tools/ui.ts",
+    "test": "cargo test --workspace && bun test ./tools"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "playwright-core": "^1.63.0",
+    "typescript": "^5.9.3"
+  }
+}
