@@ -8,6 +8,9 @@ node_modules/
 # DutyIR, cooked packs, PSPLINK share, validation captures
 /.pocket-build/
 
+# The link to the game on Pocket Studio, which `pocket-studio register` writes
+/.pocket-studio.json
+
 .DS_Store
 
 # The interface: what tools/ui.ts writes from the export, and PocketJS's build state

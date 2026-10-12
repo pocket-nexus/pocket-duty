@@ -2,6 +2,8 @@
 
 [Claude of Duty](https://github.com/mshumer/Claude-of-Duty) on the PSP: the reference's market street, its soldiers and its three weapons at **480 × 272 and 30 frames a second**, through the GE's fixed-function pipeline. Built on [Pocket3D](https://github.com/pocket-nexus/pocketjs) and PocketJS.
 
+Its page on Pocket Studio, [studio.pocket.nexus/games/duty](https://studio.pocket.nexus/games/duty), has recordings from a console and the package for the PSP.
+
 The reference is a browser game: three.js on WebGL2, every mesh, texture, animation and sound built by code at start. This repository keeps it unmodified in `web/`, runs it once in a desktop browser to record what it builds, and compiles the record for the console.
 
 | | |
@@ -149,6 +151,24 @@ Console (a PSP with 64 MB, over PSPLINK, 2026-10-13):
 | Memory | 38.9 MB of the program's 50.8 MB after the match, 38.2 MB at its start |
 
 The first run on the console took 35.7 ms a frame with one frame in six late. What changed is in "The frame" above.
+
+## Releases
+
+`bun tools/release.ts` builds the package Pocket Studio takes from the checked-out commit and writes it to `dist/release/`, which Git ignores:
+
+```
+bun tools/release.ts --targets psp [--out dist/release] [--no-build] [--no-cook] [--upload]
+```
+
+| Target | File | Holds |
+| --- | --- | --- |
+| `psp` | `pocket-duty-<version>-psp.zip` | `PSP/GAME/PocketDuty/` for the root of a Memory Stick: `EBOOT.PBP`, `duty.pack`, and the interface's `duty.js` and `duty.pak` |
+
+- It cooks the profile's pack from the export with this commit's compiler (`--no-cook` takes the pack under `.pocket-build/duty/psp30` as it is), builds the program and writes the zip. **The zip's bytes follow from its entries alone**: fixed dates, fixed modes, entries in the order of their names.
+- `release.json` beside it records the commit, the version (`ui/pocket.json`), the file's size and SHA-256, the export and the pack it was built from, and the toolchains.
+- The tool also names a `3ds` target; its program is not in this repository.
+
+**Packages go to Pocket Studio and to no page on GitHub.** `--upload` runs `pocket-studio package <file> --target <id> --version <version>` for each package from the repository's root, where `pocket-studio register --title "Pocket Duty"` wrote `.pocket-studio.json` (ignored by Git). `POCKET_STUDIO_CLI` names the command when it is not on `PATH`.
 
 ## Licence
 
