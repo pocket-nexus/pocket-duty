@@ -3,9 +3,9 @@
 // tools/ui.ts), which a realm of the page runs on PocketJS's UI core and the
 // renderer lays over the street. The page itself is the Pocket3D player of
 // PocketJS's browser kernel (vendor/pocketjs/devices/web/pocket-web-wgpu,
-// staged beside this file): the bar, the PSP's shell with its keys, the way
-// to Pocket Studio. This file says what the game is and draws into the
-// player's canvas.
+// staged beside this file): the bar, the PSP's shell with its keys, the dock
+// that leads to the game's files and to a remix of it on Pocket Studio. This
+// file says what the game is and draws into the player's canvas.
 //
 // The Pocket3D title card plays first; the interface and the pack are read
 // while it plays.
@@ -27,19 +27,8 @@ import { createPlayer } from "./pocket3d-player.js";
 import init, { Duty, shapes, sound_rate } from "./pkg/duty_wgpu.js";
 
 // The one handheld the game runs on. Its screen is the renderer's shape of the same name and its
-// interface the bundle under ui/psp/. `note` is what the player says beside the device's name: how this
-// picture differs from the one a PSP draws (README, "What differs from the PSP's picture").
-const DEVICES = [
-  {
-    id: "psp",
-    label: "PSP",
-    sticks: 1,
-    note: {
-      en: "This page draws the PSP build's own street: its triangles, its baked light, its pictures and the display's 16-bit colours. A PSP draws 30 frames a second and brings its levels of detail nearer in a heavy view; this page draws every tick of the match and holds them at the pack's distances.",
-      ja: "このページは PSP 版と同じ街を描きます。三角形、焼き込んだ光、テクスチャ、16 ビットの表示色は PSP 版のものです。実機の PSP は毎秒 30 フレームで描き、重い場面では詳細度の切り替えを手前に寄せます。このページは対戦の毎ティックを描き、切り替えの距離を変えません。",
-    },
-  },
-];
+// interface the bundle under ui/psp/.
+const DEVICES = [{ id: "psp", label: "PSP", sticks: 1 }];
 // Where the interface's settings are kept between visits (a PSP keeps them in a file beside the pack).
 const KEPT = "pocket-duty.interface";
 

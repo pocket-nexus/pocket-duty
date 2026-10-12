@@ -118,9 +118,9 @@ async function dist(pieceBytes: number) {
     if (!page.includes(from)) throw new Error(`wgpu/page/index.html has no ${from}`);
     page = page.replace(from, to);
   }
-  // The game in Pocket Studio, for the player's door to it: the project this checkout is registered as
-  // (`pocket-studio register` wrote .pocket-studio.json, which Git ignores). A checkout that is not
-  // registered deploys a page whose door is the Studio's front one.
+  // The game in Pocket Studio, for a host that answers no /app.json: the project this checkout is
+  // registered as (`pocket-studio register` wrote .pocket-studio.json, which Git ignores). The game's host
+  // on Pocket Studio answers one, and the player's dock takes its links from that.
   const link = join(ROOT, ".pocket-studio.json");
   const project = existsSync(link) ? (JSON.parse(readFileSync(link, "utf8")) as { kind?: string; server?: string; app?: string }) : null;
   const registered = project?.kind === "site" && /^[A-Za-z0-9_-]+$/.test(project.app ?? "") && /^https:\/\/[A-Za-z0-9.-]+$/.test(project.server ?? "") ? project : null;
@@ -158,8 +158,9 @@ const TYPES: Record<string, string> = { html: "text/html; charset=utf-8", js: "t
 const OPENED = "/api/events/player";
 const opens: { query: string; mode: string }[] = [];
 const APP = {
-  kind: "site", id: "local", slug: null, url: null, title: "Pocket Duty", author: "local", tagline: "A firefight on a market street.", verified: true, status: "published",
-  packages: [{ target: "psp", filename: "pocket-duty-0.1.0-psp.zip", size: 19_000_000, version: "0.1.0" }],
+  kind: "site", id: "local", slug: "duty", url: null, title: "Pocket Duty", author: "local", tagline: "A firefight on a market street.", verified: true, status: "published",
+  packages: [{ target: "psp", filename: "pocket-duty-0.1.0-psp.zip", size: 16_000_000, version: "0.1.0" }],
+  remixable: true, repository: "https://github.com/pocket-nexus/pocket-duty",
 };
 
 /** The deployable directory as its host serves it: whole files, the page asked for again at every visit. */
@@ -475,7 +476,7 @@ if (command === "build") {
     }
 
     // ---- the player around the game, in three windows: the PSP in its shell, the mark that says the
-    // picture is simulated, the door to Pocket Studio, the shell's own key under the pointer
+    // picture is simulated, the dock's Download and Remix, the shell's own key under the pointer
     report.player = {};
     const WINDOWS = [
       { name: "1440", options: { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 }, coarse: false },
@@ -519,16 +520,22 @@ if (command === "build") {
       else await p.page.mouse.move(mark.x + mark.width / 2, mark.y + mark.height / 2);
       await p.page.waitForTimeout(300);
       const said = (await p.page.evaluate(`(() => { const tip = document.getElementById("pocket-simulated"); return { hidden: tip.hidden, text: tip.textContent }; })()`)) as Record<string, any>;
-      expect(`${tag}: the mark says the picture is simulated, and how the PSP's differs (${JSON.stringify(said)})`, said.hidden === false && said.text.includes("Your browser draws this picture") && said.text.includes("PSP build's own street"));
+      expect(`${tag}: the mark says the picture is simulated, in the player's one sentence (${JSON.stringify(said)})`, said.hidden === false && said.text === "Your browser draws this picture. A real PSP draws Pocket Duty with its own hardware, so it looks and runs differently there.");
       if (window.name === "1440") await p.page.screenshot({ path: join(directory, "player-simulated.png") });
       if (window.coarse) await p.page.touchscreen.tap(mark.x + mark.width / 2, mark.y + mark.height / 2);
       else await p.page.mouse.move(4, seen.view[1] / 2);
 
-      // The door to Pocket Studio: the game's card there, and the Studio's own front door.
-      const door = (await p.page.evaluate(`({ get: document.querySelector('[data-pocket-action=get]').href, make: document.querySelector('[data-pocket-action=make]').href, words: document.querySelector('[data-pocket-pitch]').textContent })`)) as Record<string, any>;
-      report.player.door ??= door;
-      const card = deployed ? (deployed.studio ? `${deployed.studio.server}/studio/?app=${deployed.studio.app}&from=player` : "https://studio.pocket.nexus/?from=player") : "https://studio.pocket.nexus/studio/?app=local&from=player";
-      expect(`${tag}: the door leads to the game in Pocket Studio (${JSON.stringify(door)}, wanted ${card})`, door.get === card && door.words.includes("Pocket Duty is built for PSP."));
+      // The dock: Download leads to the game's page on Pocket Studio with its files open, Remix to the same
+      // page with its remix open. The host here answers /app.json with the game's address there; the
+      // deployable directory's answers none, and its page knows the Studio alone: Download leads to its
+      // front door, and nothing says the game can be remixed.
+      const links = (await p.page.evaluate(`Object.fromEntries(["get", "remix", "make"].map((action) => { const link = document.querySelector('[data-pocket-action=' + action + ']'); return [action, { href: link.href, text: link.textContent, hidden: link.hidden }]; }))`)) as Record<string, { href: string; text: string; hidden: boolean }>;
+      report.player.dock ??= links;
+      const [get, remix] = [new URL(links.get!.href), new URL(links.remix!.href)];
+      const studio = deployed?.studio?.server ?? "https://studio.pocket.nexus";
+      expect(`${tag}: the dock's first link is Download (${JSON.stringify(links.get)})`, !links.get!.hidden && links.get!.text === "Download" && get.origin === studio && get.searchParams.get("from") === "player" && (deployed ? get.pathname === "/" : get.pathname === "/games/duty" && get.searchParams.has("get")));
+      expect(`${tag}: Remix is there when the host says the game can be remixed (${JSON.stringify(links.remix)})`, deployed ? links.remix!.hidden : !links.remix!.hidden && links.remix!.text === "Remix" && remix.pathname === "/games/duty" && remix.searchParams.has("remix"));
+      expect(`${tag}: the Studio's front door stands in the dock only when it has no other link (${JSON.stringify(links.make)})`, links.make!.hidden);
 
       // From the title into a match by the shell's own key, which goes down while it is held.
       if (!window.coarse) {
