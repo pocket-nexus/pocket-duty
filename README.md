@@ -4,6 +4,8 @@
 
 Its page on Pocket Studio, [studio.pocket.nexus/games/duty](https://studio.pocket.nexus/games/duty), has recordings from a console and the package for the PSP.
 
+A browser tab plays it too, at [duty.studio.pocket.nexus](https://duty.studio.pocket.nexus/): the same match compiled to wasm32, with a wgpu renderer that draws the PSP's pack inside a PSP's shell (`wgpu/`, "In a browser tab").
+
 The reference is a browser game: three.js on WebGL2, every mesh, texture, animation and sound built by code at start. This repository keeps it unmodified in `web/`, runs it once in a desktop browser to record what it builds, and compiles the record for the console.
 
 | | |
@@ -11,6 +13,7 @@ The reference is a browser game: three.js on WebGL2, every mesh, texture, animat
 | Reference | `web/`, Claude of Duty by mshumer at `d9b237b`, MIT (`web/LICENSE`) |
 | Console | PSP-2000 or later (the pack needs the 52 MB memory setting; a PSP-1000 has 24 MB) |
 | State | A whole match on a console: **29.9 frames a second, 55 frames late of 18 375** (see "What is measured") |
+| Browser tab | 480 × 272 in the PSP display's 16-bit colours, wgpu over WebGPU, the PSP's pack. Chrome 154 on an M3 Max: **60 frames a second, under 0.4 ms a frame** |
 
 ## Build and run
 
@@ -24,6 +27,15 @@ bun tools/duty.ts shot --png f.png # a frame of the cooked pack, drawn on this c
 bun tools/psp.ts build             # ui/ + psp/ → dist/psp/{EBOOT.PBP,duty.js,duty.pak}
 bun tools/psp.ts emu               # the same EBOOT in PPSSPPHeadless: a frame and its status
 bun tools/psp.ts package           # dist/psp/PSP/GAME/PocketDuty for a Memory Stick
+```
+
+In a browser tab (the `wasm32-unknown-unknown` target and `wasm-bindgen` 0.2.126; Chrome for `check`):
+
+```
+bun tools/wgpu.ts serve            # build, then http://127.0.0.1:8802/ with the cooked pack
+bun tools/wgpu.ts shot --frames 600 --words "mode=play auto=1" --out f.png   # a frame on this machine's GPU
+bun tools/wgpu.ts check [--dist]   # the page in Chrome with WebGPU: the title, a match, the menu, the results
+bun tools/wgpu.ts dist             # the directory a static host serves → .pocket-build/wgpu/dist
 ```
 
 Over PSPLINK, with a console on the cable:
@@ -75,7 +87,7 @@ Left out: leaning, lying down, and the reference's ragdolls (a soldier who falls
 
 ```
 web/                 the reference, unmodified, plus the export page (web/src/pocket, web/export.html)
-tools/               duty.ts (export, cook, shot), ui.ts (the interface), psp.ts (build, emu, run, bench)
+tools/               duty.ts (export, cook, shot), ui.ts (the interface), psp.ts (build, emu, run, bench), wgpu.ts (the browser)
 profiles/psp30.json  what the PSP's pack is: cell size, levels of detail, texture sizes, budgets
 crates/duty-pack     the pack's records
 crates/duty-cook     DutyIR → pack
@@ -83,6 +95,7 @@ crates/duty-sim      the match, and the choice of what a frame draws (no_std)
 crates/duty-interface  the flow and the protocol to the interface
 ui/                  the interface: one PocketJS app
 psp/                 the PSP program
+wgpu/                the browser's program: a wgpu renderer of the PSP's pack, the shell around the match, the page
 vendor/pocketjs      PocketJS and Pocket3D
 ```
 
@@ -135,6 +148,18 @@ bun tools/ui.ts preview    # pictures of every screen, .pocket-build/ui/preview/
 bun tools/ui.ts test       # the flow through a mock renderer
 ```
 
+## In a browser tab
+
+`wgpu/` is the game for a tab: **`duty-sim` and `duty-interface` compiled to wasm32, a wgpu renderer over WebGPU that reads the PSP's pack as it is, and PocketJS's Pocket3D player around it** (`vendor/pocketjs/devices/web/pocket-web-wgpu`). The reference in `web/` is not published as the game.
+
+- **The pack is the PSP's**: the triangles, the baked light, the palette pictures, the sight lists, the soldiers, the sounds and the walk grid of `duty.pack`. What the GE draws from it with no program, WGSL programs draw: a texel times the corner's colour, doubled, under the haze; the ground once more under its shadow picture; four bones and two lights for a soldier. The frame is shown in the PSP display's 16-bit colours with the GE's dither.
+- **A browser's GPU needs none of the PSP's three devices for a frame**: one depth range of 24 bits holds the street, the rasterizer clips, and the levels of detail stay at the pack's distances. Every tick of the match is drawn, 60 a second.
+- **The page is the kernel's player**: a PSP's shell with the screen in it and its keys as the controls (W A S D the stick, I J K L the four look buttons, E and Q for R and L, the arrows for the direction pad, Space for START). The interface is `ui/` as the PSP loads it, run in a realm of the page and laid over the street.
+- **The same renderer writes frames to files** on the build machine (`wgpu/src/bin/shot.rs`), a sixtieth of a second a frame.
+- `bun tools/wgpu.ts dist` writes the directory a static host serves: 53 files, 33.1 MB, the pack in pieces of 2 MiB named by their hashes. `pocket-studio site .pocket-build/wgpu/dist` deploys it to the game's address on Pocket Studio, from the checkout `pocket-studio register` linked.
+
+`wgpu/README.md` has the frame, the controls, what differs from the PSP's picture and what was measured.
+
 ## What is measured
 
 Host: `cargo test --workspace` (duty-sim 43 tests, duty-cook 7). `cargo run --release -p duty-sim --example match -- .pocket-build/duty/psp30/duty.pack 30` plays 30 minutes of matches with a player who aims at the nearest soldier in sight; `--example view -- <pack> x y z yaw pitch` prints what a frame from a place draws and what becomes of its large triangles.
@@ -153,6 +178,8 @@ Console (a PSP with 64 MB, over PSPLINK, 2026-10-13):
 | Memory | 38.9 MB of the program's 50.8 MB after the match, 38.2 MB at its start |
 
 The first run on the console took 35.7 ms a frame with one frame in six late. What changed is in "The frame" above.
+
+Browser (`bun tools/wgpu.ts check`, Chrome 154 headless with WebGPU on an M3 Max, 2026-10-13): the page goes from the title card through a match played by keys to its results, with the menu, a fall and the settings on the way; **60 frames a second, under 0.4 ms a frame** with up to 36 200 triangles of the street; the tab's frame of a held eye is the build machine's own; and that frame is 2.2 of 255 a colour from the compiler's drawing of the same view. No other browser, no phone and no other GPU has drawn it, and nobody has played it by hand or listened to it.
 
 ## Releases
 

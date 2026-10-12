@@ -2,7 +2,7 @@
 resolver = "2"
 members = ["crates/duty-pack", "crates/duty-sim", "crates/duty-cook", "crates/duty-interface"]
 # The device app builds with its own toolchain and lockfile.
-exclude = ["psp", "vendor", "web"]
+exclude = ["psp", "vendor", "web", "wgpu"]
 
 [profile.release]
 opt-level = 3
