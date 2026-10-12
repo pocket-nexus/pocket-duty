@@ -62,6 +62,10 @@ impl Body {
     pub fn advance(&mut self, level: &Level, dt: f32) {
         self.landed = 0.0;
         self.blocked = false;
+        // Standing on ground that does not move, he stays where he is: nothing to ask the world.
+        if self.grounded && self.vel.len2() < 1e-6 {
+            return;
+        }
         let pieces = ((self.vel.len() * dt / (self.radius * 0.35)) as u32 + 1).min(6);
         let h = dt / pieces as f32;
         for _ in 0..pieces {
@@ -134,7 +138,17 @@ impl Body {
         };
         let k = self.radius * 0.6;
         let mut best: Option<(f32, u32)> = None;
-        for (dx, dz) in [(0.0, 0.0), (k, 0.0), (-k, 0.0), (0.0, k), (0.0, -k)] {
+        // Under the middle, and under the foot ahead and the one behind: a step up is met by the
+        // first, a ledge is left by the last. The two feet to the sides are asked only when none
+        // of those found ground.
+        let way = self.vel.flat().norm_or(v3(1.0, 0.0, 0.0)) * k;
+        for (i, (dx, dz)) in [(0.0, 0.0), (way.x, way.z), (-way.x, -way.z), (-way.z, way.x), (way.z, -way.x)]
+            .into_iter()
+            .enumerate()
+        {
+            if i == 3 && best.is_some() {
+                break;
+            }
             if let Some(hit) = level.solid.raycast(
                 v3(self.pos.x + dx, top, self.pos.z + dz),
                 v3(0.0, -1.0, 0.0),

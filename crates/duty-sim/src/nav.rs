@@ -54,6 +54,8 @@ pub struct Pathfinder {
     search: Option<Search>,
     /// Who waits: (owner, from, to).
     waiting: Vec<(u8, u32, u32)>,
+    /// Ways asked for, found, not there, and given up after `LIMIT` nodes.
+    pub counts: [u32; 4],
 }
 
 impl Pathfinder {
@@ -65,6 +67,7 @@ impl Pathfinder {
             epoch: 0,
             heap: Vec::with_capacity(1024),
             search: None,
+            counts: [0; 4],
             waiting: Vec::with_capacity(16),
         }
     }
@@ -77,6 +80,7 @@ impl Pathfinder {
         }
         if self.waiting.len() < 16 {
             self.waiting.push((owner, from, to));
+            self.counts[0] += 1;
         }
     }
 
@@ -172,12 +176,14 @@ impl Pathfinder {
         for _ in 0..budget {
             let Some((_, node)) = self.pop() else {
                 self.search = None;
+                self.counts[2] += 1;
                 return Some((owner, Path::default()));
             };
             let node = node as u32;
             if node == to {
                 let path = self.trace(level, from, to);
                 self.search = None;
+                self.counts[1] += 1;
                 return Some((owner, path));
             }
             let opened = {
@@ -187,6 +193,7 @@ impl Pathfinder {
             };
             if opened > LIMIT {
                 self.search = None;
+                self.counts[3] += 1;
                 return Some((owner, Path::default()));
             }
             let (i, j) = (node as i32 % nx, node as i32 / nx);

@@ -38,6 +38,11 @@ pub enum State {
     Dead,
 }
 
+/// Seconds without sight or sound of the player before a patrolling squad goes to look for him,
+/// and how far from where he is each of them heads.
+const HUNT_AFTER: f32 = 14.0;
+const HUNT_SPREAD: f32 = 7.0;
+
 /// What the members of a squad share.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Squad {
@@ -110,6 +115,8 @@ pub struct Soldier {
     going: bool,
     asked: bool,
     stuck: f32,
+    /// Seconds before he may ask for a way again.
+    ask_wait: f32,
     pub cover: Option<u16>,
     cover_wait: f32,
     peek_wait: f32,
@@ -173,6 +180,7 @@ impl Soldier {
         going: false,
         asked: false,
         stuck: 0.0,
+        ask_wait: 0.0,
         cover: None,
         cover_wait: 0.0,
         peek_wait: 0.0,
@@ -410,14 +418,22 @@ impl Soldier {
         if self.going && (self.goal - to).flat().len2() < 1.0 {
             return;
         }
+        // A way that was not found is not asked for again at once.
+        if self.ask_wait > 0.0 {
+            return;
+        }
         self.goal = to;
         self.going = true;
         self.path.len = 0;
         self.path_at = 0;
         self.stuck = 0.0;
         match (
-            level.nearest_open(self.pos.x, self.pos.z, self.pos.y),
-            level.nearest_open(to.x, to.z, to.y),
+            level
+                .nearest_open(self.pos.x, self.pos.z, self.pos.y)
+                .or_else(|| level.nearest_below(self.pos.x, self.pos.z)),
+            level
+                .nearest_open(to.x, to.z, to.y)
+                .or_else(|| level.nearest_below(to.x, to.z)),
         ) {
             (Some(from), Some(goal)) if from != goal => {
                 paths.ask(me, from, goal);
@@ -426,6 +442,7 @@ impl Soldier {
             _ => {
                 self.going = false;
                 self.asked = false;
+                self.ask_wait = 0.75;
             }
         }
     }
@@ -439,12 +456,23 @@ impl Soldier {
     }
 
     /// The pathfinder's answer to his last question.
+    /// For a bench's printout: whether he is on his way, waits for one, the way's points and the
+    /// one he heads for, the seconds he has not moved, and his goal.
+    pub fn way(&self) -> (bool, bool, u8, u8, f32, V3) {
+        (self.going, self.asked, self.path.len, self.path_at, self.stuck, self.goal)
+    }
+
+    pub fn path_point(&self) -> V3 {
+        self.path.points[(self.path_at as usize).min(crate::nav::POINTS - 1)]
+    }
+
     pub fn take_path(&mut self, path: Path) {
         self.asked = false;
         self.path = path;
         self.path_at = 0;
         if path.len == 0 {
             self.going = false;
+            self.ask_wait = 0.75;
         }
     }
 
@@ -487,23 +515,28 @@ impl Soldier {
                 step += push + v3(-push.z, 0.0, push.x) * if me & 1 == 0 { 0.35 } else { -0.35 };
             }
         }
-        let next = self.pos + step;
-        // He stays on the grid's open nodes.
-        let open = a
-            .level
-            .node(next.x, next.z)
-            .is_some_and(|n| a.level.open(n));
-        if open {
-            let moved = step.len();
-            self.pos.x = next.x;
-            self.pos.z = next.z;
-            self.stuck = if moved < self.speed * DT * 0.3 {
-                self.stuck + DT
-            } else {
-                0.0
-            };
+        // He stays on the grid's open nodes. Where the straight step meets a closed one he goes
+        // along it: the step's part across the grid's lines first, the other if that is closed too.
+        let open = |x: f32, z: f32| a.level.node(x, z).is_some_and(|n| a.level.open(n));
+        let ways = if abs(step.x) > abs(step.z) {
+            [(step.x, step.z), (step.x, 0.0), (0.0, step.z)]
         } else {
-            self.stuck += DT;
+            [(step.x, step.z), (0.0, step.z), (step.x, 0.0)]
+        };
+        let moved = ways
+            .into_iter()
+            .find(|(x, z)| (*x != 0.0 || *z != 0.0) && open(self.pos.x + x, self.pos.z + z));
+        match moved {
+            Some((x, z)) => {
+                self.pos.x += x;
+                self.pos.z += z;
+                self.stuck = if x * x + z * z < (self.speed * DT * 0.3) * (self.speed * DT * 0.3) {
+                    self.stuck + DT
+                } else {
+                    0.0
+                };
+            }
+            None => self.stuck += DT,
         }
         if self.stuck > 1.1 {
             // Something is in the way: ask again from where he stands.
@@ -528,6 +561,7 @@ impl Soldier {
         let mut act = Act::default();
         self.fired_ago += DT;
         self.hit_ago += DT;
+        self.ask_wait -= DT;
         self.shown = max(0.0, self.shown - DT);
         if self.state == State::Dead {
             self.dead_time += DT;
@@ -636,6 +670,16 @@ impl Soldier {
                 self.walk(me, PATROL_SPEED, a, paths);
                 if self.has_target {
                     self.enter(State::Combat);
+                } else if a.alive && self.state_time > 5.0 && a.time - squad.contact_at > HUNT_AFTER
+                {
+                    // A match is two sides that meet. A squad that has seen and heard nothing for
+                    // a while goes to look where the other side is, each of them to a place of
+                    // his own some metres from it.
+                    let turn = me as f32 * 2.4 + a.time * 0.37;
+                    self.last_known = a.target + v3(cos(turn), 0.0, sin(turn)) * HUNT_SPREAD;
+                    self.last_known_age = 0.0;
+                    self.going = false;
+                    self.enter(State::Alert);
                 }
             }
             State::Alert => {

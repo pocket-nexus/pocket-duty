@@ -826,10 +826,12 @@ export function About(props: { match: Match; width: number }) {
 /** How the match ended: the word, and the two scores. */
 export function Outcome(props: { host: Host }) {
   const result = props.host.result;
+  // Level scores when the clock ran out: nobody won.
+  const level = () => result()?.us === result()?.them;
   return (
     <View class="flex-col" style={{ paddingL: 14 }}>
       <Text class="text-xs font-bold tracking-wide" style={{ height: 16, textColor: DIM }}>TEAM DEATHMATCH</Text>
-      <Text class="text-4xl font-bold" style={{ height: 42, textColor: result()?.won ? OK : RED }}>{result()?.won ? "VICTORY" : "DEFEAT"}</Text>
+      <Text class="text-4xl font-bold" style={{ height: 42, textColor: level() ? INK : result()?.won ? OK : RED }}>{level() ? "DRAW" : result()?.won ? "VICTORY" : "DEFEAT"}</Text>
       <View class="flex-row items-center" style={{ height: 24, gap: 8 }}>
         <Text class="text-xl font-bold" style={{ textColor: FRIEND }}>{`${result()?.us ?? 0}`}</Text>
         <Text class="text-sm" style={{ textColor: FAINT }}>–</Text>

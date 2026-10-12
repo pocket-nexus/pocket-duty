@@ -64,7 +64,7 @@ pub struct Game<'a> {
     pub arms: Arms,
     pub soldiers: [Soldier; MAX],
     pub squads: [Squad; SQUADS],
-    paths: Pathfinder,
+    pub paths: Pathfinder,
     pub grenades: [Grenade; GRENADES],
     pub rng: Rng,
     /// What the last step did.
@@ -80,6 +80,8 @@ pub struct Game<'a> {
     reinforce: f32,
     /// How hard the soldiers' rounds hit, of the reference's 1.
     pub skill: f32,
+    /// Nodes the way-finding opens in a tick.
+    pub path_budget: u32,
     /// The aim's help: the look slows over a soldier, and the sights rise onto the nearest one.
     pub assist: bool,
     /// What is left of a rise of the sights onto a soldier: yaw, pitch, seconds.
@@ -113,6 +115,7 @@ impl<'a> Game<'a> {
             tick: 0,
             reinforce: REINFORCE_WAIT,
             skill: 0.7,
+            path_budget: 120,
             assist: true,
             snap: (0.0, 0.0, 0.0),
             ads_held: false,
@@ -411,7 +414,10 @@ impl<'a> Game<'a> {
             self.player
                 .place(v3(s.pos[0], s.pos[1] + 0.03, s.pos[2]), s.yaw);
         }
-        self.arms.ads = 0.0;
+        // He comes back with full magazines and the fire modes he had chosen.
+        let mode = self.arms.mode;
+        self.arms = Arms::new(self.arms.defs);
+        self.arms.mode = mode;
         self.last_by = None;
         self.phase = Phase::Play;
         self.events.push(Event::Up);
@@ -541,7 +547,7 @@ impl<'a> Game<'a> {
         }
 
         // ---- the soldiers
-        if let Some((owner, path)) = self.paths.step(&self.level, 220) {
+        if let Some((owner, path)) = self.paths.step(&self.level, self.path_budget) {
             self.soldiers[owner as usize].take_path(path);
         }
         let mut others = [(V3::ZERO, false, None); MAX];

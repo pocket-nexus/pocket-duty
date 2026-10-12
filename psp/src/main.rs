@@ -166,16 +166,22 @@ struct Remote {
     god: bool,
 }
 
-/// The words of a control text: `mode=title|play|menu` sets the flow outright, `ui=start|menu|
+/// The words of a control text. In `boot.txt`, `@<frame>:<word>` says a word at that frame, so a
+/// test run can walk the interface. `mode=title|play|menu` sets the flow outright, `ui=start|menu|
 /// resume|restart|title` asks what the interface's lists ask, `press=<mask>` presses buttons on the
 /// interface as a thumb would (PocketJS's button bits), `rest=<turns>` leaves it alone that many
 /// of its turns, `pad=<held>,<x>,<y>,<frames>` holds the player's pad (the flow's own bits, the
 /// stick in hundredths), `at=<x>,<y>,<z>,<yaw>,<pitch>` puts the player somewhere (degrees),
 /// `near=<soldier>,<metres>` puts him in front of a soldier, `auto=1` hands his aim and trigger to
-/// the bench, `god=1` keeps him whole, `skill=<hundredths>` sets how hard the soldiers hit,
+/// the bench, `god=1` keeps him whole, `hurt=<points>` hits him from ahead, `clock=<seconds>` sets
+/// what is left of the match, `skill=<hundredths>` sets how hard the soldiers hit,
 /// `budget=<triangles>` and `option=<bits>` are the renderer's.
 unsafe fn remote(text: &str, ui: &mut interface::Ui, session: &mut Session, game: &mut Game, gfx: &mut gfx::Gfx, state: &mut Remote) {
     for word in text.split_ascii_whitespace() {
+        // (a word for a later frame is the loop's to say when its frame comes)
+        if word.starts_with('@') {
+            continue;
+        }
         let Some((key, value)) = word.split_once('=') else { continue };
         let mut numbers = value.split(',').map(|n| parse_f32(n).unwrap_or(0.0));
         let mut next = || numbers.next().unwrap_or(0.0);
@@ -209,6 +215,11 @@ unsafe fn remote(text: &str, ui: &mut interface::Ui, session: &mut Session, game
                 session.apply(game);
             }
             "auto" => state.auto = next() != 0.0,
+            "clock" => game.clock = next(),
+            "hurt" => {
+                let from = game.player.head() + forward(game.player.yaw, 0.0) * 8.0;
+                game.player.hurt(next(), from, &mut game.events);
+            }
             "god" => state.god = next() != 0.0,
             "near" => {
                 // In front of a soldier, a few metres off, looking at him.
@@ -465,6 +476,14 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
         // -------------------------------------------------------------- input and the match
         sceCtrlPeekBufferPositive(&mut data, 1);
         store::control(|text| remote(text, ui, &mut session, &mut game, &mut gfx, &mut steer));
+        // The words `boot.txt` keeps for this frame.
+        for word in boot.split_ascii_whitespace().filter(|w| w.starts_with('@')) {
+            if let Some((at, word)) = word[1..].split_once(':') {
+                if parse_f32(at).is_some_and(|at| at as u32 == frame) {
+                    remote(word, ui, &mut session, &mut game, &mut gfx, &mut steer);
+                }
+            }
+        }
         if let Some(text) = session.obey(&mut game) {
             prefs = Some(text);
         }

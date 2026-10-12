@@ -123,13 +123,23 @@ impl<'a> Level<'a> {
             && (self.floor[from as usize] as i32 - self.floor[to as usize] as i32).abs() <= 45
     }
 
-    /// The open node nearest a point, looking outward ring by ring.
+    /// The open node nearest a point and within 1.4 m of its height, looking outward ring by ring.
     pub fn nearest_open(&self, x: f32, z: f32, y: f32) -> Option<u32> {
+        self.nearest(x, z, y, 1.4, 8)
+    }
+
+    /// The open node nearest a point over the ground, whatever its height: where a soldier goes
+    /// for someone who stands where the grid does not reach, on a roof or an upper floor.
+    pub fn nearest_below(&self, x: f32, z: f32) -> Option<u32> {
+        self.nearest(x, z, 0.0, f32::MAX, 20)
+    }
+
+    fn nearest(&self, x: f32, z: f32, y: f32, within: f32, rings: i32) -> Option<u32> {
         let (ci, cj) = (
             floor((x - self.nav.min_x) / self.nav.cell + 0.5) as i32,
             floor((z - self.nav.min_z) / self.nav.cell + 0.5) as i32,
         );
-        for ring in 0..8i32 {
+        for ring in 0..rings {
             let mut best: Option<(f32, u32)> = None;
             for dj in -ring..=ring {
                 for di in -ring..=ring {
@@ -141,7 +151,8 @@ impl<'a> Level<'a> {
                         continue;
                     }
                     let node = j as u32 * self.nav.nx + i as u32;
-                    if !self.open(node) || abs(self.floor[node as usize] as f32 * 0.01 - y) > 1.4 {
+                    if !self.open(node) || abs(self.floor[node as usize] as f32 * 0.01 - y) > within
+                    {
                         continue;
                     }
                     let p = self.node_pos(node);
@@ -163,7 +174,9 @@ impl<'a> Level<'a> {
     pub fn walkable(&self, from: V3, to: V3) -> bool {
         let d = (to - from).flat();
         let length = d.len();
-        let steps = (length / (self.nav.cell * 0.6)) as i32 + 1;
+        // Fine enough that no node the line clips at a corner goes unasked: a soldier takes the
+        // line a few centimetres at a time and stops at a closed node however little of it he meets.
+        let steps = (length / (self.nav.cell * 0.2)) as i32 + 1;
         let Some(mut last) = self.node(from.x, from.z) else {
             return false;
         };

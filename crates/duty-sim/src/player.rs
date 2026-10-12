@@ -165,7 +165,8 @@ impl Player {
         let pressed = input.buttons & !self.held;
         self.held = input.buttons;
         if self.dead {
-            self.body.vel = v3(0.0, self.body.vel.y - GRAVITY * DT, 0.0);
+            // (he falls if he was in the air, and then lies)
+            self.body.vel = v3(0.0, if self.body.grounded { 0.0 } else { self.body.vel.y - GRAVITY * DT }, 0.0);
             self.body.advance(level, DT);
             self.eye = ease(self.eye, 0.35, 6.0, DT);
             return;
