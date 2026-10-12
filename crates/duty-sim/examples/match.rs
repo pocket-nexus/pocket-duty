@@ -62,8 +62,8 @@ fn main() {
             }
         } else {
             // Nobody in sight: he walks on.
-            input.ly = 1.0;
-            input.mx = if t / 240 % 2 == 0 { 0.25 } else { -0.1 };
+            input.my = 1.0;
+            input.lx = if t / 240 % 2 == 0 { 0.25 } else { -0.1 };
         }
         if watch && t % 300 == 0 {
             let p = game.player.body.pos;
