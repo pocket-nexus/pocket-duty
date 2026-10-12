@@ -85,7 +85,7 @@ pub fn render(pack_bytes: &[u8], camera: &Camera, width: usize, height: usize, a
     let clusters: Vec<Cluster> = records(pack_bytes, pack::CLUS);
     let bits = pack::section(pack_bytes, pack::VBIT).unwrap_or(&[]);
     let world = view::World { scene: &scene, chunks: &chunks, clusters: &clusters, cells: &cells, lists: &lists, bits };
-    let guard = Guard::new(&vp, near, 480.0, 272.0, 2048.0);
+    let guard = Guard::new(&vp, near, 480.0, 272.0, 2048.0).boxes_along(&scene.level_x, &scene.level_z);
     let mut draws: Vec<Draw> = Vec::new();
     let counts = view::select(&world, &planes, camera.eye, &guard, &view::Options { nearer: 1.0, everything: all_chunks }, &mut draws);
     // What is solid first, then the glass.
@@ -219,9 +219,7 @@ pub fn render(pack_bytes: &[u8], camera: &Camera, width: usize, height: usize, a
             } else {
                 let column = (around as usize).min(scene.sky_columns as usize - 1);
                 let s = sample(&textures[scene.sky_texture as usize + column], texels, around - column as f32, v.min(1.0));
-                // The top rows meet the zenith's colour.
-                let fade = (v * 12.0).min(1.0);
-                core::array::from_fn(|k| zenith[k] + (s[k] - zenith[k]) * fade)
+                [s[0], s[1], s[2]]
             };
         }
     }

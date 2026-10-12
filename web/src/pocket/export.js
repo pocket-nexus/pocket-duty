@@ -328,9 +328,8 @@ async function exportNav() {
   bundle.add('enclosure', Uint8Array.from(grid.enclosure));
   const cover = new Float32Array(ai.cover.points.length * 8);
   ai.cover.points.forEach((p, i) => {
-    const position = p.position ?? p.pos ?? p;
-    const normal = p.normal ?? p.dir ?? { x: 0, z: 0 };
-    cover.set([position.x, position.y ?? 0, position.z, normal.x ?? 0, normal.z ?? 0, p.height ?? (p.full ? 1 : 0), p.quality ?? p.score ?? 0, p.kind === 'crouch' || p.low ? 1 : 0], i * 8);
+    // Where to stand, which way the thing that covers is, and whether it hides a standing soldier.
+    cover.set([p.x, p.y, p.z, p.dx, p.dz, p.high ? 1 : 0, p.dist ?? 0, 0], i * 8);
   });
   bundle.meta.coverSample = ai.cover.points.slice(0, 2).map((p) => JSON.parse(JSON.stringify(p, (k, value) => (value?.isVector3 ? value.toArray() : value))));
   bundle.add('cover', cover);
@@ -455,6 +454,9 @@ async function exportScene() {
     buildings: world.buildings.map((b) => ({ id: b.spec.id, x: b.spec.x, z: b.spec.z, w: b.spec.w, d: b.spec.d, floors: b.spec.floors, roofY: b.roofY })),
     stats: world.stats,
     gravity: physics.gravity,
+    // The three weapons: every number of the reference's definitions, and the view's climb and drift for
+    // each shot of a burst as its seeded pattern gives them (pitch then yaw, radians).
+    weapons: [...system('weapons').states.entries()].map(([id, state]) => ({ id, def: state.def, pattern: Array.from(state.pattern) })),
   };
   await put('scene.json', JSON.stringify(scene, null, 1));
   log('scene: written');

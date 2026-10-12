@@ -337,7 +337,16 @@ fn light_piece(piece: &Piece, material: &Material, scene: &Scene, lighting: &Lig
             let large = run.iter().filter(|t| t.0).count();
             let indices: Vec<u32> = run.iter().flat_map(|t| t.1.map(|v| v as u32)).collect();
             let bounds = meshopt::compute_cluster_bounds(&indices, &adapter);
+            let mut reach = [0.0f32; 3];
+            for v in &indices {
+                let p = sub(place(*v as u16), bounds.center);
+                for (k, along) in [dot(p, set.level_axes[0]), p[1], dot(p, set.level_axes[1])].into_iter().enumerate() {
+                    reach[k] = reach[k].max(along.abs());
+                }
+            }
             level.clusters.push(Cluster {
+                half: reach.map(|h| (h / bounds.radius.max(1e-6) * 255.0).ceil().clamp(1.0, 255.0) as u8),
+                pad: 0,
                 centre: bounds.center,
                 radius: bounds.radius,
                 axis: if two_sided { [0; 3] } else { bounds.cone_axis_s8 },

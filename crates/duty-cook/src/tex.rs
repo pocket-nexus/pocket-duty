@@ -158,6 +158,20 @@ pub struct Options {
 }
 
 impl Texels {
+    /// Adds a picture that is one colour at 256 strengths: the palette's entry `i` is white as
+    /// opaque as `i`, and a texel is its alpha.
+    pub fn add_ramp(&mut self, image: &Image, flags: u16) -> u32 {
+        self.bytes.resize((self.bytes.len() + 15) & !15, 0);
+        let offset = self.bytes.len() as u32;
+        for i in 0..256u32 {
+            self.bytes.extend([255, 255, 255, i as u8]);
+        }
+        let indices: Vec<u8> = image.data.iter().map(|p| (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect();
+        self.bytes.extend(pocket_psp_ge::swizzle::swizzle_rows(&indices, image.width, image.height).expect("swizzle"));
+        self.records.push(Texture { offset, width: image.width as u16, height: image.height as u16, levels: 1, format: texture::T8, flags });
+        self.records.len() as u32 - 1
+    }
+
     /// Adds a picture and returns its number. Its sides are powers of two.
     pub fn add(&mut self, image: &Image, options: &Options) -> u32 {
         assert!(image.width.is_power_of_two() && image.height.is_power_of_two() && image.width >= 16 && image.height >= 16 && image.width <= 512 && image.height <= 512, "a texture of {} × {}", image.width, image.height);

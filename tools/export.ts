@@ -10,7 +10,6 @@ import { chromium } from "playwright-core";
 
 const ROOT = resolve(import.meta.dir, "..");
 const PORT = 5390;
-const SINK = 5391;
 
 async function up(): Promise<boolean> {
   try {
@@ -52,7 +51,8 @@ export async function exportIr(argv: string[]) {
   const done = new Promise<void>((r) => (finished = r));
   const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "PUT, OPTIONS", "Access-Control-Allow-Headers": "*" };
   const server = Bun.serve({
-    port: SINK,
+    // Any free port: two exports may run at once.
+    port: 0,
     hostname: "127.0.0.1",
     maxRequestBodySize: 1 << 30,
     async fetch(req) {
@@ -71,7 +71,7 @@ export async function exportIr(argv: string[]) {
   });
 
   await serveWeb();
-  const query = new URLSearchParams({ sink: `http://127.0.0.1:${SINK}` });
+  const query = new URLSearchParams({ sink: `http://127.0.0.1:${server.port}` });
   for (const k of ["only", "q"]) if (arg(k)) query.set(k, arg(k)!);
   const browser = await launch();
   const t0 = performance.now();

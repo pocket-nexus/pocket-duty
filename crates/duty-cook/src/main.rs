@@ -10,13 +10,16 @@
 mod audio;
 mod chunks;
 mod collision;
+mod figure_shot;
 mod figures;
+mod fx;
 mod ground;
 mod ir;
 mod light;
 mod lod;
 mod preview;
 mod pvs;
+mod rules;
 mod sky;
 mod tex;
 mod world;
@@ -193,13 +196,52 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     scene.sky_floor = band.floor;
     scene.sky_top = band.top;
     scene.zenith = abgr(band.zenith);
+    // The haze: the reference's fog takes 0.00145 of the light in a metre at its base and thins with
+    // height (`heightScale` 18 m above -2 m), which at the eye's height leaves about 0.0012 a metre:
+    // 11 % at 100 m. The GE's fog is a line between two distances; one from the eye to 880 m is within
+    // a hundredth of that curve out to the level's far side. Its colour is the sky's just above the
+    // horizon, all the way round.
+    {
+        let mut sum = [0.0f32; 3];
+        for i in 0..32 {
+            let a = i as f32 / 32.0 * core::f32::consts::TAU;
+            let c = tone.display(lighting.sky.soft(v3(a.cos() * 0.998, 0.06, a.sin() * 0.998)));
+            for k in 0..3 {
+                sum[k] += c[k] / 32.0;
+            }
+        }
+        scene.haze = [0.0, 880.0];
+        scene.haze_colour = abgr(sum);
+    }
     for (i, image) in band.columns.iter().enumerate() {
         let at = texels.add(image, &tex::Options { levels: 1, flags: texture::CLAMP, dither: true });
         if i == 0 {
             scene.sky_texture = at;
         }
     }
+    scene.fx_texture = texels.add_ramp(&fx::picture(32), texture::CLAMP);
+    scene.level_origin = level.origin;
+    scene.level_x = level.axis_x;
+    scene.level_z = level.axis_z;
+    // What a soldier or a held weapon is lit by: the device shades a figure's own colour by
+    // `sky_colour + sun_colour × facing`, in the display's terms. The two are what the tone table
+    // makes of a mid grey in the open ground's fill, and under the sun on top of it.
+    let grey = 0.18f32;
+    // The open ground's fill is the whole sky. A standing figure's sides see half of it, and the
+    // ground for the rest: the ground's own colour under that sky and, where the sun reaches (about
+    // half of what lies round a figure in these streets), under the sun.
+    let open: [f32; 3] = core::array::from_fn(|k| mean(ambient)[k] / mean(albedo)[k].max(1e-3));
+    let fill: [f32; 3] = core::array::from_fn(|k| 0.5 * open[k] + 0.5 * mean(albedo)[k] * (open[k] + 0.5 * lighting.sky.sun_colour[k] * core::f32::consts::FRAC_1_PI * lighting.sky.sun.y.max(0.0)));
+    let shade = tone.display(core::array::from_fn(|k| grey * fill[k]));
+    let lit = tone.display(core::array::from_fn(|k| grey * (fill[k] + lighting.sky.sun_colour[k] * core::f32::consts::FRAC_1_PI)));
+    let base = grey.powf(1.0 / 2.2);
+    scene.sky_colour = shade.map(|c| c / base);
+    scene.sun_colour = core::array::from_fn(|k| (lit[k] - shade[k]) / base);
     println!("shadow and sky: {} pictures, {} KiB of texels ({:.1} s)", texels.records.len(), texels.bytes.len() / 1024, t4.elapsed().as_secs_f32());
+
+    // ---- what the match runs on
+    let nav = rules::nav(ir, &scene_json, &collision.bvh())?;
+    let weapons = rules::weapons(&scene_json)?;
 
     // ---- the figures and the sounds
     let figure_bytes = figures::cook(ir, profile)?;
@@ -221,6 +263,8 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     writer.add(pack::COLV, &collision.verts);
     writer.add(pack::COLT, &collision.tris);
     writer.add(pack::COLN, &collision.nodes);
+    writer.add(pack::NAVG, &nav);
+    writer.add(pack::WEAP, &weapons);
     if !figure_bytes.is_empty() {
         writer.add(pack::FIGS, &figure_bytes);
     }
@@ -243,6 +287,14 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
         "seconds": t0.elapsed().as_secs_f32(),
     });
     std::fs::write(out.join("receipt.json"), serde_json::to_string_pretty(&receipt).unwrap()).map_err(|e| e.to_string())?;
+    // ---- the level from straight above, for the interface's map: north up, a pixel every `metres`
+    let half = number(&profile["map"]["half"], 80.0);
+    let side = profile["map"]["side"].as_u64().unwrap_or(256) as usize;
+    let (cx, cz) = (level.origin[0], level.origin[2]);
+    let height = 500.0f32;
+    let above = preview::render(&bytes, &preview::Camera { eye: v3(cx, height, cz), yaw: 0.0, pitch: -core::f32::consts::FRAC_PI_2, fov: 2.0 * (half / height).atan().to_degrees() }, side, side, true);
+    above.image.save(&out.join("map.png"))?;
+    std::fs::write(out.join("map.json"), serde_json::to_string_pretty(&json!({ "side": side, "x0": cx - half, "z0": cz - half, "metres": 2.0 * half / side as f32 })).unwrap()).map_err(|e| e.to_string())?;
     println!("pack: {} KiB, sha256 {} ({:.1} s in all)", bytes.len() / 1024, &sha[..12], t0.elapsed().as_secs_f32());
     Ok(())
 }
@@ -288,6 +340,7 @@ fn main() {
     let result = match argv.first().map(String::as_str) {
         Some("cook") => std::fs::read(value("--profile", "profiles/psp30.json")).map_err(|e| format!("profile: {e}")).and_then(|b| serde_json::from_slice::<Value>(&b).map_err(|e| format!("profile: {e}"))).and_then(|profile| cook(&ir, &out, &profile)),
         Some("shot") => shot(&out, &argv),
+        Some("figures") => figure_shot::run(&ir, &out, &value("--profile", "profiles/psp30.json")),
         _ => Err("usage: duty-cook <cook|shot> --in IR --out DIR --profile FILE".into()),
     };
     if let Err(e) = result {
