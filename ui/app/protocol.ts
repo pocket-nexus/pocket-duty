@@ -139,4 +139,7 @@ export type Command =
   /** Say `id` back in `HostState.woke` in this many seconds. The interface's
    *  own timers count its turns, and an idle guest takes none: what must
    *  happen later (a banner leaving) is timed by the renderer. */
-  | { type: "wake"; id: number; seconds: number };
+  | { type: "wake"; id: number; seconds: number }
+  /** A key of a touch screen was tapped during play: the next weapon, the fire
+   *  mode, a reload. The match hears one press of the pad's button for it. */
+  | { type: "tap"; key: "weapon" | "mode" | "reload" };

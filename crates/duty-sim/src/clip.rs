@@ -117,6 +117,12 @@ impl Guard {
         }
     }
 
+    /// The guard of a rasterizer that cuts a triangle at every side of its view (the PICA200):
+    /// everything is its to draw, and `view::select` hands no cluster over to be tested.
+    pub fn open() -> Guard {
+        Guard { rows: [[0.0; 4]; 3], near: 0.0, gx: 0.0, gy: 0.0, reach: [[0.0; 3]; 3], lengths: [0.0; 3], axes: [[0.0; 3]; 3], spread: f32::MAX, clear: 0.0 }
+    }
+
     /// Says which way the boxes `box_safe` is asked about lie: along `x`, up and `z`.
     pub fn boxes_along(mut self, x: &[f32; 3], z: &[f32; 3]) -> Guard {
         use crate::math::abs;

@@ -1,6 +1,6 @@
 # Pocket Duty
 
-[Claude of Duty](https://github.com/mshumer/Claude-of-Duty) on the PSP: the reference's market street, its soldiers and its three weapons at **480 × 272 and 30 frames a second**, through the GE's fixed-function pipeline. Built on [Pocket3D](https://github.com/pocket-nexus/pocketjs) and PocketJS.
+[Claude of Duty](https://github.com/mshumer/Claude-of-Duty) on the PSP and the Nintendo 3DS: the reference's market street, its soldiers and its three weapons at **30 frames a second**, at 480 × 272 through the PSP's fixed-function GE and at 400 × 240 through the 3DS's PICA200. Built on [Pocket3D](https://github.com/pocket-nexus/pocketjs) and PocketJS.
 
 Its page on Pocket Studio, [studio.pocket.nexus/games/duty](https://studio.pocket.nexus/games/duty), has recordings from a console and the package for the PSP.
 
@@ -11,9 +11,11 @@ The reference is a browser game: three.js on WebGL2, every mesh, texture, animat
 | | |
 |---|---|
 | Reference | `web/`, Claude of Duty by mshumer at `d9b237b`, MIT (`web/LICENSE`) |
-| Console | PSP-2000 or later (the pack needs the 52 MB memory setting; a PSP-1000 has 24 MB) |
-| State | A whole match on a console: **29.9 frames a second, 55 frames late of 18 375** (see "What is measured") |
+| PSP | PSP-2000 or later (the pack needs the 52 MB memory setting; a PSP-1000 has 24 MB). A whole match on a console: **29.9 frames a second, 55 frames late of 18 375** |
+| Nintendo 3DS | Old 3DS or New 3DS with the Homebrew Launcher, one `.3dsx`. A whole match on an Old 3DS: **29.8 frames a second, 48 frames late of 17 954** |
 | Browser tab | 480 × 272 in the PSP display's 16-bit colours, wgpu over WebGPU, the PSP's pack. Chrome 154 on an M3 Max: **60 frames a second, under 0.4 ms a frame** |
+
+The consoles and the browser are measured in "What is measured".
 
 ## Build and run
 
@@ -29,6 +31,21 @@ bun tools/psp.ts emu               # the same EBOOT in PPSSPPHeadless: a frame a
 bun tools/psp.ts package           # dist/psp/PSP/GAME/PocketDuty for a Memory Stick
 ```
 
+For the 3DS, with Docker (the build runs in PocketJS's pinned devkitARM container) and Azahar for `emu`:
+
+```
+bun tools/duty.ts cook --profile n3ds30   # .pocket-build/duty/n3ds30/duty.pack (28.3 MB)
+bun tools/n3ds.ts build            # n3ds/ + ui/ + the pack → dist/3ds/pocket-duty.3dsx (31.1 MB)
+bun tools/n3ds.ts emu              # the same .3dsx in Azahar: both screens of a frame and its status
+bun tools/n3ds.ts install          # send it to a paired console over the LAN and start it
+bun tools/n3ds.ts status           # frame time, triangles, the match, memory
+bun tools/n3ds.ts bench            # a match played by the bench's player, 60 s of frame timings
+bun tools/n3ds.ts capture          # both screens
+bun tools/release.ts               # dist/release: the PSP's zip and the 3DS's .3dsx, with release.json
+```
+
+`install`, `status`, `bench` and `capture` reach a console that runs a Pocket Runtime program with the paired wire (this one, once it is on the card) and whose pairing key is under `vendor/pocketjs/.pocket/3ds/devices/`. By hand: copy `pocket-duty.3dsx` to `sdmc:/3ds/` and start it from the Homebrew Launcher.
+
 In a browser tab (the `wasm32-unknown-unknown` target and `wasm-bindgen` 0.2.126; Chrome for `check`):
 
 ```
@@ -38,7 +55,7 @@ bun tools/wgpu.ts check [--dist]   # the page in Chrome with WebGPU: the title, 
 bun tools/wgpu.ts dist             # the directory a static host serves → .pocket-build/wgpu/dist
 ```
 
-Over PSPLINK, with a console on the cable:
+Over PSPLINK, with a PSP on the cable:
 
 ```
 bun tools/psp.ts serve             # usbhostfs_pc, when none is running
@@ -67,6 +84,8 @@ bun tools/psp.ts capture
 | SELECT | Fire mode |
 | START | Menu |
 
+On a 3DS the Circle Pad is the stick, A B X Y look, and the +Control Pad, L, R, SELECT and START do what the PSP's do. A New 3DS's C-Stick looks too. The lower screen shows the level from above with the player and the soldiers he has seen, and four keys for a thumb or a stylus: next weapon, fire mode, magazine, menu.
+
 A setting swaps the stick and the four buttons. Aim assist slows the look while a soldier in sight is under the crosshair, and raising the sights turns the view onto the nearest soldier in front of it; it is on by default and a setting turns it off.
 
 ## The match
@@ -87,14 +106,15 @@ Left out: leaning, lying down, and the reference's ragdolls (a soldier who falls
 
 ```
 web/                 the reference, unmodified, plus the export page (web/src/pocket, web/export.html)
-tools/               duty.ts (export, cook, shot), ui.ts (the interface), psp.ts (build, emu, run, bench), wgpu.ts (the browser)
-profiles/psp30.json  what the PSP's pack is: cell size, levels of detail, texture sizes, budgets
+tools/               duty.ts (export, cook, shot), ui.ts (the interface), psp.ts and n3ds.ts (build, emu, run, bench), wgpu.ts (the browser), release.ts
+profiles/            psp30.json, n3ds30.json: what a console's pack is (cell size, levels of detail, texture format, budgets)
 crates/duty-pack     the pack's records
 crates/duty-cook     DutyIR → pack
-crates/duty-sim      the match, and the choice of what a frame draws (no_std)
+crates/duty-sim      the match, the choice of what a frame draws, the posing and the choice of sounds (no_std)
 crates/duty-interface  the flow and the protocol to the interface
 ui/                  the interface: one PocketJS app
 psp/                 the PSP program
+n3ds/                the 3DS program: a C host and PICA200 renderer (src/), the match as a Rust static library (core/)
 wgpu/                the browser's program: a wgpu renderer of the PSP's pack, the shell around the match, the page
 vendor/pocketjs      PocketJS and Pocket3D
 ```
@@ -139,9 +159,22 @@ What the console's parts cost decides how the frame is written (`probe=1` in `bo
 - A word of the list `sceGu` writes is **a bus cycle of its own**. The world's commands are written through the cache into runs that the list calls.
 - The GE takes **0.7 ms for a thousand triangles** it is sent, drawn or not.
 
+### The frame on a 3DS
+
+`profiles/n3ds30.json` is the PSP's profile with two differences: textures are **RGB565, RGBA5551 and A8 in the PICA200's tiled order** in place of palettes, and the large-triangle records are left out. The pack is **28.3 MB**. `n3ds/core` runs the same `duty-sim` as the PSP and hands `n3ds/src/render.c` the frame's draws.
+
+- **One depth pass.** The depth buffer is 24 bits, so the near and far cells share it. The held weapon takes the nearest 8% of the range with a frustum of its own.
+- **No guard band.** The rasterizer cuts a triangle at every side of the view. The core selects with `Guard::open()` and no triangle is cut on the CPU.
+- **The ground in one draw.** The first combiner multiplies the texel by the vertex's colour; for ground a second multiplies by the shadow picture, read through the second texture unit at the vertex's place. The PSP draws the ground twice for that.
+- **Haze in the combiners.** The vertex program writes what the haze leaves into the colour's alpha and the last combiner mixes the haze's colour in by it.
+- **Soldiers and the weapon** are moved by four bones and lit in a vertex program.
+- **A budget of 36 000 triangles**, each counted once. In the measured match the street stays at its full levels of detail.
+- **A draw is written as GPU commands.** `C3D_DrawElements` looks at all 96 uniform registers on every call: **16 microseconds a draw on an Old 3DS**, 9.4 ms for a view's draws. `render.c` writes a cell's matrix, the buffer offset and the draw registers itself and has citro3d write its state only after a texture or combiner change: **7 microseconds a draw**, 2.8 ms for the same view.
+- **Sound** is mixed by `duty-sim` at 22 050 Hz and played through `ndsp`. `ndsp` needs the DSP firmware on the card (`sdmc:/3ds/dspfirm.cdc`); without it the program plays through CSND.
+
 ### The interface
 
-Title, settings, the match's instruments, the menu and the results are one PocketJS app (`ui/`) drawn over the street. The PSP program draws no text. `crates/duty-interface` sends the match's state as JSON lines and takes commands back (`ui/app/protocol.ts`).
+Title, settings, the match's instruments, the menu and the results are one PocketJS app (`ui/`) drawn over the street. Neither console's program draws text. On a 3DS the same app has a second surface, the lower screen (`ui/app/presentations/dual.tsx`); the upper screen keeps the PSP's layout. `crates/duty-interface` sends the match's state as JSON lines and takes commands back (`ui/app/protocol.ts`).
 
 ```
 bun tools/ui.ts preview    # pictures of every screen, .pocket-build/ui/preview/
@@ -166,6 +199,8 @@ Host: `cargo test --workspace` (duty-sim 43 tests, duty-cook 7). `cargo run --re
 
 Emulator (`bun tools/psp.ts emu`, PPSSPPHeadless with its software renderer): the title, a match, the menu, settings, a fall and the results draw as intended. The emulator's times count instructions: they miss what the floating point unit, the data cache and the bus cost a console, which is most of a frame.
 
+Emulator (`bun tools/n3ds.ts emu`, Azahar with its software PICA200): a frame of a match on both screens, with no read or write of unmapped memory in the log.
+
 Console (a PSP with 64 MB, over PSPLINK, 2026-10-13):
 
 | | |
@@ -179,6 +214,19 @@ Console (a PSP with 64 MB, over PSPLINK, 2026-10-13):
 
 The first run on the console took 35.7 ms a frame with one frame in six late. What changed is in "The frame" above.
 
+Console (an Old 3DS over the paired LAN wire, 2026-10-13):
+
+| | |
+|---|---|
+| `bench --seconds 600`: a whole match played by the bench's player, who falls 3 times and leads 21 to 3 when the clock ends | **17 954 frames, 48 late (0.27%)**, 29.81 a second, the longest 117 ms |
+| A frame of that match, on average | CPU 22.9 ms: match 3.9 ms, choosing the draws 8.4 ms, drawing 8.5 ms, the interface 1.8 ms (a turn is 5.9 ms, 9 a second). The PICA200 13.5 ms, 16.2 ms at most |
+| What a frame sends | 32 700 triangles in 858 draws on average, 34 900 and 990 at most; the levels of detail at 0.96 of their distances on average, 0.8 at least |
+| The street's draws in the start view (383 draws) | 2.8 ms as GPU commands; 9.4 ms through `C3D_DrawElements` |
+| Memory | 19.6 MB of the 31.3 MB heap after the match, 18.7 MB at its start; 5.2 MB of linear memory free at both |
+| Captures from the console | title, match, menu, settings, a fall and the results on both screens; a soldier at 3 m, a kill with its notice; the four keys of the lower screen change the weapon, the fire mode, the magazine and open the menu |
+
+Sound on that console plays through CSND: its card has no `dspfirm.cdc`. The status reports the mixer running; nobody has listened to it.
+
 Browser (`bun tools/wgpu.ts check`, Chrome 154 headless with WebGPU on an M3 Max, 2026-10-13): the page goes from the title card through a match played by keys to its results, with the menu, a fall and the settings on the way; **60 frames a second, under 0.4 ms a frame** with up to 37 200 triangles of the street; the tab's frame of a held eye is the build machine's own; and that frame is 2.2 of 255 a colour from the compiler's drawing of the same view. No other browser, no phone and no other GPU has drawn it, and nobody has played it by hand or listened to it.
 
 ## Releases
@@ -186,16 +234,16 @@ Browser (`bun tools/wgpu.ts check`, Chrome 154 headless with WebGPU on an M3 Max
 `bun tools/release.ts` builds the package Pocket Studio takes from the checked-out commit and writes it to `dist/release/`, which Git ignores:
 
 ```
-bun tools/release.ts --targets psp [--out dist/release] [--no-build] [--no-cook] [--upload]
+bun tools/release.ts [--targets psp,3ds] [--out dist/release] [--no-build] [--no-cook] [--upload]
 ```
 
 | Target | File | Holds |
 | --- | --- | --- |
 | `psp` | `pocket-duty-<version>-psp.zip` | `PSP/GAME/PocketDuty/` for the root of a Memory Stick: `EBOOT.PBP`, `duty.pack`, and the interface's `duty.js` and `duty.pak` |
+| `3ds` | `pocket-duty-<version>.3dsx` | The program for `sdmc:/3ds/`, with `duty.pack` and the interface in its ROMFS. **31.1 MB**; the paired wire installs at most 32 MiB |
 
 - It cooks the profile's pack from the export with this commit's compiler (`--no-cook` takes the pack under `.pocket-build/duty/psp30` as it is), builds the program and writes the zip. **The zip's bytes follow from its entries alone**: fixed dates, fixed modes, entries in the order of their names.
 - `release.json` beside it records the commit, the version (`ui/pocket.json`), the file's size and SHA-256, the export and the pack it was built from, and the toolchains.
-- The tool also names a `3ds` target; its program is not in this repository.
 
 **Packages go to Pocket Studio and to no page on GitHub.** `--upload` runs `pocket-studio package <file> --target <id> --version <version>` for each package from the repository's root, where `pocket-studio register --title "Pocket Duty"` wrote `.pocket-studio.json` (ignored by Git). `POCKET_STUDIO_CLI` names the command when it is not on `PATH`.
 

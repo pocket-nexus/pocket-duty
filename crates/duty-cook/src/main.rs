@@ -68,7 +68,7 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     println!("levels: {} pieces of {} × {} cells, triangles {:?} ({:.1} s)", pieces.len(), nx, nz, per_level, t1.elapsed().as_secs_f32());
 
     // ---- the pictures
-    let mut texels = tex::Texels::default();
+    let mut texels = tex::Texels { pica: profile["textures"]["format"].as_str() == Some("pica"), ..Default::default() };
     let side_default = profile["textures"]["side"].as_u64().unwrap_or(128) as usize;
     let levels = profile["textures"]["levels"].as_u64().unwrap_or(4) as usize;
     let mut family_texture: Vec<(String, u16)> = Vec::new();
@@ -171,7 +171,37 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     // ---- what can be seen from where
     let t5 = Instant::now();
     let collision = collision::Collision::open(ir)?;
-    let sight = pvs::compute(&scene, &built.chunks, &built.clusters, &built.vertices, &built.indices, &collision, &pvs::Settings { rays: std::env::var("DUTY_RAYS").ok().and_then(|n| n.parse().ok()).unwrap_or(profile["sight"]["rays"].as_u64().unwrap_or(400_000) as usize), near: number(&profile["sight"]["near"], 3.0) });
+    let sight_settings = pvs::Settings { rays: std::env::var("DUTY_RAYS").ok().and_then(|n| n.parse().ok()).unwrap_or(profile["sight"]["rays"].as_u64().unwrap_or(400_000) as usize), near: number(&profile["sight"]["near"], 3.0) };
+    // The sight pass is nine tenths of a cook and follows from the geometry alone: two profiles
+    // with the same chunks (the PSP's and the 3DS's) share one, kept beside the packs under the
+    // hash of everything it reads.
+    let sight_key = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(pack::bytes_of(&[scene.min, scene.max]));
+        h.update(scene.cell.to_le_bytes());
+        h.update(pack::bytes_of(&built.chunks));
+        h.update(pack::bytes_of(&built.clusters));
+        h.update(pack::bytes_of(&built.vertices));
+        h.update(pack::bytes_of(&built.indices));
+        h.update(pack::bytes_of(&collision.verts));
+        h.update(pack::bytes_of(&collision.tris));
+        h.update((sight_settings.rays as u64).to_le_bytes());
+        h.update(sight_settings.near.to_le_bytes());
+        h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect::<String>()
+    };
+    let sight_file = out.parent().unwrap_or(out).join(format!("sight-{sight_key}.bin"));
+    let sight = match pvs::Sight::read(&sight_file) {
+        Some(sight) => {
+            println!("sight: taken from {}", sight_file.display());
+            sight
+        }
+        None => {
+            let sight = pvs::compute(&scene, &built.chunks, &built.clusters, &built.vertices, &built.indices, &collision, &sight_settings);
+            sight.write(&sight_file).map_err(|e| format!("{}: {e}", sight_file.display()))?;
+            sight
+        }
+    };
     println!("sight: {} cells an eye can be in; a cell sees {} of {} chunks and {} of {} clusters on average ({:.1} s); collision {} triangles, {} nodes", sight.open, sight.chunks, built.chunks.len(), sight.clusters, built.clusters.len(), t5.elapsed().as_secs_f32(), collision.tris.len(), collision.nodes.len());
 
     // ---- the ground's shadow and the sky
@@ -258,8 +288,11 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     writer.add(pack::WVTX, &built.vertices);
     writer.add(pack::WIDX, &built.indices);
     writer.add(pack::CLUS, &built.clusters);
-    writer.add(pack::LTRI, &built.larges);
-    writer.add(pack::LTRO, &built.larges_at);
+    // A device whose rasterizer cuts a triangle at every side of the view asks nothing of the large ones.
+    if profile["clip"]["records"].as_bool() != Some(false) {
+        writer.add(pack::LTRI, &built.larges);
+        writer.add(pack::LTRO, &built.larges_at);
+    }
     writer.add(pack::VCEL, &sight.cells);
     writer.add(pack::VLST, &sight.lists);
     writer.add(pack::VBIT, &sight.bits);

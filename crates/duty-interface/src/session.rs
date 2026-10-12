@@ -66,6 +66,9 @@ pub struct Session {
     lines: u32,
     banner: (u32, &'static str, &'static str),
     prev_held: u32,
+    /// The soldier's buttons (`btn`) a touch key pressed since the last frame of the match: held
+    /// through that frame's steps and let go after it, which the match reads as one press.
+    tapped: u32,
     frames: u32,
     /// The world's x and z at the map picture's top left corner.
     pub map: (f32, f32),
@@ -82,7 +85,7 @@ impl Default for Session {
 
 impl Session {
     pub fn new() -> Session {
-        Session { mode: Mode::Title, idle: false, stats: false, look: 1, invert: false, assist: true, layout: 0, skill: 1, listed: None, seconds: 0.0, wakes: Vec::new(), feed: Vec::new(), lines: 0, banner: (0, "", ""), prev_held: u32::MAX, frames: 0, map: (0.0, 0.0), focal: 213.0 }
+        Session { mode: Mode::Title, idle: false, stats: false, look: 1, invert: false, assist: true, layout: 0, skill: 1, listed: None, seconds: 0.0, wakes: Vec::new(), feed: Vec::new(), lines: 0, banner: (0, "", ""), prev_held: u32::MAX, tapped: 0, frames: 0, map: (0.0, 0.0), focal: 213.0 }
     }
 
     /// Hands the settings to a match.
@@ -100,6 +103,18 @@ impl Session {
         self.feed.clear();
         self.banner = (self.banner.0, "", "");
         self.mode = Mode::Play;
+    }
+
+    /// Notes a touch key's tap for the match's next frame.
+    fn tap(&mut self, key: &str) {
+        if self.mode == Mode::Play {
+            self.tapped |= match key {
+                "weapon" => btn::NEXT,
+                "mode" => btn::MODE,
+                "reload" => btn::RELOAD,
+                _ => 0,
+            };
+        }
     }
 
     /// Does what the interface asked. A command that is the device's own comes back.
@@ -135,6 +150,9 @@ impl Session {
                     self.wakes.push((id, self.seconds + max(seconds, 0.0)));
                 }
             }
+            // A tap during play is one press of the pad's button for the same thing; anywhere else
+            // it is nothing, so a match does not resume with a press waiting.
+            Command::Tap(key) => self.tap(&key),
             other => return Some(other),
         }
         None
@@ -204,7 +222,8 @@ impl Session {
         if !matches!(self.mode, Mode::Play | Mode::Down) {
             return;
         }
-        let input = self.input(pad);
+        let mut input = self.input(pad);
+        input.buttons |= core::mem::take(&mut self.tapped);
         for _ in 0..ticks {
             game.step(&input);
             for i in 0..duty_sim::event::Events::ROOM {
@@ -368,5 +387,28 @@ impl Pace {
             return true;
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tapped_key_is_the_soldiers_button_for_one_frame_of_play() {
+        let mut session = Session::new();
+        // On the title a tap is nothing.
+        session.tap("weapon");
+        assert_eq!(session.tapped, 0);
+        session.mode = Mode::Play;
+        session.tap("weapon");
+        session.tap("reload");
+        session.tap("grenade");
+        assert_eq!(session.tapped, btn::NEXT | btn::RELOAD);
+        // The frame takes them, as `run` does before its steps, and the next has none.
+        assert_eq!(core::mem::take(&mut session.tapped), btn::NEXT | btn::RELOAD);
+        session.tap("mode");
+        assert_eq!(core::mem::take(&mut session.tapped), btn::MODE);
+        assert_eq!(session.tapped, 0);
     }
 }

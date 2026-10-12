@@ -472,6 +472,32 @@ export function MatchBar(props: { host: Host; width: number }) {
 }
 
 /**
+ * The match in a column, for a screen of its own beside the map: what the
+ * clock has left, and the player's kills and deaths (the player is one side
+ * and the soldiers the other, so the two scores are those).
+ */
+export function Board(props: { host: Host; width: number }) {
+  let time: Node, us: Node, them: Node;
+  let left = NaN, ours = NaN, theirs = NaN;
+  watch(props.host, (t) => {
+    if (t[T.clock] !== left) hotText(time, clock((left = t[T.clock]) || 0));
+    if (t[T.us] !== ours) hotText(us, Math.round((ours = t[T.us])) || 0);
+    if (t[T.them] !== theirs) hotText(them, Math.round((theirs = t[T.them])) || 0);
+  });
+  return (
+    <View class="relative" style={{ width: props.width, height: 84, bgColor: PLATE }}>
+      <Text class="absolute text-xs font-bold tracking-wide" style={{ insetL: 8, insetT: 4, textColor: DIM }}>TDM</Text>
+      <Text ref={time} class="absolute text-xl font-bold" style={{ insetL: 8, insetT: 16, width: props.width - 10, height: 24, textColor: INK }}>0:00</Text>
+      <View class="absolute" style={{ insetL: 0, insetT: 42, width: props.width, height: 1, bgColor: HAIRLINE }} />
+      <Text class="absolute text-xs font-bold" style={{ insetL: 8, insetT: 47, textColor: DIM }}>KILLS</Text>
+      <Text ref={us} class="absolute text-sm font-bold" style={{ insetL: props.width - 20, insetT: 45, width: 19, height: 18, textColor: FRIEND }}>0</Text>
+      <Text class="absolute text-xs font-bold" style={{ insetL: 8, insetT: 66, textColor: DIM }}>DEATHS</Text>
+      <Text ref={them} class="absolute text-sm font-bold" style={{ insetL: props.width - 20, insetT: 64, width: 19, height: 18, textColor: ENEMY }}>0</Text>
+    </View>
+  );
+}
+
+/**
  * The level from above, north up: one picture that does not move, the
  * player as a dot with a tick toward where they face, and the enemies the
  * renderer lists. Positions arrive in decimetres from the picture's top left
@@ -530,9 +556,9 @@ export function LevelMap(props: { host: Host; size: number }) {
  * head. The player's own name is amber. Four lines stay built; a line that
  * arrives or leaves writes their texts, a few times a minute.
  */
-export function KillFeed(props: { match: Match; width: number }) {
+export function KillFeed(props: { match: Match; width: number; left?: boolean }) {
   return (
-    <View class="flex-col items-end" style={{ width: props.width }}>
+    <View class={props.left ? "flex-col items-start" : "flex-col items-end"} style={{ width: props.width }}>
       <For each={[0, 1, 2, 3]}>
         {(index) => {
           const line = () => props.match.feed()[index];
@@ -809,7 +835,7 @@ export function Facts(props: { rows: Row[]; width: number; columns: number; rowH
 }
 
 /** What the game is and where it comes from, over what the buttons do. */
-export function About(props: { match: Match; width: number }) {
+export function About(props: { match: Match; width: number; rowHeight?: number }) {
   return (
     <View class="flex-col" style={{ width: props.width }}>
       <View class="flex-col" style={{ paddingL: 14, paddingT: 8, paddingB: 8 }}>
@@ -817,7 +843,7 @@ export function About(props: { match: Match; width: number }) {
       </View>
       <Heading text="CONTROLS" width={props.width} height={24} />
       <View style={{ height: 8 }} />
-      <Facts rows={props.match.controls} width={props.width} columns={2} rowHeight={17} labelWidth={92} />
+      <Facts rows={props.match.controls} width={props.width} columns={2} rowHeight={props.rowHeight ?? 17} labelWidth={props.width < 440 ? 82 : 92} />
       <View style={{ height: 8 }} />
     </View>
   );

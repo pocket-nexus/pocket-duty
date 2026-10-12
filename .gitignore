@@ -2,6 +2,7 @@
 /target/
 /psp/target/
 /wgpu/target/
+/n3ds/core/target/
 /dist/
 node_modules/
 /web/dist/

@@ -122,8 +122,14 @@ pub struct Scene {
 }
 
 pub mod texture {
-    /// 8-bit indices into a palette of 256 32-bit colours; texels swizzled.
+    /// 8-bit indices into a palette of 256 32-bit colours; texels swizzled (the PSP's GE).
     pub const T8: u8 = 0;
+    /// The PICA200's own layouts, without a palette: tiles of 8 × 8 texels, the picture's top row
+    /// of tiles first, a tile's texels in Z order. 16 bits a texel, red in the high five
+    /// (`RGB565`), or five bits each and one of alpha (`RGBA5551`); or 8 bits of alpha (`A8`).
+    pub const RGB565: u8 = 1;
+    pub const RGBA5551: u8 = 2;
+    pub const A8: u8 = 3;
     /// Palette entry 0 is clear: the device tests alpha.
     pub const CUTOUT: u16 = 1;
     /// Coordinates outside 0…1 take the edge's texel.
@@ -132,8 +138,8 @@ pub mod texture {
     pub const PALETTE_BYTES: usize = 1024;
 }
 
-/// A picture: at `offset` of the texel section, 16-byte aligned, a palette, then each level from
-/// the largest, each 16-byte aligned.
+/// A picture: at `offset` of the texel section, 16-byte aligned, a palette when its format has
+/// one, then each level from the largest, each 16-byte aligned.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Texture {
@@ -146,13 +152,51 @@ pub struct Texture {
 }
 
 impl Texture {
+    /// Bytes of a texel, and of what stands before the first level.
+    fn layout(&self) -> (usize, usize) {
+        match self.format {
+            texture::T8 => (1, texture::PALETTE_BYTES),
+            texture::A8 => (1, 0),
+            _ => (2, 0),
+        }
+    }
+
     /// Bytes of level `l`, and where it starts from `offset`.
     pub fn level(&self, l: u32) -> (usize, usize) {
-        let mut at = texture::PALETTE_BYTES;
+        let (texel, mut at) = self.layout();
         for k in 0..l {
-            at += (((self.width as usize >> k) * (self.height as usize >> k)) + 15) & !15;
+            at += (((self.width as usize >> k) * (self.height as usize >> k)) * texel + 15) & !15;
         }
-        (at, (self.width as usize >> l) * (self.height as usize >> l))
+        (at, (self.width as usize >> l) * (self.height as usize >> l) * texel)
+    }
+
+    /// The texel at (`x`, `y`) of level `l`, counted from the picture's top left: red, green, blue
+    /// and alpha of 255. `texels` is the pack's texel section.
+    pub fn texel(&self, texels: &[u8], l: u32, x: usize, y: usize) -> [u8; 4] {
+        let (at, _) = self.level(l);
+        let base = self.offset as usize;
+        let width = (self.width as usize >> l).max(1);
+        if self.format == texture::T8 {
+            // Swizzled: blocks of 16 bytes by 8 rows.
+            let index = texels[base + at + ((y / 8) * (width / 16) + x / 16) * 128 + (y % 8) * 16 + x % 16] as usize;
+            let c = &texels[base + index * 4..base + index * 4 + 4];
+            return [c[0], c[1], c[2], c[3]];
+        }
+        // Tiles of 8 × 8, a tile's texels in Z order: the bits of x and y in turn, x the lower.
+        let spread = |v: usize| (v & 1) | (v & 2) << 1 | (v & 4) << 2;
+        let place = ((y / 8) * (width / 8) + x / 8) * 64 + (spread(x % 8) | spread(y % 8) << 1);
+        let wide = |v: u16, bits: u32| (v as u32 * 255 / ((1 << bits) - 1)) as u8;
+        match self.format {
+            texture::A8 => [255, 255, 255, texels[base + at + place]],
+            format => {
+                let v = u16::from_le_bytes([texels[base + at + place * 2], texels[base + at + place * 2 + 1]]);
+                if format == texture::RGB565 {
+                    [wide(v >> 11, 5), wide(v >> 5 & 63, 6), wide(v & 31, 5), 255]
+                } else {
+                    [wide(v >> 11, 5), wide(v >> 6 & 31, 5), wide(v >> 1 & 31, 5), (v & 1) as u8 * 255]
+                }
+            }
+        }
     }
 }
 

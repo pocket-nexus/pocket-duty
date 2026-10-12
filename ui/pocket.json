@@ -15,6 +15,16 @@
     "entry": "app/main.tsx",
     "output": "duty",
     "framework": "solid",
-    "viewport": { "logical": [480, 272], "presentation": "integer-fit" }
+    "viewport": { "logical": [480, 272], "presentation": "integer-fit" },
+    "presentations": [
+      {
+        "id": "dual-screen",
+        "entry": "app/main-dual.tsx",
+        "modality": { "screens": 2, "touch": "auxiliary" },
+        "viewport": { "fixed": { "logical": [400, 240], "presentation": "native" } },
+        "surfaces": { "auxiliary": { "fixed": { "logical": [320, 240], "presentation": "native" } } },
+        "capabilities": { "requires": ["display.auxiliary", "input.touch.auxiliary"], "enhances": ["input.analog.right"] }
+      }
+    ]
   }
 }

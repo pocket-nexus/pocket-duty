@@ -79,6 +79,8 @@ pub struct Draw {
 pub struct Counts {
     pub draws: u32,
     pub triangles: u32,
+    /// The same triangles with each counted once: what a renderer that draws the ground in one pass sends.
+    pub once: u32,
     /// Chunks the cell lists, and of them the ones in the view; of those, the ones that reach
     /// across a side of the view, and the ones not wholly inside the guard band.
     pub listed: u32,
@@ -249,6 +251,7 @@ pub fn select(
             }
             counts.drawn += 1;
             counts.triangles += cl.count as u32 / 3 * passes;
+            counts.once += cl.count as u32 / 3;
             let cut =
                 guarded && cl.large > 0 && !guard.cluster_safe(centre, cl.radius, || cl.half());
             if cut {
