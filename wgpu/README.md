@@ -10,7 +10,7 @@ The game of the PSP build, drawn with [wgpu](https://wgpu.rs) 25: over WebGPU in
 | `src/pack.rs` | The pack read over HTTP with its progress, its sections as records, and a picture's palette indices as texels. |
 | `src/web.rs`, `page/` | The tab: what the page calls, and the page itself. |
 | `src/bin/shot.rs` | Frames on this machine's GPU: one as a PNG, or a run as rows of RGBA for an encoder; two pictures compared. |
-| `vendor/pocketjs/devices/web/pocket-web-wgpu` | PocketJS's browser kernel: what is not this game's. The device and the screens, the overlay pass, ranges of a pack, and the page itself: the title card first and the frame loop, the interface's guest in its realm, and **the Pocket3D player** (the bar, the PSP's shell with its keys as the controls, the way to Pocket Studio). |
+| `vendor/pocketjs/devices/web/pocket-web-wgpu` | PocketJS's browser kernel: what is not this game's. The device and the screens, the overlay pass, ranges of a pack, and the page itself: the title card first and the frame loop, the interface's guest in its realm, and **the Pocket3D player** (the bar, the PSP's shell with its keys as the controls, the dock with Download and Remix). |
 | `tools/wgpu.ts` | build, serve, dist, shot, check. |
 
 ```
@@ -38,7 +38,7 @@ The source has two forms:
 - **The pack's file**, on a server that answers byte ranges. `serve` does this.
 - **The pack cut into pieces of one size** with a manifest that lists them (`<meta name="pocket-pack">` names a `.json`). A read fetches the pieces it lies in, whole and with plain requests, all at once. `dist` writes this form.
 
-`bun tools/wgpu.ts dist` writes `.pocket-build/wgpu/dist` for a host that limits a file to 32 MiB and keeps a file ten minutes in a browser's cache (Pocket Studio's site deployments): `index.html` and `icon.png`; everything else of the site under `app/<build>/`, named by a hash of its contents; `pack/<hash>.json` and the pieces, each named by its own hash. The page alone is asked for again at every visit. With pieces of 2 MiB the directory is **53 files and 33.1 MB**: 15 pieces and their manifest (30.5 MB), 35 files of the site (2.6 MB), the page and the icon. `dist` refuses a directory the host would (a file over 32 MiB, more than 4 000 files or 1 GiB, a top-level `play/` or `runtime/`). A checkout that `pocket-studio register` has linked (`.pocket-studio.json`, which Git ignores) gets the project's id and the Studio's origin written into the page (`<meta name="pocket-app">`, `<meta name="pocket-studio">`): the player's door then leads to the game's card. `pocket-studio site .pocket-build/wgpu/dist` uploads the directory.
+`bun tools/wgpu.ts dist` writes `.pocket-build/wgpu/dist` for a host that limits a file to 32 MiB and keeps a file ten minutes in a browser's cache (Pocket Studio's site deployments): `index.html` and `icon.png`; everything else of the site under `app/<build>/`, named by a hash of its contents; `pack/<hash>.json` and the pieces, each named by its own hash. The page alone is asked for again at every visit. With pieces of 2 MiB the directory is **53 files and 33.1 MB**: 15 pieces and their manifest (30.5 MB), 35 files of the site (2.6 MB), the page and the icon. `dist` refuses a directory the host would (a file over 32 MiB, more than 4 000 files or 1 GiB, a top-level `play/` or `runtime/`). A checkout that `pocket-studio register` has linked (`.pocket-studio.json`, which Git ignores) gets the project's id and the Studio's origin written into the page (`<meta name="pocket-app">`, `<meta name="pocket-studio">`), for a host that answers no `/app.json`. The game's host on Pocket Studio answers one, and **the player's dock takes its links from it: Download to `/games/duty?get`, Remix to `/games/duty?remix`**. `pocket-studio site .pocket-build/wgpu/dist` uploads the directory.
 
 ## The interface
 
@@ -82,7 +82,7 @@ The page's handheld is the PSP, and what its buttons do is the game's (`Shape::p
 
 - **One depth range of 24 bits.** The GE's depth is 16 bits, so the PSP draws the cells within 12 m of the eye and the rest in two passes with a range each, and the effects once in each. Here one range holds the street from 0.15 m to 420 m.
 - **No triangle is cut on the CPU.** The GE drops a triangle with a corner outside its guard band, and the PSP tests and cuts the large ones. This rasterizer clips.
-- **The levels of detail stay at the pack's distances** (9 m and 28 m). The PSP holds a frame to 22 500 triangles and 24.5 ms and brings the levels in when a view is over either, down to 0.35 of their distances. A heavy view here draws 36 000 triangles.
+- **The levels of detail stay at the pack's distances** (9 m and 28 m). The PSP holds a frame to 22 500 triangles and 24.5 ms and brings the levels in when a view is over either, down to 0.35 of their distances. A heavy view here draws 37 000 triangles.
 - **Every tick of the match is drawn**: 60 frames a second on a display that refreshes 60 times. The PSP draws every second tick.
 - **The frame is brought to 16 bits once, at its end.** The GE dithers every write and blends the glass, the shadow and the effects with what the 16-bit buffer holds. Here they blend at eight bits a colour and the dither is one pass over the finished frame.
 - **The interface is drawn at eight bits a colour** over the dithered frame. The PSP draws it into the 16-bit buffer.
@@ -98,9 +98,9 @@ Chrome 154 (headless, WebGPU on the Apple GPU, Metal 3) on an M3 Max, the pack `
 
 | | |
 | --- | --- |
-| Frames a second over 5 s, a match played by the bench's player with the interface over it | 59.96 to 60.16 in four runs |
-| A frame's cost without the display, over 300 frames | 0.35 to 0.37 ms |
-| What a frame draws in those matches | 564 to 1 003 draws, 21 800 to 36 200 triangles of the street, 3 680 to 4 380 of soldiers and the weapon |
+| Frames a second over 5 s, a match played by the bench's player with the interface over it | 59.96 to 60.16 in six runs |
+| A frame's cost without the display, over 300 frames | 0.34 to 0.37 ms |
+| What a frame draws in those matches | 564 to 1 029 draws, 21 800 to 37 200 triangles of the street, 3 680 to 4 380 of soldiers and the weapon |
 | A turn of the guest; turns taken a second | 0.06 to 0.09 ms; 26 to 30 of 30 |
 | A redraw of the interface's picture; redraws a second | 0.54 to 0.60 ms; 16 to 21 |
 | The tab's frame of a held eye against this machine's own (`duty-shot`, Metal) | the same picture: no colour differs |

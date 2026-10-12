@@ -8,7 +8,10 @@ import { ROOT } from "./wgpu.ts";
 const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
 
 test("the page's handhelds are shapes of the renderer and devices the interface compiles for", () => {
-  const shown = [...read("wgpu/page/main.js").matchAll(/^\s+id: "([a-z0-9]+)",$/gm)].map((m) => m[1]!);
+  const devices = read("wgpu/page/main.js").match(/^const DEVICES = \[(.*)\];$/m)![1]!;
+  const shown = [...devices.matchAll(/\bid: "([a-z0-9]+)"/g)].map((m) => m[1]!);
+  // (the player says one sentence for every game where a page of an earlier one gave a note a device)
+  expect(devices).not.toContain("note");
   const shapes = [...read("wgpu/src/app.rs").matchAll(/Shape \{ name: "([a-z0-9]+)"/g)].map((m) => m[1]!);
   const built = read("tools/wgpu.ts").match(/const SHOWN = \[([^\]]*)\]/)![1]!.split(",").map((name) => name.trim().replaceAll('"', ""));
   expect(shown).toEqual(["psp"]);
