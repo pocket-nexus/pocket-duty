@@ -109,6 +109,13 @@ pub struct Scene {
     pub zenith: u32,
     /// Where a match starts: the feet, and the yaw.
     pub start: [f32; 4],
+    /// The effects' picture: four tiles in a square, each a shape in white whose palette entry
+    /// `i` is as opaque as `i`: a soft dot, a puff, a flash, a round's hole.
+    pub fx_texture: u32,
+    /// The level's own origin and its horizontal axes in the world (the street runs along the second).
+    pub level_origin: [f32; 3],
+    pub level_x: [f32; 3],
+    pub level_z: [f32; 3],
 }
 
 pub mod texture {
@@ -209,6 +216,18 @@ pub struct Cluster {
     pub count: u16,
     /// Triangles at the start of the run with an edge long enough to leave the guard band.
     pub large: u16,
+    /// Half the sides of a box about `centre` that holds its triangles, each over 255 of `radius`.
+    /// The box lies along the level's own axes (`Scene::level_x`, up, `Scene::level_z`), as the
+    /// walls do: a wall's box is thin where its sphere is not.
+    pub half: [u8; 3],
+    pub pad: u8,
+}
+
+impl Cluster {
+    pub fn half(&self) -> [f32; 3] {
+        let s = self.radius * (1.0 / 255.0);
+        [self.half[0] as f32 * s, self.half[1] as f32 * s, self.half[2] as f32 * s]
+    }
 }
 
 /// What one draw holds: the triangles of one texture in one cell.
@@ -333,7 +352,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<WorldVertex>(), 12);
         assert_eq!(core::mem::size_of::<Texture>(), 12);
         assert_eq!(core::mem::size_of::<Lod>(), 20);
-        assert_eq!(core::mem::size_of::<Cluster>(), 28);
+        assert_eq!(core::mem::size_of::<Cluster>(), 32);
         assert_eq!(core::mem::size_of::<Chunk>(), 108);
         assert_eq!(core::mem::size_of::<Scene>() % 4, 0);
     }

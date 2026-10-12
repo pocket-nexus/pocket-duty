@@ -45,6 +45,8 @@ pub struct Hit {
     pub tag: u32,
     /// The triangle's unit normal, turned to face the ray's origin.
     pub n: V3,
+    /// The ray met the triangle from behind: it was inside what the triangle closes.
+    pub back: bool,
 }
 
 /// Triangles in a leaf at most.
@@ -87,7 +89,16 @@ pub fn build(verts: &[[f32; 3]], tris: &mut [Tri]) -> Vec<Node> {
             (lo, hi)
         })
         .collect();
-    let centre: Vec<[f32; 3]> = boxes.iter().map(|(lo, hi)| [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5]).collect();
+    let centre: Vec<[f32; 3]> = boxes
+        .iter()
+        .map(|(lo, hi)| {
+            [
+                (lo[0] + hi[0]) * 0.5,
+                (lo[1] + hi[1]) * 0.5,
+                (lo[2] + hi[2]) * 0.5,
+            ]
+        })
+        .collect();
     let mut order: Vec<u32> = (0..n as u32).collect();
     let mut nodes: Vec<Node> = Vec::with_capacity(n / 2 + 2);
     nodes.push(Node::default());
@@ -175,7 +186,8 @@ pub fn build(verts: &[[f32; 3]], tris: &mut [Tri]) -> Vec<Node> {
         let slice = &mut order[first..first + count];
         let (mut i, mut j) = (0usize, count);
         while i < j {
-            let b = (((centre[slice[i] as usize][axis] - clo[axis]) * scale) as usize).min(BINS - 1);
+            let b =
+                (((centre[slice[i] as usize][axis] - clo[axis]) * scale) as usize).min(BINS - 1);
             if b < plane {
                 i += 1;
             } else {
@@ -230,7 +242,10 @@ impl<'a> Bvh<'a> {
         let a = self.verts[t.v[0] as usize];
         let b = self.verts[t.v[1] as usize];
         let c = self.verts[t.v[2] as usize];
-        let (e1, e2) = (v3(b[0] - a[0], b[1] - a[1], b[2] - a[2]), v3(c[0] - a[0], c[1] - a[1], c[2] - a[2]));
+        let (e1, e2) = (
+            v3(b[0] - a[0], b[1] - a[1], b[2] - a[2]),
+            v3(c[0] - a[0], c[1] - a[1], c[2] - a[2]),
+        );
         let p = d.cross(e2);
         let det = e1.dot(p);
         if det > -1e-9 && det < 1e-9 {
@@ -284,7 +299,10 @@ impl<'a> Bvh<'a> {
             } else if top + 2 <= stack.len() {
                 // The nearer child is looked at first: what it holds shortens the ray for the other.
                 let (l, r) = (node.first, node.first + 1);
-                let (tl, tr) = (enter(&self.nodes[l as usize], &oa, &inv, best), enter(&self.nodes[r as usize], &oa, &inv, best));
+                let (tl, tr) = (
+                    enter(&self.nodes[l as usize], &oa, &inv, best),
+                    enter(&self.nodes[r as usize], &oa, &inv, best),
+                );
                 match (tl, tr) {
                     (Some(a), Some(b)) => {
                         let (first, second) = if a <= b { (l, r) } else { (r, l) };
@@ -307,12 +325,23 @@ impl<'a> Bvh<'a> {
         if found == u32::MAX {
             return None;
         }
-        let (a, b, c) = (self.corner(found, 0), self.corner(found, 1), self.corner(found, 2));
+        let (a, b, c) = (
+            self.corner(found, 0),
+            self.corner(found, 1),
+            self.corner(found, 2),
+        );
         let mut n = (b - a).cross(c - a).norm_or(V3::UP);
-        if n.dot(d) > 0.0 {
+        let back = n.dot(d) > 0.0;
+        if back {
             n = -n;
         }
-        Some(Hit { t: best, tri: found, tag: self.tris[found as usize].tag, n })
+        Some(Hit {
+            t: best,
+            tri: found,
+            tag: self.tris[found as usize].tag,
+            n,
+            back,
+        })
     }
 
     /// Whether anything stands between `o` and the point `far` along `d`.
@@ -358,7 +387,13 @@ impl<'a> Bvh<'a> {
         while top > 0 {
             top -= 1;
             let node = &self.nodes[stack[top] as usize];
-            if node.min[0] > max[0] || node.max[0] < min[0] || node.min[1] > max[1] || node.max[1] < min[1] || node.min[2] > max[2] || node.max[2] < min[2] {
+            if node.min[0] > max[0]
+                || node.max[0] < min[0]
+                || node.min[1] > max[1]
+                || node.max[1] < min[1]
+                || node.min[2] > max[2]
+                || node.max[2] < min[2]
+            {
                 continue;
             }
             if node.count > 0 {
@@ -426,7 +461,11 @@ pub fn nearest_on_segments(p1: V3, q1: V3, p2: V3, q2: V3) -> (V3, V3) {
         } else {
             let b = d1.dot(d2);
             let denom = a * e - b * b;
-            let mut s0 = if denom > 1e-12 { clamp((b * f - c * e) / denom, 0.0, 1.0) } else { 0.0 };
+            let mut s0 = if denom > 1e-12 {
+                clamp((b * f - c * e) / denom, 0.0, 1.0)
+            } else {
+                0.0
+            };
             let mut t0 = (b * s0 + f) / e;
             if t0 < 0.0 {
                 t0 = 0.0;
@@ -479,8 +518,34 @@ mod tests {
 
     /// A floor of two triangles at y = 0 and a wall of two at x = 2.
     fn room() -> (Vec<[f32; 3]>, Vec<Tri>) {
-        let verts = vec![[-4.0, 0.0, -4.0], [4.0, 0.0, -4.0], [4.0, 0.0, 4.0], [-4.0, 0.0, 4.0], [2.0, 0.0, -4.0], [2.0, 3.0, -4.0], [2.0, 3.0, 4.0], [2.0, 0.0, 4.0]];
-        let tris = vec![Tri { v: [0, 2, 1], tag: 1 }, Tri { v: [0, 3, 2], tag: 1 }, Tri { v: [4, 5, 6], tag: 2 }, Tri { v: [4, 6, 7], tag: 2 }];
+        let verts = vec![
+            [-4.0, 0.0, -4.0],
+            [4.0, 0.0, -4.0],
+            [4.0, 0.0, 4.0],
+            [-4.0, 0.0, 4.0],
+            [2.0, 0.0, -4.0],
+            [2.0, 3.0, -4.0],
+            [2.0, 3.0, 4.0],
+            [2.0, 0.0, 4.0],
+        ];
+        let tris = vec![
+            Tri {
+                v: [0, 2, 1],
+                tag: 1,
+            },
+            Tri {
+                v: [0, 3, 2],
+                tag: 1,
+            },
+            Tri {
+                v: [4, 5, 6],
+                tag: 2,
+            },
+            Tri {
+                v: [4, 6, 7],
+                tag: 2,
+            },
+        ];
         (verts, tris)
     }
 
@@ -488,13 +553,25 @@ mod tests {
     fn a_ray_finds_the_nearest_triangle() {
         let (verts, mut tris) = room();
         let nodes = build(&verts, &mut tris);
-        let bvh = Bvh { nodes: &nodes, tris: &tris, verts: &verts };
-        let down = bvh.raycast(v3(0.0, 2.0, 0.0), v3(0.0, -1.0, 0.0), 10.0, 0).unwrap();
+        let bvh = Bvh {
+            nodes: &nodes,
+            tris: &tris,
+            verts: &verts,
+        };
+        let down = bvh
+            .raycast(v3(0.0, 2.0, 0.0), v3(0.0, -1.0, 0.0), 10.0, 0)
+            .unwrap();
         assert!((down.t - 2.0).abs() < 1e-4 && down.tag == 1 && down.n.y > 0.99);
-        let side = bvh.raycast(v3(0.0, 1.0, 0.0), v3(1.0, 0.0, 0.0), 10.0, 0).unwrap();
+        let side = bvh
+            .raycast(v3(0.0, 1.0, 0.0), v3(1.0, 0.0, 0.0), 10.0, 0)
+            .unwrap();
         assert!((side.t - 2.0).abs() < 1e-4 && side.tag == 2 && side.n.x < -0.99);
-        assert!(bvh.raycast(v3(0.0, 1.0, 0.0), v3(-1.0, 0.0, 0.0), 10.0, 0).is_none());
-        assert!(bvh.raycast(v3(0.0, 1.0, 0.0), v3(1.0, 0.0, 0.0), 1.5, 0).is_none());
+        assert!(bvh
+            .raycast(v3(0.0, 1.0, 0.0), v3(-1.0, 0.0, 0.0), 10.0, 0)
+            .is_none());
+        assert!(bvh
+            .raycast(v3(0.0, 1.0, 0.0), v3(1.0, 0.0, 0.0), 1.5, 0)
+            .is_none());
         assert!(bvh.occluded(v3(0.0, 1.0, 0.0), v3(1.0, 0.0, 0.0), 3.0, 0));
         assert!(!bvh.occluded(v3(0.0, 1.0, 0.0), v3(1.0, 0.0, 0.0), 3.0, 2));
     }
@@ -506,17 +583,40 @@ mod tests {
         let mut tris = Vec::new();
         for i in 0..40 {
             for j in 0..40 {
-                let (x, z, y) = (i as f32 * 1.3, j as f32 * 1.1, ((i * 7 + j * 13) % 11) as f32 * 0.4);
+                let (x, z, y) = (
+                    i as f32 * 1.3,
+                    j as f32 * 1.1,
+                    ((i * 7 + j * 13) % 11) as f32 * 0.4,
+                );
                 let base = verts.len() as u32;
-                verts.extend_from_slice(&[[x, y, z], [x + 1.0, y + 0.3, z], [x + 1.0, y, z + 1.0], [x, y - 0.2, z + 1.0]]);
-                tris.push(Tri { v: [base, base + 1, base + 2], tag: 0 });
-                tris.push(Tri { v: [base, base + 2, base + 3], tag: 0 });
+                verts.extend_from_slice(&[
+                    [x, y, z],
+                    [x + 1.0, y + 0.3, z],
+                    [x + 1.0, y, z + 1.0],
+                    [x, y - 0.2, z + 1.0],
+                ]);
+                tris.push(Tri {
+                    v: [base, base + 1, base + 2],
+                    tag: 0,
+                });
+                tris.push(Tri {
+                    v: [base, base + 2, base + 3],
+                    tag: 0,
+                });
             }
         }
         let plain = tris.clone();
         let nodes = build(&verts, &mut tris);
-        let bvh = Bvh { nodes: &nodes, tris: &tris, verts: &verts };
-        let all = Bvh { nodes: &[], tris: &plain, verts: &verts };
+        let bvh = Bvh {
+            nodes: &nodes,
+            tris: &tris,
+            verts: &verts,
+        };
+        let all = Bvh {
+            nodes: &[],
+            tris: &plain,
+            verts: &verts,
+        };
         let mut seed = 12345u32;
         let mut next = || {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -526,7 +626,9 @@ mod tests {
         for _ in 0..400 {
             let o = v3(next() * 52.0, 8.0 + next() * 4.0, next() * 44.0);
             let d = v3(next() - 0.5, -0.3 - next(), next() - 0.5).norm();
-            let slow = (0..plain.len()).filter_map(|i| all.triangle(i, o, d)).fold(f32::MAX, f32::min);
+            let slow = (0..plain.len())
+                .filter_map(|i| all.triangle(i, o, d))
+                .fold(f32::MAX, f32::min);
             match bvh.raycast(o, d, 100.0, 0) {
                 Some(hit) => {
                     hits += 1;

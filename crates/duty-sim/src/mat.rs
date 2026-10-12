@@ -4,13 +4,18 @@ use crate::math::{cos, sin, sqrt, tan, V3};
 
 pub type Mat4 = [f32; 16];
 
-pub const IDENTITY: Mat4 = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+pub const IDENTITY: Mat4 = [
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+];
 
 pub fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
     let mut o = [0.0f32; 16];
     for r in 0..4 {
         for c in 0..4 {
-            o[r * 4 + c] = a[r * 4] * b[c] + a[r * 4 + 1] * b[4 + c] + a[r * 4 + 2] * b[8 + c] + a[r * 4 + 3] * b[12 + c];
+            o[r * 4 + c] = a[r * 4] * b[c]
+                + a[r * 4 + 1] * b[4 + c]
+                + a[r * 4 + 2] * b[8 + c]
+                + a[r * 4 + 3] * b[12 + c];
         }
     }
     o
@@ -20,23 +25,78 @@ pub fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
 pub fn perspective(fov_y_deg: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     let f = 1.0 / tan(fov_y_deg * (core::f32::consts::PI / 180.0) * 0.5);
     let a = far / (near - far);
-    [f / aspect, 0.0, 0.0, 0.0, 0.0, f, 0.0, 0.0, 0.0, 0.0, a, a * near, 0.0, 0.0, -1.0, 0.0]
+    [
+        f / aspect,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        f,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        a,
+        a * near,
+        0.0,
+        0.0,
+        -1.0,
+        0.0,
+    ]
 }
 
 /// The same frustum with clip depth from `-w` at `near` to `w` at `far` (the PSP's GE).
 pub fn perspective_gl(fov_y_deg: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     let f = 1.0 / tan(fov_y_deg * (core::f32::consts::PI / 180.0) * 0.5);
-    [f / aspect, 0.0, 0.0, 0.0, 0.0, f, 0.0, 0.0, 0.0, 0.0, (far + near) / (near - far), 2.0 * far * near / (near - far), 0.0, 0.0, -1.0, 0.0]
+    [
+        f / aspect,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        f,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        (far + near) / (near - far),
+        2.0 * far * near / (near - far),
+        0.0,
+        0.0,
+        -1.0,
+        0.0,
+    ]
 }
 
 /// View matrix for an eye looking along the unit vector `look`, rolled about it.
 pub fn view(eye: V3, look: V3, roll: f32) -> Mat4 {
-    let right = look.cross(V3::UP).norm_or(V3 { x: 1.0, y: 0.0, z: 0.0 });
+    let right = look.cross(V3::UP).norm_or(V3 {
+        x: 1.0,
+        y: 0.0,
+        z: 0.0,
+    });
     let up = right.cross(look);
     let (s, c) = (sin(roll), cos(roll));
     let r = right * c + up * s;
     let u = up * c - right * s;
-    [r.x, r.y, r.z, -r.dot(eye), u.x, u.y, u.z, -u.dot(eye), -look.x, -look.y, -look.z, look.dot(eye), 0.0, 0.0, 0.0, 1.0]
+    [
+        r.x,
+        r.y,
+        r.z,
+        -r.dot(eye),
+        u.x,
+        u.y,
+        u.z,
+        -u.dot(eye),
+        -look.x,
+        -look.y,
+        -look.z,
+        look.dot(eye),
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
 }
 
 /// `m × T(t) × S(s)`: folds a mesh's dequantization into a matrix.
@@ -101,6 +161,41 @@ pub fn sphere_visible(planes: &[[f32; 4]; 6], centre: &[f32; 3], radius: f32) ->
     true
 }
 
+/// How far a box reaches along each plane's normal for each unit of its half sides, the box
+/// lying along `x`, up and `z`: `reach[plane][side]`.
+pub fn box_reach(planes: &[[f32; 4]; 6], x: &[f32; 3], z: &[f32; 3]) -> [[f32; 3]; 6] {
+    core::array::from_fn(|i| {
+        let p = &planes[i];
+        [
+            crate::math::abs(p[0] * x[0] + p[1] * x[1] + p[2] * x[2]),
+            crate::math::abs(p[1]),
+            crate::math::abs(p[0] * z[0] + p[1] * z[1] + p[2] * z[2]),
+        ]
+    })
+}
+
+/// Whether a box about `centre` with sides twice `half`, inside a sphere of `radius` about the
+/// same point, touches the frustum; `planes` have unit normals and `reach` is `box_reach` of
+/// them. The box is asked only about the planes the sphere reaches across.
+pub fn cluster_visible(
+    planes: &[[f32; 4]; 6],
+    reach: &[[f32; 3]; 6],
+    centre: &[f32; 3],
+    radius: f32,
+    half: &[f32; 3],
+) -> bool {
+    for (p, r) in planes.iter().zip(reach) {
+        let d = p[0] * centre[0] + p[1] * centre[1] + p[2] * centre[2] + p[3];
+        if d < -radius {
+            return false;
+        }
+        if d < 0.0 && d + r[0] * half[0] + r[1] * half[1] + r[2] * half[2] < 0.0 {
+            return false;
+        }
+    }
+    true
+}
+
 /// Whether a box touches the frustum (conservative).
 pub fn visible(planes: &[[f32; 4]; 6], min: &[f32; 3], max: &[f32; 3]) -> bool {
     for p in planes {
@@ -116,8 +211,20 @@ pub fn visible(planes: &[[f32; 4]; 6], min: &[f32; 3], max: &[f32; 3]) -> bool {
 
 /// Distance from `p` to a box (0 inside).
 pub fn box_distance(p: V3, min: &[f32; 3], max: &[f32; 3]) -> f32 {
-    let d = |v: f32, lo: f32, hi: f32| if v < lo { lo - v } else if v > hi { v - hi } else { 0.0 };
-    let (x, y, z) = (d(p.x, min[0], max[0]), d(p.y, min[1], max[1]), d(p.z, min[2], max[2]));
+    let d = |v: f32, lo: f32, hi: f32| {
+        if v < lo {
+            lo - v
+        } else if v > hi {
+            v - hi
+        } else {
+            0.0
+        }
+    };
+    let (x, y, z) = (
+        d(p.x, min[0], max[0]),
+        d(p.y, min[1], max[1]),
+        d(p.z, min[2], max[2]),
+    );
     sqrt(x * x + y * y + z * z)
 }
 

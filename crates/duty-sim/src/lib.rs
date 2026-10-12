@@ -6,13 +6,29 @@
 //! weapons, the soldiers and the match.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![cfg_attr(feature = "hw-sqrt", feature(core_intrinsics), allow(internal_features))]
+#![cfg_attr(
+    feature = "hw-sqrt",
+    feature(core_intrinsics),
+    allow(internal_features)
+)]
 
 extern crate alloc;
 
+pub mod body;
 pub mod bvh;
 pub mod clip;
+pub mod event;
 pub mod fastmath;
+pub mod fx;
+pub mod game;
+pub mod level;
 pub mod mat;
 pub mod math;
+pub mod mix;
+pub mod nav;
+pub mod player;
+pub mod rng;
+pub mod soldier;
+pub mod tune;
 pub mod view;
+pub mod weapon;

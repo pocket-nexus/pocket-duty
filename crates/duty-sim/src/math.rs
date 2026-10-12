@@ -192,7 +192,11 @@ impl V3 {
     }
     #[inline]
     pub fn cross(self, o: V3) -> V3 {
-        v3(self.y * o.z - self.z * o.y, self.z * o.x - self.x * o.z, self.x * o.y - self.y * o.x)
+        v3(
+            self.y * o.z - self.z * o.y,
+            self.z * o.x - self.x * o.z,
+            self.x * o.y - self.y * o.x,
+        )
     }
     #[inline]
     pub fn len2(self) -> f32 {
@@ -306,26 +310,46 @@ pub struct M3 {
 }
 
 impl M3 {
-    pub const ID: M3 = M3 { x: v3(1.0, 0.0, 0.0), y: v3(0.0, 1.0, 0.0), z: v3(0.0, 0.0, 1.0) };
+    pub const ID: M3 = M3 {
+        x: v3(1.0, 0.0, 0.0),
+        y: v3(0.0, 1.0, 0.0),
+        z: v3(0.0, 0.0, 1.0),
+    };
 
     pub fn rot_x(a: f32) -> M3 {
         let (s, c) = (sin(a), cos(a));
-        M3 { x: v3(1.0, 0.0, 0.0), y: v3(0.0, c, s), z: v3(0.0, -s, c) }
+        M3 {
+            x: v3(1.0, 0.0, 0.0),
+            y: v3(0.0, c, s),
+            z: v3(0.0, -s, c),
+        }
     }
     pub fn rot_y(a: f32) -> M3 {
         let (s, c) = (sin(a), cos(a));
-        M3 { x: v3(c, 0.0, -s), y: v3(0.0, 1.0, 0.0), z: v3(s, 0.0, c) }
+        M3 {
+            x: v3(c, 0.0, -s),
+            y: v3(0.0, 1.0, 0.0),
+            z: v3(s, 0.0, c),
+        }
     }
     pub fn rot_z(a: f32) -> M3 {
         let (s, c) = (sin(a), cos(a));
-        M3 { x: v3(c, s, 0.0), y: v3(-s, c, 0.0), z: v3(0.0, 0.0, 1.0) }
+        M3 {
+            x: v3(c, s, 0.0),
+            y: v3(-s, c, 0.0),
+            z: v3(0.0, 0.0, 1.0),
+        }
     }
     #[inline]
     pub fn apply(&self, v: V3) -> V3 {
         self.x * v.x + self.y * v.y + self.z * v.z
     }
     pub fn mul(&self, o: &M3) -> M3 {
-        M3 { x: self.apply(o.x), y: self.apply(o.y), z: self.apply(o.z) }
+        M3 {
+            x: self.apply(o.x),
+            y: self.apply(o.y),
+            z: self.apply(o.z),
+        }
     }
     /// Basis with `-z` along `fwd` and `y` as close to `up` as possible.
     pub fn look(fwd: V3, up: V3) -> M3 {
@@ -345,7 +369,10 @@ pub struct M34 {
 }
 
 impl M34 {
-    pub const ID: M34 = M34 { r: M3::ID, t: V3::ZERO };
+    pub const ID: M34 = M34 {
+        r: M3::ID,
+        t: V3::ZERO,
+    };
     #[inline]
     pub fn new(r: M3, t: V3) -> M34 {
         M34 { r, t }
@@ -356,16 +383,27 @@ impl M34 {
     }
     /// `self * o`: `o` is applied first.
     pub fn mul(&self, o: &M34) -> M34 {
-        M34 { r: self.r.mul(&o.r), t: self.apply(o.t) }
+        M34 {
+            r: self.r.mul(&o.r),
+            t: self.apply(o.t),
+        }
     }
 }
 
 impl M3 {
     pub fn transpose(&self) -> M3 {
-        M3 { x: v3(self.x.x, self.y.x, self.z.x), y: v3(self.x.y, self.y.y, self.z.y), z: v3(self.x.z, self.y.z, self.z.z) }
+        M3 {
+            x: v3(self.x.x, self.y.x, self.z.x),
+            y: v3(self.x.y, self.y.y, self.z.y),
+            z: v3(self.x.z, self.y.z, self.z.z),
+        }
     }
     pub fn scaled(&self, s: f32) -> M3 {
-        M3 { x: self.x * s, y: self.y * s, z: self.z * s }
+        M3 {
+            x: self.x * s,
+            y: self.y * s,
+            z: self.z * s,
+        }
     }
 }
 
@@ -373,7 +411,10 @@ impl M34 {
     /// Inverse of a rigid transform (rotation and translation, no scale).
     pub fn inverse_rigid(&self) -> M34 {
         let r = self.r.transpose();
-        M34 { r, t: -r.apply(self.t) }
+        M34 {
+            r,
+            t: -r.apply(self.t),
+        }
     }
 }
 
@@ -387,26 +428,48 @@ pub struct Quat {
 }
 
 impl Quat {
-    pub const ID: Quat = Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 };
+    pub const ID: Quat = Quat {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        w: 1.0,
+    };
 
     pub fn axis_angle(axis: V3, a: f32) -> Quat {
         let (s, c) = (sin(a * 0.5), cos(a * 0.5));
-        Quat { x: axis.x * s, y: axis.y * s, z: axis.z * s, w: c }
+        Quat {
+            x: axis.x * s,
+            y: axis.y * s,
+            z: axis.z * s,
+            w: c,
+        }
     }
     /// `Rz(z) · Rx(x) · Ry(y)`: spread, then swing, then twist.
     pub fn euler(x: f32, y: f32, z: f32) -> Quat {
-        Quat::axis_angle(v3(0.0, 0.0, 1.0), z).mul(Quat::axis_angle(v3(1.0, 0.0, 0.0), x)).mul(Quat::axis_angle(v3(0.0, 1.0, 0.0), y))
+        Quat::axis_angle(v3(0.0, 0.0, 1.0), z)
+            .mul(Quat::axis_angle(v3(1.0, 0.0, 0.0), x))
+            .mul(Quat::axis_angle(v3(0.0, 1.0, 0.0), y))
     }
     /// The shortest rotation that takes unit `a` to unit `b`.
     pub fn from_to(a: V3, b: V3) -> Quat {
         let d = a.dot(b);
         if d < -0.9999 {
             let axis = a.cross(v3(1.0, 0.0, 0.0));
-            let axis = if axis.len2() < 1e-6 { a.cross(v3(0.0, 0.0, 1.0)) } else { axis };
+            let axis = if axis.len2() < 1e-6 {
+                a.cross(v3(0.0, 0.0, 1.0))
+            } else {
+                axis
+            };
             return Quat::axis_angle(axis.norm(), PI);
         }
         let c = a.cross(b);
-        Quat { x: c.x, y: c.y, z: c.z, w: 1.0 + d }.normalized()
+        Quat {
+            x: c.x,
+            y: c.y,
+            z: c.z,
+            w: 1.0 + d,
+        }
+        .normalized()
     }
     #[allow(clippy::should_implement_trait)]
     pub fn mul(self, o: Quat) -> Quat {
@@ -423,26 +486,58 @@ impl Quat {
             return Quat::ID;
         }
         let k = 1.0 / l;
-        Quat { x: self.x * k, y: self.y * k, z: self.z * k, w: self.w * k }
+        Quat {
+            x: self.x * k,
+            y: self.y * k,
+            z: self.z * k,
+            w: self.w * k,
+        }
     }
     /// Normalized linear blend along the shorter arc.
     pub fn nlerp(self, o: Quat, t: f32) -> Quat {
-        let s = if self.x * o.x + self.y * o.y + self.z * o.z + self.w * o.w < 0.0 { -1.0 } else { 1.0 };
-        Quat { x: lerp(self.x, o.x * s, t), y: lerp(self.y, o.y * s, t), z: lerp(self.z, o.z * s, t), w: lerp(self.w, o.w * s, t) }.normalized()
+        let s = if self.x * o.x + self.y * o.y + self.z * o.z + self.w * o.w < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
+        Quat {
+            x: lerp(self.x, o.x * s, t),
+            y: lerp(self.y, o.y * s, t),
+            z: lerp(self.z, o.z * s, t),
+            w: lerp(self.w, o.w * s, t),
+        }
+        .normalized()
     }
     pub fn m3(self) -> M3 {
         let (x, y, z, w) = (self.x, self.y, self.z, self.w);
         M3 {
-            x: v3(1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w)),
-            y: v3(2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w)),
-            z: v3(2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y)),
+            x: v3(
+                1.0 - 2.0 * (y * y + z * z),
+                2.0 * (x * y + z * w),
+                2.0 * (x * z - y * w),
+            ),
+            y: v3(
+                2.0 * (x * y - z * w),
+                1.0 - 2.0 * (x * x + z * z),
+                2.0 * (y * z + x * w),
+            ),
+            z: v3(
+                2.0 * (x * z + y * w),
+                2.0 * (y * z - x * w),
+                1.0 - 2.0 * (x * x + y * y),
+            ),
         }
     }
     pub fn rotate(self, v: V3) -> V3 {
         self.m3().apply(v)
     }
     pub fn conj(self) -> Quat {
-        Quat { x: -self.x, y: -self.y, z: -self.z, w: self.w }
+        Quat {
+            x: -self.x,
+            y: -self.y,
+            z: -self.z,
+            w: self.w,
+        }
     }
 }
 
@@ -469,16 +564,36 @@ impl M3 {
         let trace = m00 + m11 + m22;
         let q = if trace > 0.0 {
             let s = sqrt(trace + 1.0) * 2.0;
-            Quat { w: 0.25 * s, x: (self.y.z - self.z.y) / s, y: (self.z.x - self.x.z) / s, z: (self.x.y - self.y.x) / s }
+            Quat {
+                w: 0.25 * s,
+                x: (self.y.z - self.z.y) / s,
+                y: (self.z.x - self.x.z) / s,
+                z: (self.x.y - self.y.x) / s,
+            }
         } else if m00 > m11 && m00 > m22 {
             let s = sqrt(1.0 + m00 - m11 - m22) * 2.0;
-            Quat { w: (self.y.z - self.z.y) / s, x: 0.25 * s, y: (self.y.x + self.x.y) / s, z: (self.z.x + self.x.z) / s }
+            Quat {
+                w: (self.y.z - self.z.y) / s,
+                x: 0.25 * s,
+                y: (self.y.x + self.x.y) / s,
+                z: (self.z.x + self.x.z) / s,
+            }
         } else if m11 > m22 {
             let s = sqrt(1.0 + m11 - m00 - m22) * 2.0;
-            Quat { w: (self.z.x - self.x.z) / s, x: (self.y.x + self.x.y) / s, y: 0.25 * s, z: (self.z.y + self.y.z) / s }
+            Quat {
+                w: (self.z.x - self.x.z) / s,
+                x: (self.y.x + self.x.y) / s,
+                y: 0.25 * s,
+                z: (self.z.y + self.y.z) / s,
+            }
         } else {
             let s = sqrt(1.0 + m22 - m00 - m11) * 2.0;
-            Quat { w: (self.x.y - self.y.x) / s, x: (self.z.x + self.x.z) / s, y: (self.z.y + self.y.z) / s, z: 0.25 * s }
+            Quat {
+                w: (self.x.y - self.y.x) / s,
+                x: (self.z.x + self.x.z) / s,
+                y: (self.z.y + self.y.z) / s,
+                z: 0.25 * s,
+            }
         };
         q.normalized()
     }
