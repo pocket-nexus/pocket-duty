@@ -576,6 +576,12 @@ impl<'a> Game<'a> {
                 continue;
             }
             let mut s = self.soldiers[i];
+            // (who is on a ladder as he steps, where the place has one)
+            let climbers = if self.level.links.is_empty() {
+                0
+            } else {
+                (0..MAX).filter(|k| *k != i && self.soldiers[*k].on_ladder()).fold(0u16, |bits, k| bits | 1 << k)
+            };
             let around = Around {
                 level: &self.level,
                 target,
@@ -585,6 +591,7 @@ impl<'a> Game<'a> {
                 tick: self.tick,
                 time: self.time,
                 others: &others,
+                climbers,
             };
             let act = s.step(
                 i as u8,

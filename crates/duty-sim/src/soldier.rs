@@ -81,6 +81,8 @@ pub struct Around<'a> {
     pub time: f32,
     /// Every soldier's place, whether he stands, and the cover he holds.
     pub others: &'a [(V3, bool, Option<u16>); MAX],
+    /// A bit a soldier: he is on a ladder.
+    pub climbers: u16,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -100,6 +102,8 @@ pub struct Soldier {
     pub peeking: bool,
     /// On a ladder this step: the match carries him along it, and he does not fire.
     pub climbing: bool,
+    /// The ladder he is on.
+    ladder: Option<Carry>,
     // ---- what he knows
     awareness: f32,
     alertness: f32,
@@ -151,6 +155,17 @@ pub struct Soldier {
     pub shown: f32,
 }
 
+/// A soldier's way along a ladder: its foot, where he steps off at its top, whether he goes up,
+/// the node by its far end, where the carry ends, and the points of his way it covers.
+#[derive(Clone, Copy, Debug)]
+struct Carry {
+    foot: V3,
+    top: V3,
+    up: bool,
+    land: Option<V3>,
+    points: u8,
+}
+
 impl Soldier {
     pub const NONE: Soldier = Soldier {
         used: false,
@@ -165,6 +180,7 @@ impl Soldier {
         crouched: false,
         peeking: false,
         climbing: false,
+        ladder: None,
         awareness: 0.0,
         alertness: 0.0,
         has_target: false,
@@ -376,6 +392,7 @@ impl Soldier {
         let threat = self.last_known;
         let reach = if self.cover.is_some() { 12.0 } else { 26.0 };
         let mut best: Option<(f32, u16)> = None;
+        let storeys = !a.level.over.is_empty() || !a.level.links.is_empty();
         for (i, c) in a.level.cover.iter().enumerate() {
             let p = v3(c.pos[0], c.pos[1], c.pos[2]);
             let travel2 = (p - self.pos).flat().len2();
@@ -385,6 +402,10 @@ impl Soldier {
             let to = (threat - p).flat();
             let far = to.len();
             if !(2.5..=40.0).contains(&far) {
+                continue;
+            }
+            // (this game's: where floors stand over floors, cover on another storey is not near)
+            if storeys && abs(p.y - self.pos.y) > 2.0 {
                 continue;
             }
             let shelter = (to.x * c.dir[0] + to.z * c.dir[1]) / far;
@@ -459,6 +480,11 @@ impl Soldier {
         self.asked = false;
     }
 
+    /// Whether the match carries him along a ladder.
+    pub fn on_ladder(&self) -> bool {
+        self.ladder.is_some()
+    }
+
     /// The pathfinder's answer to his last question.
     /// For a bench's printout: whether he is on his way, waits for one, the way's points and the
     /// one he heads for, the seconds he has not moved, and his goal.
@@ -492,42 +518,30 @@ impl Soldier {
         }
         let last = self.path_at as usize + 1 >= self.path.len as usize;
         let point = self.path.points[self.path_at as usize];
-        if self.path.climbs >> self.path_at & 1 != 0 && self.path_at > 0 {
-            // A ladder, which this game adds: from the point before it he is carried to the
-            // ladder's line, along it, and at its top onto the floor.
-            let near = self.path.points[self.path_at as usize - 1];
-            let (foot, up) = if point.y > near.y { (near, true) } else { (point, false) };
-            let level = if up { self.pos.y >= point.y - 0.02 } else { self.pos.y > near.y - 0.02 };
-            let aim = if up && level { point } else { foot };
-            let off = (aim - self.pos).flat();
-            let distance = off.len();
-            self.climbing = true;
-            self.speed = ease(self.speed, LADDER_SPEED, 7.0, DT);
-            if distance > 0.08 && (level || up) {
-                // (along the floor: to the ladder's foot, or between its top and its line)
-                let step = off * (min(distance, max(self.speed, 1.0) * DT) / distance);
-                self.pos.x += step.x;
-                self.pos.z += step.z;
-            } else if distance > 0.08 {
-                // (he came down beside its line: the rest of the way is a walk)
-                self.pos.y = point.y;
-            } else if !(up && level) {
-                self.pos.y = if up {
-                    min(point.y, self.pos.y + LADDER_SPEED * DT)
-                } else {
-                    max(point.y, self.pos.y - LADDER_SPEED * DT)
-                };
-            }
-            let wall = if up { point - near } else { near - point }.flat();
-            self.yaw = ease_angle(self.yaw, yaw_of(wall), 6.5, DT);
-            self.stuck = 0.0;
-            if (point - self.pos).len2() < 0.1 * 0.1 {
-                if last {
-                    self.going = false;
-                    return true;
+        if self.ladder.is_some() {
+            return false;
+        }
+        if self.path.climbs >> self.path_at & 1 != 0 {
+            // A ladder, which this game adds: the match carries him along it and on to the node
+            // by its far end, the next point of his way (`climb`), whatever he decides meanwhile.
+            let at = self.path_at as usize;
+            let land = (at + 1 < self.path.len as usize && self.path.climbs >> (at + 1) & 1 != 0).then(|| self.path.points[at + 1]);
+            let beside = v3(self.pos.x, point.y, self.pos.z);
+            self.ladder = Some(match a.level.links.iter().find(|l| l.top() == point || l.foot() == point) {
+                Some(l) => {
+                    // One at a time: he waits while another is on it within a body's height of
+                    // the end he takes it at.
+                    let up = l.top() == point;
+                    let end = v3(l.foot[0], if up { l.foot[1] } else { l.top[1] }, l.foot[2]);
+                    if a.others.iter().enumerate().any(|(k, (other, alive, _))| a.climbers >> k & 1 != 0 && *alive && (*other - end).len2() < 1.9 * 1.9) {
+                        self.speed = ease(self.speed, 0.0, 7.0, DT);
+                        return false;
+                    }
+                    Carry { foot: l.foot(), top: l.top(), up, land, points: 1 + land.is_some() as u8 }
                 }
-                self.path_at += 1;
-            }
+                // (a way that begins at a ladder's end: only the walk to the node by it is left)
+                None => Carry { foot: point, top: beside, up: false, land: None, points: 1 },
+            });
             return false;
         }
         let to = (point - self.pos).flat();
@@ -603,6 +617,49 @@ impl Soldier {
         false
     }
 
+    /// A step along a ladder: to its line at its foot, along it, at its top onto the floor, and
+    /// from its far end along the floor to the node there. Going down it is the same the other
+    /// way. At the end his way goes on from the points the carry covered.
+    fn climb(&mut self, carry: Carry) {
+        let Carry { foot, top, up, land, points } = carry;
+        let level = self.pos.y >= top.y - 0.02;
+        let (aim, far) = (if level && up { top } else { foot }, if up { top } else { foot });
+        let off = (aim - self.pos).flat();
+        let distance = off.len();
+        self.speed = ease(self.speed, LADDER_SPEED, 7.0, DT);
+        if distance > 0.08 {
+            // (along the floor: to the ladder's foot, or between its top and its line)
+            let step = off * (min(distance, max(self.speed, 1.0) * DT) / distance);
+            self.pos.x += step.x;
+            self.pos.z += step.z;
+        } else if up && !level {
+            self.pos.y = min(top.y, self.pos.y + LADDER_SPEED * DT);
+        } else if !up {
+            self.pos.y = max(foot.y, self.pos.y - LADDER_SPEED * DT);
+        }
+        if land.is_some() || up {
+            self.yaw = ease_angle(self.yaw, yaw_of((top - foot).flat()), 6.5, DT);
+        }
+        self.stuck = 0.0;
+        if (far - self.pos).len2() >= 0.1 * 0.1 {
+            return;
+        }
+        if let Some(land) = land {
+            // Off the ladder: the same carry along the floor, to the node.
+            self.ladder = Some(Carry { foot: land, top: v3(self.pos.x, land.y, self.pos.z), up: false, land: None, points });
+            return;
+        }
+        self.ladder = None;
+        let at = self.path_at as usize + points as usize - 1;
+        if self.going && !self.asked && at < self.path.len as usize && (self.path.points[at] - far).len2() < 1e-4 {
+            if at + 1 >= self.path.len as usize {
+                self.going = false;
+            } else {
+                self.path_at = at as u8 + 1;
+            }
+        }
+    }
+
     /// One step of him. `squad` is his own.
     pub fn step(
         &mut self,
@@ -620,21 +677,19 @@ impl Soldier {
         self.shown = max(0.0, self.shown - DT);
         if self.state == State::Dead {
             self.dead_time += DT;
-            if self.climbing {
-                // He fell on a ladder: he comes down to the floor under him.
-                let under = a.level.node(self.pos.x, self.pos.z).map_or(self.pos.y, |cell| {
-                    core::iter::once(cell)
-                        .chain(a.level.over(cell))
-                        .map(|node| a.level.floor[node as usize] as f32 * 0.01)
-                        .filter(|floor| *floor <= self.pos.y + 0.3)
-                        .fold(f32::MIN, max)
-                });
-                self.pos.y = max(under, self.pos.y - 7.0 * DT);
-                self.climbing = self.pos.y > under;
+            if let Some(Carry { foot, .. }) = self.ladder {
+                // He fell on a ladder: he comes down to its foot.
+                self.pos.y = max(foot.y, self.pos.y - 7.0 * DT);
+                if self.pos.y <= foot.y {
+                    self.ladder = None;
+                }
             }
             return act;
         }
-        self.climbing = false;
+        self.climbing = self.ladder.is_some();
+        if let Some(carry) = self.ladder {
+            self.climb(carry);
+        }
         self.state_time += DT;
         let bit = 1u16 << me;
         let eye = self.eye();

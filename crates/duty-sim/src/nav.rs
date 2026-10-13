@@ -29,7 +29,8 @@ const LIMIT: u32 = 6000;
 pub struct Path {
     pub points: [V3; POINTS],
     pub len: u8,
-    /// A bit a point: he gets to it up or down a ladder, from the point before it.
+    /// A bit a point: he is carried to it from the point before it, along a ladder when the
+    /// point is a ladder's end, and along the floor from that end to the node by it.
     pub climbs: u16,
 }
 
@@ -331,23 +332,19 @@ impl Pathfinder {
         let mut path = Path::default();
         let mut i = 0;
         while i + 1 < nodes.len() && (path.len as usize) < POINTS {
-            // A ladder is two points: its own end on this side, and the one he climbs to.
-            if let Some((_, link)) = level
+            // A ladder is two points after the node at its near end: the ladder's own far end,
+            // and the node there. He is carried to both, the second along the floor: a ladder's
+            // own ends stand by a wall, where the grid may be closed.
+            if let Some((other, link)) = level
                 .ladder(nodes[i])
                 .filter(|(other, _)| *other == nodes[i + 1] && !level.passable(nodes[i], *other))
             {
-                let up = link.nodes[0] == nodes[i];
-                let (near, far) = if up { (link.foot(), link.top()) } else { (link.top(), link.foot()) };
-                // (the point before it is this end's node: the ladder's own point takes its place)
-                if i > 0 && path.len > 0 && path.climbs >> (path.len - 1) & 1 == 0 {
-                    path.len -= 1;
-                }
                 if path.len as usize + 2 > POINTS {
                     break;
                 }
-                path.points[path.len as usize] = near;
-                path.points[path.len as usize + 1] = far;
-                path.climbs |= 1 << (path.len + 1);
+                path.points[path.len as usize] = if link.nodes[0] == nodes[i] { link.top() } else { link.foot() };
+                path.points[path.len as usize + 1] = level.node_pos(other);
+                path.climbs |= 0b11 << path.len;
                 path.len += 2;
                 i += 1;
                 continue;
@@ -368,7 +365,7 @@ impl Pathfinder {
         }
         // A way longer than the points hold ends at its goal all the same.
         if path.len > 0 {
-            path.points[path.len as usize - 1] = if i + 1 >= nodes.len() && path.climbs >> (path.len - 1) & 1 == 0 {
+            path.points[path.len as usize - 1] = if i + 1 >= nodes.len() {
                 level.node_pos(to)
             } else {
                 path.points[path.len as usize - 1]
@@ -628,14 +625,14 @@ mod tests {
         let level = plan.level();
         let (foot, top) = (level.node_pos(plan.at(3, 1, 0.0)), level.node_pos(plan.at(4, 1, 3.2)));
         let up = plan.way(low, high);
-        // (a point on the way to the foot, the foot, the top, the goal)
-        assert_eq!((up.len, up.climbs), (4, 0b0100), "{:?}", &up.points[..up.len as usize]);
-        assert_eq!((up.points[1], up.points[2], up.points[3]), (foot, top, level.node_pos(high)));
+        // (a node on the way to the foot's, the foot's node, the ladder's top, the top's node, the goal)
+        assert_eq!((up.len, up.climbs), (5, 0b01100), "{:?}", &up.points[..up.len as usize]);
+        assert_eq!((up.points[1], up.points[2], up.points[3], up.points[4]), (foot, top, top, level.node_pos(high)));
         let down = plan.way(high, low);
-        assert_eq!((down.len, down.climbs), (4, 0b0100), "{:?}", &down.points[..down.len as usize]);
-        assert_eq!((down.points[1], down.points[2], down.points[3]), (top, foot, level.node_pos(low)));
-        // A way that ends at a ladder's other end ends on the ladder's own point.
+        assert_eq!((down.len, down.climbs), (5, 0b01100), "{:?}", &down.points[..down.len as usize]);
+        assert_eq!((down.points[1], down.points[2], down.points[3], down.points[4]), (top, foot, foot, level.node_pos(low)));
+        // A way from one end of a ladder to the other is the ladder alone.
         let short = plan.way(plan.at(3, 1, 0.0), plan.at(4, 1, 3.2));
-        assert_eq!((short.len, short.climbs, short.points[1]), (2, 0b10, top));
+        assert_eq!((short.len, short.climbs, short.points[0], short.points[1]), (2, 0b11, top, top));
     }
 }
