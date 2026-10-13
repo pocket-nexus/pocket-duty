@@ -225,7 +225,7 @@ Console (an Old 3DS over the paired LAN wire, 2026-10-13):
 | Memory | 19.6 MB of the 31.3 MB heap after the match, 18.7 MB at its start; 5.2 MB of linear memory free at both |
 | Captures from the console | title, match, menu, settings, a fall and the results on both screens; a soldier at 3 m, a kill with its notice; the four keys of the lower screen change the weapon, the fire mode, the magazine and open the menu |
 
-Sound on that console plays through CSND: its card has no `dspfirm.cdc`. The status reports the mixer running; nobody has listened to it.
+Sound on that console plays through CSND: its card has no `dspfirm.cdc`. A person played it on the console and heard the match's sounds (2026-10-13). The `ndsp` path has not run on a console.
 
 Browser (`bun tools/wgpu.ts check`, Chrome 154 headless with WebGPU on an M3 Max, 2026-10-13): the page goes from the title card through a match played by keys to its results, with the menu, a fall and the settings on the way; **60 frames a second, under 0.4 ms a frame** with up to 37 200 triangles of the street; the tab's frame of a held eye is the build machine's own; and that frame is 2.2 of 255 a colour from the compiler's drawing of the same view. No other browser, no phone and no other GPU has drawn it, and nobody has played it by hand or listened to it.
 
