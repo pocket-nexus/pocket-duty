@@ -34,6 +34,7 @@
 #include <sys/stat.h>
 
 #include "core.h"
+#include "packs_delivery.h"
 #include "pocket3d_packs.h"
 #include "devserver.h"
 #include "gfx.h"
@@ -131,6 +132,10 @@ typedef struct {
  * there (a release's zip puts it in sdmc:/3ds/pocket-duty/packs/), with every map it lists; otherwise the
  * one the `.3dsx` carries in its ROMFS. */
 static const char *const PACK_DIRS[] = {"sdmc:/3ds/pocket-duty/packs/", "romfs:/packs/"};
+/* Where a delivery over the LAN puts the pieces and the list (`bun tools/n3ds.ts bring`): the card's directory. */
+#define CARD_PACKS "sdmc:/3ds/pocket-duty/packs"
+/* A delivery replaced the list of packs: the held map is read again from it. */
+static bool relist;
 static const char *pack_dir;
 static P3dPacks *packs;
 static int held = -1;
@@ -154,6 +159,23 @@ static int32_t piece_read(void *user, const char *file, uint32_t at, uint8_t *in
       return 2;
   }
   return fseek(piece, at, SEEK_SET) == 0 && fread(into, 1, bytes, piece) == bytes ? 0 : 3;
+}
+
+/* Closes the piece read last: a delivery may replace or remove its file. */
+static void rest_piece(void) {
+  if (piece)
+    fclose(piece);
+  piece = NULL;
+  piece_name[0] = 0;
+}
+
+/* Lets go of the list of packs, so that `load` reads the one a delivery wrote. */
+static void forget_packs(void) {
+  rest_piece();
+  if (packs)
+    p3d_packs_free(packs);
+  packs = NULL;
+  held = -1;
 }
 
 static bool pack_read(u32 offset, void *into, u32 bytes) { return p3d_packs_read(packs, held, offset, into, bytes, piece_read, NULL) == 0; }
@@ -794,6 +816,16 @@ int main(void) {
       for (char *line = strtok_r(control, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
         if (strstr(line, "\"screenshot\""))
           devserver_request_screenshot();
+        /* The maps' packs brought over the LAN, a step a line: a piece, the list, a prune. The frame waits. */
+        static char answer[512];
+        bool listed = false;
+        if (strstr(line, "\"pocket3d.packs\""))
+          rest_piece();
+        if (p3d_delivery(line, CARD_PACKS, answer, sizeof answer, &listed)) {
+          devserver_send_ctrl(answer, strlen(answer));
+          relist |= listed;
+          continue;
+        }
         controls(line);
       }
     }
@@ -840,12 +872,22 @@ int main(void) {
     /* Does what the interface asked on its last turn, then shows it the match as it now is. */
     /* A match asked on another map: its pack takes the place of the one in memory. */
     char wanted[P3D_PACK_NAME_BYTES + 1];
-    if (dt_wanted(wanted, sizeof wanted)) {
+    bool change = dt_wanted(wanted, sizeof wanted) != 0;
+    bool relisted = relist;
+    if (!change && relisted)
+      snprintf(wanted, sizeof wanted, "%s", held_id);
+    if (change || relisted) {
       LightLock_Lock(&mixing);
       dt_drop();
       render_drop();
       free_sections();
-      loaded = load(wanted);
+      if (relisted)
+        forget_packs();
+      relist = false;
+      loaded = load(wanted[0] ? wanted : NULL);
+      /* (the new list may not name the held map: the first it names, then) */
+      if (!loaded && relisted)
+        loaded = load(NULL);
       LightLock_Unlock(&mixing);
       if (!loaded) {
         stage = "load-error";

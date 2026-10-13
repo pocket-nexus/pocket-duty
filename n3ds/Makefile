@@ -38,7 +38,7 @@ CFLAGS := -O3 -g -Wall -Wextra -std=gnu11 -ffunction-sections -fdata-sections -m
 LDFLAGS := -specs=3dsx.specs $(ARCH) -Wl,--gc-sections -Wl,-Map,$(BUILD)/duty.map
 SHADERS := world skin flat
 OWN := main.o render.o guest.o
-WIRE := devserver.o dev_protocol.o native.o hbldr.o soc.o
+WIRE := devserver.o dev_protocol.o native.o hbldr.o soc.o packs_delivery.o
 GUEST := gfx.o qjs.o input.o
 OBJECTS := $(addprefix $(BUILD)/,$(OWN) $(addsuffix _shbin.o,$(SHADERS)) $(WIRE) $(GUEST) vshader_shbin.o)
 .PHONY: all

@@ -13,6 +13,12 @@
 //                                               # every cooked map's pack as pieces (3ds/pocket-duty/packs/),
 //                                               # brought up to date with the pieces <directory> lacks
 //   bun tools/n3ds.ts install [--no-build]      # build, send, start, wait for the program to report
+//   bun tools/n3ds.ts bring [--prune] [--verify]
+//                                               # bring the running program's card up to date with every cooked
+//                                               # map's pack over the LAN: the pieces it lacks, then the list
+//                                               # (--prune removes the pieces no map names any more; --verify
+//                                               # has the console read the pieces it holds). The program reads
+//                                               # the held map again from the new list
 //   bun tools/n3ds.ts status
 //   bun tools/n3ds.ts ctl "ui=start auto=1"     # the core's words (n3ds/core/src/lib.rs `dt_control`: mode=, ui=, pad=,
 //                                               # at=, near=, auto=, god=, hurt=, clock=, skill=, budget=, option=), and:
@@ -39,9 +45,10 @@ import { pocketRuntimeDeviceId } from "../vendor/pocketjs/contracts/spec/pocket-
 import { extractHostBuildInputs } from "../vendor/pocketjs/framework/src/manifest/index.ts";
 import { withDeviceLease } from "../vendor/pocketjs/tools/device-lease.ts";
 import { ensureQuickJs, runContainer, THREE_DS_CONTAINER_IMAGE } from "../vendor/pocketjs/tools/3ds-toolchain.ts";
+import { deliver } from "../vendor/pocketjs/tools/pocket3d-delivery.ts";
 import { bring, writePacks } from "../vendor/pocketjs/tools/pocket3d-packs.ts";
 import { FIRST, mapNamed, packPath } from "./maps.ts";
-import { bringMaps, cooked, said } from "./packs.ts";
+import { bringMaps, cooked, cutMaps, packsDir, said } from "./packs.ts";
 import { compileInterface } from "./ui.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -284,6 +291,20 @@ switch (cmd) {
     await device(async (lease) => console.log(JSON.stringify(await install(lease, receipt), null, 1)));
     break;
   }
+  case "bring":
+    await device(async () => {
+      const written = cutMaps("n3ds30");
+      console.log(said(written));
+      const brought = await session((c) =>
+        deliver(c, packsDir("n3ds30"), written.manifest, {
+          prune: argv.includes("--prune"),
+          verify: argv.includes("--verify"),
+          onPiece: (piece, done, of) => console.log(`${String(done).padStart(3)}/${of} ${piece.name} ${piece.bytes} bytes${piece.had ? " (there)" : ""}`),
+        }),
+      );
+      console.log(`3ds: ${brought.sent} pieces sent (${(brought.bytes / 1048576).toFixed(1)} MiB), ${brought.had} were there, ${brought.removed} removed, ${(brought.ms / 1000).toFixed(1)} s`);
+    });
+    break;
   case "status":
     await device(async () => console.log(JSON.stringify(await session((c) => status(c)), null, 1)));
     break;
@@ -484,6 +505,6 @@ switch (cmd) {
     break;
   }
   default:
-    console.log("usage: bun tools/n3ds.ts <build|card|install|status|ctl|capture|bench|emu> [--host ADDRESS]");
+    console.log("usage: bun tools/n3ds.ts <build|card|install|bring|status|ctl|capture|bench|emu> [--host ADDRESS]");
     process.exit(cmd ? 1 : 0);
 }
