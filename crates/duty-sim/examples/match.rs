@@ -42,6 +42,14 @@ fn main() {
     // feet (metres), and their steps and the player's on a ladder.
     let storeyed = !game.level.over.is_empty() || !game.level.links.is_empty();
     let (mut heights, mut ladders) = (std::collections::BTreeMap::<i32, u32>::new(), [0u32; 2]);
+    // When the two sides first meet (the player has a soldier in clear sight), and how long the
+    // soldiers wait for the pathfinder's answers: ticks a soldier waited, and the longest wait.
+    let mut met: Option<u32> = None;
+    let (mut waited, mut longest, mut waits) = (0u64, 0u32, [0u32; 16]);
+    // The pathfinder's counts over every match of the run (a new match has a new pathfinder): ways
+    // asked, found, not there, given up; ways with more corners than points; nodes opened, and the
+    // most a search opened.
+    let (mut ways, mut cut, mut opened) = ([0u32; 4], 0u32, (0u64, 0u32));
     for t in 0..ticks {
         let eye = game.player.head();
         let mut input = Input::default();
@@ -50,6 +58,18 @@ fn main() {
             let to = s.pos + v3(0.0, if s.crouched { 0.9 } else { 1.3 }, 0.0) - eye;
             if best.is_none_or(|b| to.len2() < b.0) && game.level.clear(eye, eye + to) {
                 best = Some((to.len2(), to));
+            }
+        }
+        if best.is_some() && met.is_none() {
+            met = Some(t);
+        }
+        for (k, s) in game.soldiers.iter().enumerate() {
+            if s.alive() && s.way().1 {
+                waits[k] += 1;
+                waited += 1;
+                longest = longest.max(waits[k]);
+            } else {
+                waits[k] = 0;
             }
         }
         if game.arms.magazine[game.arms.active] == 0 {
@@ -105,11 +125,20 @@ fn main() {
             if over.is_none() {
                 over = Some((t, won, game.score, game.tally.kills, game.tally.deaths));
             }
+            for (sum, count) in ways.iter_mut().zip(game.paths.counts) {
+                *sum += count;
+            }
+            (cut, opened) = (cut + game.paths.cut, (opened.0 + game.paths.opened.0, opened.1.max(game.paths.opened.1)));
             game.restart();
         }
     }
     println!("ticks {ticks}: mean {:.1} us, worst {:.1} us a tick on this machine", total / ticks as f64, worst);
-    println!("ways asked, found, not there, given up: {:?}", game.paths.counts);
+    for (sum, count) in ways.iter_mut().zip(game.paths.counts) {
+        *sum += count;
+    }
+    (cut, opened) = (cut + game.paths.cut, (opened.0 + game.paths.opened.0, opened.1.max(game.paths.opened.1)));
+    println!("ways asked, found, not there, given up: {ways:?}; {cut} with more corners than points; nodes a search opened: {:.0} on average, {} at most", opened.0 as f64 / (ways[1] + ways[2] + ways[3]).max(1) as f64, opened.1);
+    println!("the sides first meet at {:.1} s; soldiers waited for a way {} ticks in all ({:.1} a way asked), {} at the longest", met.map_or(-1.0, |t| t as f32 / 60.0), waited, waited as f64 / ways[0].max(1) as f64, longest);
     if storeyed {
         println!("soldiers' steps by the height of their feet (m): {heights:?}; on a ladder: {} of theirs, {} of the player's", ladders[0], ladders[1]);
     }
