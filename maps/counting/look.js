@@ -7,7 +7,7 @@
  */
 import { surface } from '../../web/src/pocket/placelook.js';
 
-/** A surface of a cold place: what the reference rubs into it is frost and soot, not sand. */
+/** A surface of a cold place: what the reference rubs into it is frost and soot, not sand (indoors: its own tones). */
 const cold = (def, more = {}) => ({ ...def, mat: { ...def.mat, wearColor: 0xc9ced6, dustColor: 0xdfe6ee, grimeColor: 0x2d3138, ...more } });
 
 /** The map's own surfaces. */
@@ -51,14 +51,14 @@ export const SURFACES = {
     float pile = owFbm01(p * 40.0, P * 40.0, 3, 0.6);
     float fleck = smoothstep(0.62, 0.7, owFbm01(p * 28.0 + 3.0, P * 28.0, 2, 0.5));
     float worn = owFbm01(p * 1.5, P * 1.5, 3, 0.5);
-    vec3 c = mix(owSRGB(vec3(0.13, 0.17, 0.25)), owSRGB(vec3(0.20, 0.25, 0.34)), pile);
+    vec3 c = mix(owSRGB(vec3(0.27, 0.32, 0.41)), owSRGB(vec3(0.37, 0.42, 0.51)), pile);
     c *= 0.9 + 0.2 * rnd.x;
-    c = mix(c, owSRGB(vec3(0.34, 0.38, 0.44)), fleck * 0.45);
+    c = mix(c, owSRGB(vec3(0.52, 0.56, 0.62)), fleck * 0.45);
     c = mix(c, c * 1.2 + 0.01, smoothstep(0.55, 0.85, worn) * 0.5);
     alb = c * (0.78 + 0.22 * seam);
     h = 0.5 + (pile - 0.5) * 0.1 - (1.0 - seam) * 0.12;
     rough = 0.98; metal = 0.0; ao = 0.85 + 0.15 * seam;
-  `, { metres: 2.4, relief: 0.01, seed: 5, surface: 'fabric', like: 'ground' }), { weather: [0, 0, 0, 0.05] }),
+  `, { metres: 2.4, relief: 0.01, seed: 5, surface: 'fabric', like: 'ground' }), { weather: [0, 0, 0, 0.05], wearColor: 0x5a6474, dustColor: 0x4a5464, grimeColor: 0x1c222b }),
   // Concrete blocks, 0.4 by 0.2 m, half a block over on every other course, pitted, streaked down the wall.
   blockwork: cold(surface(`
     vec2 p = uv * P + uSeed * 4.1;
@@ -88,7 +88,7 @@ export const SURFACES = {
     h = 0.5 + (trowel - 0.5) * 0.06 + (grain - 0.5) * 0.02;
     alb = mix(owSRGB(vec3(0.72, 0.73, 0.71)), owSRGB(vec3(0.83, 0.83, 0.80)), trowel) * (0.97 + 0.06 * grain);
     rough = 0.9; metal = 0.0; ao = 1.0;
-  `, { metres: 3.0, relief: 0.01, seed: 31, surface: 'plaster' }), { weather: [0.08, 0.1, 0.1, 0.12] }),
+  `, { metres: 3.0, relief: 0.01, seed: 31, surface: 'plaster' }), { weather: [0.08, 0.1, 0.1, 0.12], wearColor: 0xd2d1cb, dustColor: 0xc6c5be, grimeColor: 0x5a574f }),
   // A ceiling of tiles 0.6 m square in a grid of dark tees, each tile pricked.
   tiles: cold(surface(`
     vec2 p = uv * P + uSeed * 1.7;
@@ -100,7 +100,7 @@ export const SURFACES = {
     alb = mix(owSRGB(vec3(0.36, 0.38, 0.41)), c, grid);
     h = 0.15 + 0.45 * grid - 0.05 * (1.0 - prick);
     rough = 0.93; metal = 0.0; ao = 0.8 + 0.2 * grid;
-  `, { metres: 2.4, relief: 0.01, seed: 43, surface: 'plaster', like: 'ground' }), { weather: [0, 0, 0, 0.04] }),
+  `, { metres: 2.4, relief: 0.01, seed: 43, surface: 'plaster', like: 'ground' }), { weather: [0, 0, 0, 0.04], wearColor: 0xcfcfca, dustColor: 0xc4c4be, grimeColor: 0x55534d }),
 };
 
 /** The palette keys, which of them the kit uses for what, the sky and the cook's light. */
@@ -113,7 +113,7 @@ export const LOOK = {
     ch_asphalt: { of: 'asphalt', tint: 0x8f959e },
     ch_block: { of: 'blockwork', tint: 0xffffff },
     ch_brick: { of: 'brick', tint: 0xd6c2bc },
-    ch_concrete: { of: 'concrete', tint: 0x98a6b8 },
+    ch_concrete: { of: 'concrete', tint: 0x8aa4c6 },
     ch_plaster: { of: 'plaster', tint: 0xffffff },
     ch_ceiling: { of: 'tiles', tint: 0xffffff },
     ch_band: { of: 'concrete', tint: 0x586272 },
@@ -130,5 +130,5 @@ export const LOOK = {
   sky: { hour: 11, weather: { coverage: 0.55, turbidity: 3 } },
   // The cook's light for this place: the sky's fill brought from blue toward grey (the rooms take a
   // share of it), what the sunlit snow sends back, the rooms' lamps.
-  light: { sky: [1.2, 1.05, 0.92], bounce: [0.7, 0.72, 0.76], lamp: [10, 9.4, 8.4], reach: 14 },
+  light: { sky: [1.4, 1.02, 0.74], bounce: [0.7, 0.72, 0.76], lamp: [14, 13.2, 11.8], reach: 14 },
 };

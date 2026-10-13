@@ -67,8 +67,8 @@ const ROOF = 'ch_roof', PLASTER = 'ch_plaster', CEILING = 'ch_ceiling', CONCRETE
 
 /** A rectangle from its west, south, east and north. */
 const R = (w, s, e, n) => [[w, s], [e, s], [e, n], [w, n]];
-/** A room of the house: carpet at 10 under a ceiling at 3.05, plastered. */
-const room = (at, more = {}) => ({ at, y: F, key: CARPET, roof: 3.05, walls: TOP - F, wall: PLASTER, roofKey: CEILING, crown: false, ...more });
+/** A room of the house: a floor at 10 under a ceiling at 3.05, plastered, with carpet laid on it (CARPETS, below). */
+const room = (at, more = {}) => ({ at, y: F, key: SLAB, carpet: true, roof: 3.05, walls: TOP - F, wall: PLASTER, roofKey: CEILING, crown: false, ...more });
 /** A doorway through a wall between two rooms: the same floor under a lintel. */
 const door = (at, more = {}) => room(at, { roof: 2.3, ...more });
 /** A hall of bare slab under a roof: `y` is its floor, or its slope. */
@@ -150,7 +150,7 @@ export const GROUND = [
   room(R(-15, 12.5, -8.5, 15.5)),
   room(R(-21, 10, -19.5, 12)),
   room(R(-22.5, 8.5, -19.5, 10)),
-  room(R(-22.5, -1, -16.5, 5)),
+  room(R(-22.5, -0.5, -16.5, 5)),
   room([[-16, -1.5], [-12, -1.5], [-12, 8], [-15, 8], [-15, 5], [-16, 5]]),
   room(R(-12, 1.5, -6.5, 8)),
   // ------------------------------------------------------------------ the passages: middle, south, the two between them, the north one
@@ -239,8 +239,16 @@ export const DOORS = [
   { at: [34, -11], facing: 180, w: 1.8, h: 1.95, y: F, leaves: 1, hinge: -1 },
 ];
 
+/**
+ * The rooms' carpet: a thin solid on each room's floor. The cook lights the surface of every floor as open
+ * ground under the sun and leaves its shade to the ground's shadow picture; a solid is lit by the rooms'
+ * lamps, as a room's floor is.
+ */
+const CARPETS = GROUND.filter((g) => g.carpet).map((g) => ({ at: g.at, y: F, top: F + 0.03, key: CARPET }));
+
 /** Solids: the wrecks and containers of the yards, the pilasters of the street, the house's furniture. */
 export const MASSES = [
+  ...CARPETS,
   // the van of the side yard, the containers of the crates' climb and of the street
   { at: [[-31, -9.4], [-26.4, -10.6], [-26.9, -12.4], [-31.5, -11.2]], y: Y, top: 7.4, key: 'ch_van' },
   { at: [[-31.5, -11.2], [-26.9, -12.4], [-28, -16.6], [-32.6, -15.4]], y: Y, top: 8.2, key: 'ch_van_box' },
