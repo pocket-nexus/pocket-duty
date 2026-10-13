@@ -1,7 +1,7 @@
 /**
  * OLD QUARTER: its look. A village on a hill: limewash that has fallen from its walls in patches, plaster
  * in rose, ochre and sage, rubble walls, grey cobbles underfoot, brick laid herringbone and square tiles
- * under the roofs, pan tiles on the houses, under a clear sky in the middle of the afternoon.
+ * under the roofs, pan tiles on the houses, under a clear sky early in the afternoon.
  *
  * The surfaces below are this map's own: each is a function, baked into a tile by the reference's
  * material system (web/src/pocket/placelook.js says what a function writes). No picture is read.
