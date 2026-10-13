@@ -13,7 +13,7 @@ The reference is a browser game: three.js on WebGL2, every mesh, texture, animat
 | Reference | `web/`, Claude of Duty by mshumer at `d9b237b`, MIT (`web/LICENSE`) |
 | PSP | PSP-2000 or later (the pack needs the 52 MB memory setting; a PSP-1000 has 24 MB). A whole match on a console: **29.9 frames a second, 55 frames late of 18 375** |
 | Nintendo 3DS | Old 3DS or New 3DS with the Homebrew Launcher: one `.3dsx` and the maps' packs in `packs/` beside it on the memory card. A whole match on an Old 3DS: **29.8 frames a second, 48 frames late of 17 954** |
-| PS Vita | A PS Vita that runs homebrew: one `.vpk` with every map's pack, the interface and the programs inside. A whole match on a console: **59.9 frames a second, 2 frames late of 50 405**, with 100 000 triangles of the street in a frame on average and 140 000 at most |
+| PS Vita | A PS Vita that runs homebrew: one `.vpk` with every map's pack, the interface and the programs inside. A whole match on a console: **59.9 frames a second, no frame late of 37 149**, with 86 000 triangles of the street in a frame on average and 113 000 at most |
 | Browser tab | As a PSP, 480 × 272 in the PSP display's 16-bit colours; as a Nintendo 3DS, 400 × 240 over a lower screen of 320 × 240 with its four keys; as a PS Vita, 960 × 544 with the right stick looking. wgpu over WebGPU, the PSP's pack. Chrome 154 on an M3 Max: **60 frames a second, under 0.4 ms a frame** |
 
 The consoles and the browser are measured in "What is measured".
@@ -218,20 +218,22 @@ What the console's parts cost decides how the frame is written (`probe=1` in `bo
 
 | | `psp30` | `vita60` |
 |---|---|---|
-| Pictures | 256 colours from a palette, **128 texels a side** (64 and 32 for six families), 4 levels | **true colour, the side the reference bakes: 512** (256 for six families), every level down to one texel |
+| Pictures | 256 colours from a palette, **128 texels a side** (64 and 32 for six families), 4 levels | **the side the reference bakes: 512** (256 for six families), every level down to one block: a surface's in the GPU's blocks of 4 × 4 texels made from true colour (`BC1`, `BC3` with holes), the sky's and the ground's shadow in true colour |
 | Texels of the surfaces' pictures | 0.22 million | **3.5 million** |
 | Sky | 4 pictures of 256 × 128: 1 024 texels round | 8 pictures of 512 × 512: **4 096 texels round** |
 | The ground's shadow picture | 512 a side: 25 cm a texel | **2 048 a side: 6 cm a texel** |
-| Triangles of the street, by level | 428 969 / 162 308 / 57 310 | **1 105 375** / 353 309 / 121 408 |
+| Triangles of the street, by level | 428 969 / 162 308 / 57 310 | **689 399** / 242 131 / 94 039 |
 | The nearest level reaches | 9 m | **96 m** |
-| A triangle across a shadow's edge is cut to | 1 m | **35 cm** |
+| The sun's shadow on walls and things | at the corners of triangles cut to 1 m across its edge | **a pixel at a time, from a depth picture of 2 048 a side made from the sun: 9 cm a texel across the light** |
 | The figures' budgets: a soldier, the held weapon, an arm | 700, 1 100 and 260 triangles | **6 000, 9 000 and 2 200** |
 | The arms that hold the weapon (`figures.arms`) | each part drawn again as one closed skin | the export's shells, the open ones (sleeve, palm, cuff) drawn from both sides |
-| The street's pack, Twin Yards' | 29.1 MiB, 8.9 MiB | **93.0 MiB, 49.7 MiB** |
-| Triangles in a frame of a match | 19 000 | **100 000, 140 000 at most** |
+| The street's pack, Twin Yards' | 29.1 MiB, 8.9 MiB | **80.6 MiB, 41.5 MiB** |
+| Triangles in a frame of a match | 19 000 | **86 000, 113 000 at most** |
 
 - **Straight into the display's surface.** vita2d starts GXM with a display surface of four samples a pixel and the street is drawn into it; no second target and no copy.
-- **The pictures are true colour** (`texture::RGBA8`, `"format": "rgba"`), mixed between two texels and between two levels. A picture of 512 a side or less goes to video memory in the GPU's own order of texels through the transfer engine; the ground's shadow picture stays as rows, because the engine refuses a copy of 2 048 a side (`0x805b0003`).
+- **A surface's picture is in the GPU's blocks** (`"blocks": true`: `texture::BC1`, or `BC3` for a picture with holes), made by the compiler from true colour and handed to PocketJS's uploader, mixed between two texels and between two levels. The street's pack is 16 MiB shorter for it, and a frame of it on this computer differs from the true-colour one by under 1 of 255 a channel on average. A clamped picture keeps four bytes a texel (`texture::RGBA8`): the sky's, in the GPU's own order of texels through the transfer engine, and the ground's shadow as rows, because the engine refuses a copy of 2 048 a side (`0x805b0003`).
+- **The sun's shadow on walls and things comes from a depth picture** (`"sun": { "depth": … }`, `pack::SUND`). The compiler sends a ray from the sun's side of the map through every texel of a picture of 2 048 a side and writes how far the light goes, 16 bits a texel. A vertex of what is neither ground, cut-out nor glass then carries two colours: with nothing between it and the sun (`WVTX`), and with the sun off (`WSHD`). The fragment program reads the depth at its own place, mixed between four texels, so a flat face's depth follows the face, and goes from the one colour to the other over 12 cm of depth past a 6 cm allowance. No triangle is cut where a shadow falls: the street's nearest level has 689 399 triangles where it had 1 105 375, Twin Yards' 45 265 where it had 220 764.
+- **A leaf is lit from the side that has more light** (`"leaves": "both"`), and a hole's texels take the colour of the shape about them at every level, so the filter mixes no black into a leaf's edge.
 - **A picture with holes keeps its cover.** A smaller level is a mean of texels, and the mean of a leaf is under one half everywhere. The compiler raises each level's alpha until as much of it passes the test as passes in the first level.
 - **The ground in one pass.** A ground chunk's fragment multiplies its texel by the shadow picture at the fragment's own place.
 - **A soldier's shadow.** His triangles are drawn once more with each vertex sent down the sun's ray to the height of his feet, and the stencil lets a pixel darken once.
@@ -307,11 +309,15 @@ Sound on that console plays through CSND: its card has no `dspfirm.cdc`. A perso
 
 Browser (`bun tools/wgpu.ts check`, Chrome 154 headless with WebGPU on an M3 Max, 2026-10-13): the page goes from the title card through a match played by keys to its results, with the menu, a fall and the settings on the way; **60 frames a second, under 0.4 ms a frame** with up to 37 200 triangles of the street; the tab's frame of a held eye is the build machine's own; and that frame is 2.2 of 255 a colour from the compiler's drawing of the same view. No other browser, no phone and no other GPU has drawn it, and nobody has played it by hand or listened to it.
 
-Console (a PS Vita in Pocket Devkit's native slot over USB, 2026-10-13), 960 × 544, four samples a pixel, clocks at 444 / 222 / 222 / 166 MHz:
+Console (a PS Vita in Pocket Devkit's native slot over USB, 2026-10-13), 960 × 544, four samples a pixel, clocks at 444 / 222 / 222 / 166 MHz. The first three rows and the map changes are of the pack as it is now (blocks, the sun's depth picture); the rows after them were measured with the pack before it (true colour, the shadow at the corners of 1 105 375 triangles) and are not measured again:
 
 | | |
 |---|---|
-| `bench --seconds 615`: a whole match on the street played by the bench's player, who cannot fall, to its results | **50 405 frames, 2 late (0.004%)**, 16.68 ms a frame, the longest interval 27.5 ms; 100 200 triangles of the street in 837 draws on average, 140 200 and 1 131 at most; the levels of detail at their full distances throughout |
+| `bench --seconds 615 --roam 20`: a whole match on the street to its results, the bench's player (who cannot fall) put at the next start every 20 s | **37 149 frames, none late**, 16.68 ms a frame, the longest interval 27.2 ms; 86 400 triangles of the street in 910 draws on average, 113 500 and 1 329 at most; the levels of detail at their full distances throughout |
+| `bench --seconds 615 --roam 20` on Arcade Row, the place with the most triangles of the seven | the first 319 s of the match, until the console was taken off the debug link: **19 132 frames, none late**, 16.68 ms a frame, the longest interval 22.5 ms; 3 200 triangles of the place in 177 draws on average, 5 700 at most |
+| The sun's depth picture | a held view down the street: **the GPU 12.84 ms with 84 085 triangles** of the street, where the pack before took 12.63 ms with 116 406; from the market start, 12.79 ms with the picture and 11.11 ms without (`sun=0`): **1.68 ms** |
+| A change of map in the running program, over the cable, and the first thousand frames of a match on it | Twin Yards 16 s, Depot 20 s, Arcade Row 19 s, Counting House 19 s, Causeway 20 s, Waterworks 21 s, Sidings 23 s; 16.96 ms a frame on each, no frame late but one on Counting House |
+| `bench --seconds 615`, the pack before: a whole match on the street played by the bench's player, who cannot fall, to its results | **50 405 frames, 2 late (0.004%)**, 16.68 ms a frame, the longest interval 27.5 ms; 100 200 triangles of the street in 837 draws on average, 140 200 and 1 131 at most; the levels of detail at their full distances throughout |
 | A frame of that match on this thread, on average and at most | the match 1.0 and 1.6 ms, choosing the draws 2.9 and 3.7 ms, drawing 3.3 and 4.5 ms, the interface's turn 0.3 and 1.3 ms, its draw 1.1 and 1.4 ms |
 | `bench --seconds 75 --clock 60`: a match ended after a minute, where he fights from the start (6 kills) | 4 698 frames, 1 late; 134 500 triangles in 1 109 draws on average |
 | The same on Twin Yards, where the bench's player stays at his start | **5 036 frames, 1 late**, the longest interval 17.9 ms |
@@ -343,7 +349,7 @@ bun tools/release.ts [--targets psp,3ds,vita] [--out dist/release] [--no-build] 
 | --- | --- | --- |
 | `psp` | `pocket-duty-<version>-psp.zip` | `PSP/GAME/PocketDuty/` for the root of a Memory Stick: `EBOOT.PBP`, every map's pack as pieces (`pocket.packs` and the `.bin` files it lists), and the interface's `duty.js` and `duty.pak` |
 | `3ds` | `pocket-duty-<version>-3ds.zip` | `3ds/pocket-duty/` for the root of a memory card: `pocket-duty.3dsx` with the interface in its ROMFS (**3.1 MB**) and `packs/` with every map's pack as pieces |
-| `vita` | `pocket-duty-<version>-vita.vpk` | The SELF with no debug link, `packs/` with every map's pack as pieces (**141 MiB**, 48 MB in the package), the interface, and `gxp/` with the 28 programs a console compiled. Built after a development run has left the programs on the USB share (`bun tools/vita.ts run`) |
+| `vita` | `pocket-duty-<version>-vita.vpk` | The SELF with no debug link, `packs/` with every map's pack as pieces (**370 MiB** for eight maps, 71.5 MB in the package), the interface, and `gxp/` with the 26 programs a console compiled. Built after a development run has left the programs on the USB share (`bun tools/vita.ts run`) |
 
 A map's pack is cut into pieces named by their bytes, and one list (`pocket.packs`, PocketJS's `docs/POCKET3D-PACKS.md`) says which pieces make which map's pack. `bun tools/packs.ts cut [--profile psp30]` writes them under `.pocket-build/duty/packs/<profile>/`; `bun tools/packs.ts bring <directory>` copies the pieces a directory lacks. The browser, the PSP and the 3DS read a pack through that list. Beside each map's pack the list has `<id>-map`: the map from above, from the cook's `map.png` and `map.json` of the same profile, as 16 bytes of facts and a PocketJS image entry in the device's pixel format (`duty_interface::Chart`). The device reads it with the map's pack and hands it to the interface, so no map's picture is compiled into the interface. A `.3dsx` built without `--embed none` holds the first map's pieces in its ROMFS and runs with no card files; it is **31.4 MB**, and the paired wire installs at most 32 MiB.
 
