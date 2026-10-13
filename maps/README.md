@@ -22,7 +22,7 @@ A map may be a place a player knows, restated by us: **its floor plan, its propo
 
 **The look derives from the place's family and is made by our code.** A place has kinds of surface and a palette: for Twin Yards pale stone in courses, a band along the tops of walls, cream slab, cobbles in sand, orange-tan sand, weathered boards, under a clear sky. `web/src/pocket/placelook.js` draws each surface with a function of ours, baked by the reference's material system; the proportions of the courses, the band's motif, the doors and the crates are our own build, and the palette is shifted from the place's. No picture is read to make one.
 
-**How likeness is measured.** Beside the study, and out of the repository, a script compares the map's walk grid with the place's floor on cells of one metre: the share of the place's walkable floor the map has, the share of the map's floor the place has, and the mean difference of height where both have floor. A place is like when **both shares are 85% or more and the mean difference is under 0.5 m**; Twin Yards measures **98.1%, 88.5% and 0.07 m**. The numbers do not see the views a player knows a place by: those are looked at (`bun tools/duty.ts look`).
+**How likeness is measured.** Beside the study, and out of the repository, a script compares the map's walk grid with the place's floor on cells of one metre: the share of the place's walkable floor the map has, the share of the map's floor the place has, and the mean difference of height where both have floor. A place is like when **both shares are 85% or more and the mean difference is under 0.5 m**; Twin Yards measures **97.8%, 89.0% and 0.07 m**. The numbers do not see the views a player knows a place by: those are looked at (`bun tools/duty.ts look`).
 
 **What a reviewer checks.** The diff of a new map is `maps/<id>/place.js`, `maps/<id>/views.json` and one entry of `maps/maps.json`: text. No binary file, no picture, no pack. `git grep` for the other game's names finds nothing.
 
@@ -33,13 +33,15 @@ A map may be a place a player knows, restated by us: **its floor plan, its propo
 | Export | What it is |
 | --- | --- |
 | `PLACE` | `id`, `title`, `turn` (the level's turn in the world: which side the sun is on), `wall` (how high the walls stand over a floor), `starts`: `[east, north, facing in degrees from north toward east, tag]`, the player's first, **four or more** |
-| `LOOK` | `materials`: palette keys of the map, each `{ of, tint, scale }` over a surface of ours (`courses`, `cobbles`, `flutes`, `boards`) or of the reference's library; `keys`: which of them the kit uses for ground, walls, the band, wood; `windows`; `sky`: the hour and the weather |
+| `LOOK` | `materials`: palette keys of the map, each `{ of, tint, scale }` over a surface of ours (`courses`, `cobbles`, `grit`, `flutes`, `boards`) or of the reference's library; `keys`: which of them the kit uses for ground, walls, the band, wood; `windows`; `sky`: the hour and the weather; `light`: the cook's light for the place (below) |
 | `GROUND` | **The floors, as polygons**, level (`y`) or sloped (`y: { from, to }`). `roof` puts a roof over one (a covered way), `steps` draws steps over a slope, `key` names its surface |
 | `WALLS` | A wall along any line, of any height and thickness, with `holes` cut in it: doorways, windows (`sill`), arches (`arch`) |
+| `BLOCKS` | The tops of the blocks of houses beside the floors, where they are not `PLACE.wall` over the floor: **a floor's wall rises to the block beyond it**, and the block's cap lies at that height. A block lower than a floor gives that floor a parapet |
 | `MASSES` | A solid of any footprint from `y` to `top` |
 | `HOUSES` | The reference's building, at any place, height and turn, in the map's stone |
 | `DOORS` | Two leaves of boards standing open in a doorway |
 | `CRATES` | `[east, north, side, turn, up]`: crates of boards with a frame and braces, on the floor or on one another |
+| `LAMPS` | `[east, north, up]`: the reference's bare bulb on its flex, and its light in the cook's pass. Under a roof, a lamp hangs from it |
 | `PROPS` | The reference's props: palms, and any prototype by its id |
 
 **The floors carry the plan.** Along every edge of a floor the kit builds nothing where another floor of the same height or higher lies beyond it, a face down to the lower floor where one lies beyond it, and **a wall where nothing lies beyond it**, with the band and a cap on its top and shuttered windows along it. Where there is no floor there is a block of houses, capped level with the nearest floor's walls. So a plan that has its floors right is closed, and its walls stand where the place's do.
@@ -59,6 +61,14 @@ A map in the reference's own terms (a street, alleys, buildings: `maps/<id>/layo
 - `mapnav.js`: the walk grid. The reference's grid sends one ray a cell down from above the level, so a cell under a roof holds the roof. For each underside a place states (a covered way, a doorway's lintel) the reference's grid class is built again with its rays started under it, and a wall thinner than a cell is closed as a band.
 
 The cook, the pack, the match and the devices have no code for a particular map. One thing in the cook follows a place: **its floors lie at any height and have surfaces of its own**, so the export's scene names the floors' surfaces (`ground` in `scene.json`), and the ground's shadow picture is taken at each floor's own height (`Lighting::floors`). Without that entry, as for the street, the cook is unchanged.
+
+**A place states its own light** (`LOOK.light`, `light` in `scene.json`), which the cook adds to the sun and the sky's fill at every corner (`Lighting::added`):
+
+- `sky`: the sky's fill times this, colour by colour. Shade under a blue sky is blue; a place of warm stone states a warmer one.
+- `bounce`: what its sunlit ground sends back, as the ground's colour before light times a strength. A face takes it by the share of its half space the ground fills (**(1 − n.y) / 2**: a wall half, a floor none) times how open it is to the sky.
+- `lamps`: each lamp of `LAMPS`, with one ray to it for its shadow, the square of the distance, and a reach where its light is gone.
+
+The street's scene states no light, and its pack from this cook is the same byte for byte as before the cook had one.
 
 ## Add a map
 
@@ -85,7 +95,7 @@ A map is ready when:
 - The likeness script, beside the study, reports **both shares at 85% or more and a mean height difference under 0.5 m**.
 - `walk` reports **every start on the part that stays** and **no ground off it**. Red in `walk.png` is ground a player reaches and a soldier does not.
 - The cook's `walk grid:` line reports **0 starts moved**.
-- The pack is **under 34 MB**. A PSP holds one pack in **50.8 MB** with the program, the interface and the match beside it; the street's is 30.5 MB, and Twin Yards, with 36 000 triangles in its export, is **9.2 MB**.
+- The pack is **under 34 MB**. A PSP holds one pack in **50.8 MB** with the program, the interface and the match beside it; the street's is 30.5 MB, and Twin Yards, with 39 000 triangles in its export, is **9.4 MB**.
 - A bench match finds its ways: `ways asked, found, not there, given up` with none `not there`.
 - The `look` pictures show the views a player knows the place by.
 
