@@ -1,10 +1,11 @@
 {
-  "tagline": "A ten-minute firefight on a market street, against squads of soldiers.",
+  "tagline": "Ten-minute firefights against squads of soldiers, on eight maps.",
   "description": [
-    "Pocket Duty is a first-person shooter on one market street. A match is Team Deathmatch: ten minutes, first side to 30. You are one side. The other is soldiers in squads of three, who take cover, flank, and come looking for you when they have lost you for 14 seconds.",
+    "Pocket Duty is a first-person shooter. A match is Team Deathmatch on one of eight maps: ten minutes, first side to 30. You are one side. The other is soldiers in squads of three, who take cover, flank, and come looking for you when they have lost you for 14 seconds.",
+    "The first map is the market street of the game Pocket Duty is made from. The other seven are places of our own, each typed by hand as a plan: a walled desert town, an older one with a sunken way under its road, a freight hall at dusk, a house of offices under snow, ruins over a river, a works in red rock and a rail yard. Where one floor stands over another the soldiers walk both, and they climb ladders as you do. The map list on the title screen changes the map.",
     "You carry three weapons, an M4A1, an MPX-9 and a P-19, each with its own recoil pattern. Raising the sights turns the view onto the nearest soldier in front of you. You can jump, crouch, slide and climb a ledge, and your health comes back when you stay out of fire.",
-    "It is made from Claude of Duty by mshumer (github.com/mshumer/Claude-of-Duty, MIT), a browser game whose street, soldiers, weapons and sounds are built by code when it starts. Pocket Duty runs that game once on a computer, records what it builds, and compiles the record for the console: the light of each vertex, three levels of detail, and for each place the list of what can be seen from it.",
-    "On a PSP it draws 480 × 272 at 30 frames a second through the console's fixed-function GPU, with the interface drawn over it by PocketJS. A whole ten-minute match on a console measured 29.9 frames a second. It needs a PSP-2000 or a later model."
+    "It is made from Claude of Duty by mshumer (github.com/mshumer/Claude-of-Duty, MIT), a browser game whose street, soldiers, weapons and sounds are built by code when it starts. Pocket Duty runs that game once on a computer, records what it builds, and compiles the record for each console: the light of each vertex, three levels of detail, and for each place the list of what can be seen from it.",
+    "On a PSP it draws 480 × 272 at 30 frames a second through the console's fixed-function GPU, with the interface drawn over it by PocketJS; a whole ten-minute match on the market street measured 29.9 frames a second on a console. It needs a PSP-2000 or a later model. On a Nintendo 3DS it draws the upper screen at 400 × 240 and shows the map on the lower one. On a PS Vita it draws 960 × 544 at 60 frames a second, with pictures in true colour."
   ],
   "runs": {
     "fight": {
@@ -133,12 +134,13 @@
   },
   "translations": {
     "ja": {
-      "tagline": "市場の通りで、兵士の分隊を相手にする 10 分間の銃撃戦。",
+      "tagline": "8 つのマップで、兵士の分隊を相手にする 10 分間の銃撃戦。",
       "description": [
-        "Pocket Duty は、市場の通りひとつを舞台にした一人称視点のシューティングゲームです。1 試合はチームデスマッチで、時間は 10 分、先に 30 点を取った側が勝ちます。あなたが一方の側で、相手は 3 人ずつの分隊で動く兵士たちです。兵士は物陰に隠れ、回り込み、あなたを 14 秒見失うと探しに来ます。",
+        "Pocket Duty は一人称視点のシューティングゲームです。1 試合は 8 つのマップのどれかで行うチームデスマッチで、時間は 10 分、先に 30 点を取った側が勝ちます。あなたが一方の側で、相手は 3 人ずつの分隊で動く兵士たちです。兵士は物陰に隠れ、回り込み、あなたを 14 秒見失うと探しに来ます。",
+        "最初のマップは、もとになったゲームの市場の通りです。ほかの 7 つは私たちが作った場所で、どれも図面を手で書き起こしています。壁に囲まれた砂漠の町、道の下に掘り下げた通路がある古い町、夕暮れの貨物倉庫、雪の中の事務所の建物、川にかかる遺跡、赤い岩の中の工場、操車場です。床が上下に重なる場所では兵士はどちらの階も歩き、あなたと同じようにはしごを登ります。マップはタイトル画面の一覧で切り替えます。",
         "武器は M4A1、MPX-9、P-19 の 3 つで、それぞれ反動の出方が違います。照準を構えると、視点が正面にいるいちばん近い兵士のほうを向きます。ジャンプ、しゃがみ、スライディング、段差をよじ登ることができ、撃たれずにいると体力が戻ります。",
-        "もとになっているのは mshumer による Claude of Duty（github.com/mshumer/Claude-of-Duty、MIT）です。通りも兵士も武器も音も、起動時にコードで作るブラウザゲームです。Pocket Duty はそのゲームをコンピュータで一度だけ動かし、作られたものを記録して、本体向けにコンパイルします。頂点ごとの光、3 段階の詳細度、場所ごとにそこから見えるものの一覧です。",
-        "PSP では 480 × 272 を毎秒 30 フレームで、本体の固定機能 GPU で描き、その上に PocketJS がインターフェースを描きます。実機で 10 分の試合をまるごと計測した結果は毎秒 29.9 フレームでした。PSP-2000 以降のモデルが必要です。"
+        "もとになっているのは mshumer による Claude of Duty（github.com/mshumer/Claude-of-Duty、MIT）です。通りも兵士も武器も音も、起動時にコードで作るブラウザゲームです。Pocket Duty はそのゲームをコンピュータで一度だけ動かし、作られたものを記録して、それぞれの本体向けにコンパイルします。頂点ごとの光、3 段階の詳細度、場所ごとにそこから見えるものの一覧です。",
+        "PSP では 480 × 272 を毎秒 30 フレームで、本体の固定機能 GPU で描き、その上に PocketJS がインターフェースを描きます。市場の通りで 10 分の試合を実機でまるごと計測した結果は毎秒 29.9 フレームでした。PSP-2000 以降のモデルが必要です。ニンテンドー 3DS では上画面に 400 × 240 で描き、下画面にマップを表示します。PS Vita では 960 × 544 を毎秒 60 フレームで、フルカラーの画像で描きます。"
       ],
       "captions": {
         "firefight.mp4": "通りを進む 14 秒間。兵士が 6 人倒れ、プレイヤーの体力は 100 のうち 29 まで減ってから戻ります。",
