@@ -6,7 +6,7 @@ use std::path::Path;
 
 use duty_pack::bytes_of;
 use duty_sim::bvh::Bvh;
-use duty_sim::level::{Cover, Link, NavHeader, Spawn, LADDER, NONE, OVER, STAIR};
+use duty_sim::level::{Cover, Level, Link, NavHeader, Spawn, LADDER, NONE, OVER, STAIR};
 use duty_sim::math::v3;
 use duty_sim::tune::{mode, WeaponDef, PATTERN};
 use serde_json::Value;
@@ -222,6 +222,12 @@ pub fn nav(ir: &Path, scene: &Value, solid: &Bvh) -> Result<Vec<u8>, String> {
     out.extend_from_slice(bytes_of(&over_cells));
     pad(&mut out);
     out.extend_from_slice(bytes_of(&links));
+    // The match's own reader takes the section whole: what it finds is what was written.
+    let words: Vec<u32> = out.chunks(4).map(|c| c.iter().rev().fold(0, |word, byte| word << 8 | *byte as u32)).collect();
+    let read = unsafe { Level::parse_nav(Bvh { nodes: &[], tris: &[], verts: &[] }, std::slice::from_raw_parts(words.as_ptr() as *const u8, out.len())) }.ok_or("the walk grid does not read back")?;
+    if read.flags.len() != flags.len() || read.over.len() != over_cells.len() || read.links.len() != links.len() || read.spawns.len() != spawns.len() {
+        return Err("the walk grid reads back as another".into());
+    }
     Ok(out)
 }
 

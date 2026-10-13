@@ -64,7 +64,7 @@ python3 -I <study>/likeness.py <letter> compare .pocket-build/duty/maps/<id>/ir 
 | `DOORS` | Leaves standing open in a doorway: `{ at, facing, w, h, open }`; two leaves, or `leaves: 1` with `hinge: -1 or 1`; `kind: 'roller'` with `raised` (0…1) is a roller door of corrugated sheet |
 | `MASSES` | A solid of any footprint from `y` to `top` |
 | `WATER` | A surface at a height over the floor that is its bed: `{ at, y, key }`. It carries no one and stops no one |
-| `LADDERS` | `{ at, facing, h }`: rails and rungs, listed in the scene (see below for who climbs) |
+| `LADDERS` | `{ at, facing, h, reach }`: rails and rungs `h` tall at `at`, which a player and a soldier climb (below). `facing` is the way the ladder looks, away from what it climbs; `reach` is how far in from its line a climber steps off at its top (0.75 m) |
 | `CRATES` | `[east, north, side, turn, up]`: crates of boards with a frame and braces, on the floor or on one another |
 | `MARKS` | A site's mark of our own on the floor: `{ at, size, key }` |
 | `LAMPS` | `[east, north, up]`: the reference's bare bulb, and its light in the cook's pass |
@@ -76,17 +76,24 @@ python3 -I <study>/likeness.py <letter> compare .pocket-build/duty/maps/<id>/ir 
 
 - **Stairs at their true steepness.** A sloped floor with `steps: true` that is steeper than that keeps its steepness: its treads carry the player, and its nodes carry the stair's mark in the walk grid (flag 4), where the cook and the match let a step be 0.9 m. No stretched copy is needed up to **1.1 m a metre**.
 - **A doorway** narrower than three cells (2.4 m) keeps a line through its middle open in the walk grid, so soldiers go through doors a player goes through. A window is never a soldier's way.
-- **A ladder is drawn and listed, and nobody climbs it yet.** The match has no ladder: a player gets up only what his own climb reaches, and a soldier never uses one. Where a ladder is the only way up, give the player ledges of 1.85 m at most beside it, or wait for the walk grid's second level, which carries ladders with it.
+- **A ladder is climbed by the player and by soldiers.** The export lists it in `scene.json` (its foot, and where a climber steps off at its top), the cook writes it into the walk grid as a link, and the match moves whoever is on it: no device has code for it.
+  - **The player** takes hold within 0.55 m of its line by pushing at its wall, or by stepping off the floor over it. On it the stick toward the wall is up (2.6 m a second) and away from it is down, the jump lets go, and its foot is left by walking. Within 0.6 m of its top he is carried onto the floor, over a rail or a parapet on the edge. From that floor, where a rail stands on the edge, pushing out at it carries him over and onto the ladder.
+  - **A soldier** takes it as a step of his way that costs five times a walk, so a stair near by is preferred. The match carries him from the node at its near end to its line, along it at 1.6 m a second and on to the node by its far end; he does not fire on it, and one soldier at a time takes an end. He has no climbing pose: he walks in place, facing the wall.
+  - **Its ends need a floor a soldier stands on within a cell (0.8 m)**, at the foot's height and at `y + h`: the cook's `walk grid:` line says how many ladders are a soldier's way, and a ladder with an end off the grid is the player's alone. A part of the place that only a ladder reaches stays open for soldiers.
 - **Glass** stops a player and a bullet's surface is `glass`; a hole without `glass` is open.
 
 **A second level.** A floor with `over: true` stands over another: a storey, a roof a player walks on, a bridge, a gallery. `thick` is its slab (0.3 m), `rail` the rail along its open edges (1 m; 0 for none).
 
 - It is closed as the first level is: a slab with an underside, a side and a rail where it ends in the air, nothing where it meets a floor of its own height. A wall of the floor under it stops at its underside.
-- **A player walks on it and under it.** He gets up by a stair (a sloped floor, `steps: true`) or by ledges his climb reaches.
-- **The walk grid holds one height a node**, so soldiers have one of the two floors: the one under it, or, with `soldiers: true` on the upper floor, the upper one and not the ground beneath. A bridge soldiers cross has `soldiers: true` and a way under it they do not take; a gallery a player alone uses has none.
+- **A player walks on it and under it.** He gets up by a stair (a sloped floor, `steps: true`), by a ladder, or by ledges his climb reaches.
+- **Soldiers walk on it and under it.** The walk grid has a node for each of the two floors of a cell, and a step goes to whichever node of the next cell is within a step's height (0.45 m, 0.9 m on a stair with `steps: true`). So a bridge whose ends meet floors of its own height is crossed, a stair or a ladder whose head meets the upper floor is a soldier's way up, and the way under stays one. `soldiers: false` on the upper floor keeps them off it: the grid then holds the floor under it alone.
+- **A stair's head joins a floor over a floor where the two are level.** End the slope half a metre before the stair's own edge (`to` inside the polygon), or put a level landing between them: the kit puts a rail where the floor beyond an upper floor's edge is lower.
+- **A wall closes the grid at its own floor.** A wall on the upper floor leaves the nodes under it open, and a wall under a floor leaves the nodes over it open; a doorway opens the nodes at its sill's height.
+- **Cover and starts are found on both.** A start stands on the highest floor at its place; the cook's line counts the starts it had to move.
+- `walk` draws a node on a floor over a floor as a blue middle in its cell and a ladder as a green line, and says how many of each are on the part that stays.
 - `compare` reports the second level on its own line: the place's floor over floor against the plan's `over` floors.
 
-**What the walk grid still lacks for soldiers on both levels at one place**: a second set of flags and heights in the export's grid and the cook's `NAVG` for the nodes that have a floor over a floor, neighbours across the two sets where the step allows (a stair's head, a bridge's end) in `duty_sim::level` and its pathfinder, cover and starts by set, and ladders as links between nodes. Until then a place with two storeys gives soldiers the storey its sites are on.
+**What a second level costs.** A node over another is **5 bytes of the pack** (a flag, a height, its cell) and 6 bytes of the pathfinder's tables, and a ladder is 32 bytes. A search on a place with storeys or ladders takes the loop that asks each neighbouring cell for its further nodes: on this computer **4% to 10% more a node** than the loop a place of one level keeps, and a lookup of 12 steps at most for a cell that has them. A cell holds any number of floors; the grid and its further nodes together are **65 535 nodes at most**, and the cook stops over that.
 
 A map in the reference's own terms (a street, alleys, buildings: `maps/<id>/layout.js`, built by `web/src/pocket/mapworld.js` and `mapkit.js`) is still read; no map uses it now.
 
@@ -98,7 +105,7 @@ A map in the reference's own terms (a street, alleys, buildings: `maps/<id>/layo
 - `placeworld.js`: the reference's world system with another `init`: its prop prototypes and its lights, then the place from `placekit.js`. The reference's ground, gate, perimeter and street dressing are not run.
 - `placekit.js`: the kit above, made from the reference's boxes, wall panels with real openings, prisms, buildings, props and collision proxies.
 - `placelook.js`: the map's surfaces and palette keys, added to the reference's material library and palette while the page loads, and its sky.
-- `mapnav.js`: the walk grid. The reference's grid sends one ray a cell down from above the level, so a cell under a roof holds the roof. For each underside a place states (a covered way, a doorway's lintel) the reference's grid class is built again with its rays started under it, and a wall thinner than a cell is closed as a band.
+- `mapnav.js`: the walk grid. The reference's grid sends one ray a cell down from above the level, so a cell under a roof holds the roof. For each underside a place states (a covered way, a doorway's lintel, a floor over a floor), from the highest down, the reference's grid class is built again with its rays started under it, and a wall thinner than a cell is closed as a band. Under a floor over a floor the cell keeps what it held, the upper floor, as a further node (`overCell`, `overFlags`, `overFloor` of `nav.dir`), with cover found on it as on the grid.
 
 The cook, the pack, the match and the devices have no code for a particular map. One thing in the cook follows a place: **its floors lie at any height and have surfaces of its own**, so the export's scene names the floors' surfaces (`ground` in `scene.json`), and the ground's shadow picture is taken at each floor's own height (`Lighting::floors`). Without that entry, as for the street, the cook is unchanged.
 
@@ -144,7 +151,7 @@ A map is ready when:
 - A bench match finds its ways: `ways asked, found, not there, given up` with none `not there`.
 - The `look` pictures show the views a player knows the place by.
 
-Two rules of the walk grid shape a plan: **a step between two floors is 0.45 m at most** (a ledge of half a metre is not walked), and **a slope rises 0.5 m a metre at most** (a stair is a slope with `steps` drawn over it).
+Two rules of the walk grid shape a plan: **a step between two floors is 0.45 m at most** (a ledge of half a metre is not walked), and **a slope rises 0.5 m a metre at most** (a stair is a slope with `steps` drawn over it). On a place with storeys the cook prints a second `walk grid:` line: the nodes that stand over another, and the ladders that are a soldier's way.
 
 ## On the devices
 
