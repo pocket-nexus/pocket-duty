@@ -25,6 +25,8 @@ const char *guest_error(void);
 void guest_turn(float dt);
 /* A turn now, whatever is owed: for the frames shown while the pack loads. */
 void guest_turn_now(void);
+/* Frees what the screens taken down left behind (QuickJS's cycle collector): once a change of map. */
+void guest_collect(void);
 /* Of the turns that would bring the guest only new readouts (the numbers of play), one in this many is taken. */
 extern uint32_t guest_readouts_every;
 /* Milliseconds a turn takes, smoothed, and of them the guest's script; the longest turn after the first

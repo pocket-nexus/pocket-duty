@@ -27,10 +27,15 @@
 //   bun tools/n3ds.ts capture [--out f.png] [--surface top|auxiliary]
 //   bun tools/n3ds.ts bench [--seconds 60] [--install]   # a match played by the bench's player → .pocket-build/validation/3ds/
 //   bun tools/n3ds.ts emu [--frames 90] [--ctl "at=..."] [--out f.png] [--prefs JSON] [--no-card] [--map <id>]
+//                         [--log] [--timeout 240] [--keep]
 //                                               # the same .3dsx in Azahar (software PICA): both screens of a
 //                                               # frame (the lower one under the upper) and the status. Every
 //                                               # cooked map's pack is on the emulated card unless --no-card;
-//                                               # --map changes to that map at the start
+//                                               # --map changes to that map at the start. A word of --ctl
+//                                               # written @N:word is said at frame N. --log prints the
+//                                               # program's own log (a line a change of map, with the C
+//                                               # heap); --timeout is the seconds the run may take;
+//                                               # --keep leaves the emulator's home for a look
 //
 // `--host ADDRESS` (default 192.168.8.159, or POCKET_3DS_HOST). The console
 // must run a Pocket Runtime build with the paired wire: this program itself
@@ -461,6 +466,7 @@ switch (cmd) {
         }
         await Bun.sleep(500);
       }
+      if (argv.includes("--log") && existsSync(`${card}/boot.log`)) console.log(readFileSync(`${card}/boot.log`, "utf8"));
       if (existsSync(`${card}/status.json`)) console.log(readFileSync(`${card}/status.json`, "utf8"));
       if (existsSync(kept)) console.log(`kept: ${readFileSync(kept, "utf8")}`);
       const bytes = readFileSync(`${card}/shot.bgr`);

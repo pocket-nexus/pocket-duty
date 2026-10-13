@@ -62,7 +62,8 @@ $(BUILD)/gfx.o: $(POCKET)/src/gfx.c $(BUILD)/vshader_shbin.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 # The guest's DevTools would take the control lines meant for this program off
 # the dev wire: the guest driver asks guest.c whether a debugger is attached.
-$(BUILD)/qjs.o: $(POCKET)/src/qjs.c | $(BUILD)
+# (src/guest_qjs.c is that file and a call for a collection)
+$(BUILD)/qjs.o: $(SOURCE)/guest_qjs.c $(POCKET)/src/qjs.c | $(BUILD)
 	$(CC) $(CFLAGS) -Ddevserver_active=guest_devtools -c $< -o $@
 $(BUILD)/duty.elf: $(OBJECTS) $(CORE) $(UI_CORE) $(QUICKJS)/libquickjs.a
 	$(CC) $(LDFLAGS) $(OBJECTS) $(CORE) $(UI_CORE) $(QUICKJS)/libquickjs.a -L$(DEVKITPRO)/libctru/lib -L$(DEVKITPRO)/portlibs/3ds/lib -lcitro3d -lmbedcrypto -lctru -lm -o $@
