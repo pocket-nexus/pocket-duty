@@ -306,6 +306,31 @@ if (command === "build") {
   };
   type Page = Awaited<ReturnType<typeof browser.newPage>>;
   /** A page on the site, and what a person does to it: keys held for a moment, the pointer on the shell. */
+  /**
+   * Waits, up to 30 s, until the match of a page in play steps again. A page whose match stands still fails
+   * here with what tells the causes apart: no animation frame comes at all (the tab), frames come and throw
+   * (`pocketDuty.failure`), or frames come and the match does not step. A headless tab on a loaded machine can
+   * get no animation frames for a while: that one cause is given a second burst and a second wait.
+   */
+  const stepping = async (p: { page: import("playwright-core").Page; status: () => Promise<any> }, where: string) => {
+    for (let attempt = 0; ; attempt++) {
+      const from = (await p.status()).match.tick as number;
+      if (await p.page.waitForFunction(`JSON.parse(pocketDuty.duty.status()).match.tick > ${from}`, undefined, { timeout: 30_000 }).then(() => true, () => false)) return;
+      const visibility = (await p.page.evaluate("document.visibilityState")) as string;
+      const failure = (await p.page.evaluate("pocketDuty.failure")) as string;
+      // (`pocketDuty.frames` counts the frames the page's loop made)
+      const made = (await p.page.evaluate("pocketDuty.frames")) as number;
+      await p.page.waitForTimeout(2000);
+      const later = (await p.page.evaluate("pocketDuty.frames")) as number;
+      const animated = (await p.page.evaluate("Promise.race([new Promise((done) => requestAnimationFrame(() => done(true))), new Promise((done) => setTimeout(() => done(false), 5000))])")) as boolean;
+      const cause = !animated ? "no animation frame comes (the tab)" : failure ? "frames come and throw" : later > made ? "frames come and the match does not step" : "animation frames come and the page's loop makes none";
+      const line = `${where}: the match stands at tick ${from} for 30 s: ${cause}; visibility ${visibility}, failure ${JSON.stringify(failure)}, frames ${made} then ${later} two seconds on, an animation frame within 5 s: ${animated}`;
+      if (animated || attempt > 0) expect(line, false);
+      console.error(`${line}; one more burst and wait`);
+      await p.page.evaluate("pocketDuty.burst(300)");
+    }
+  };
+
   const visit = async (address: string, context?: Awaited<ReturnType<typeof browser.newContext>>) => {
     const page: Page = await (context ?? browser).newPage({ viewport: { width: 1280, height: 800 } });
     const problems: string[] = [];
@@ -507,6 +532,9 @@ if (command === "build") {
         figureTris: now.figureTris,
         late: now.late,
       };
+      // The burst made its frames without the display, and the fall's wait counts on a match that steps: the
+      // page's own frames must come again first.
+      await stepping(p, "after the burst");
       // A soldier's rounds fell the player: the match goes on, and puts him back after four seconds.
       const standing = (await p.status()).soldiers.find((soldier: { alive: boolean }) => soldier.alive);
       await p.say(`auto=0 god=0 skill=400 near=${standing.number},6`);
