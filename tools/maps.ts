@@ -29,7 +29,7 @@ for (const [i, map] of MAPS.entries()) {
   if (MAPS.findIndex((m) => m.id === map.id) !== i) throw new Error(`maps/maps.json: "${map.id}" stands twice`);
   if (!map.title || !map.line) throw new Error(`maps/maps.json: "${map.id}" has no title or no line`);
   if (!!map.reference !== (i === 0)) throw new Error("maps/maps.json: the first map, and no other, is the reference's street");
-  if (!map.reference && !existsSync(join(ROOT, "maps", map.id, "layout.js"))) throw new Error(`maps/maps.json: maps/${map.id}/layout.js is missing`);
+  if (!map.reference && !existsSync(join(ROOT, "maps", map.id, "place.js")) && !existsSync(join(ROOT, "maps", map.id, "layout.js"))) throw new Error(`maps/maps.json: maps/${map.id}/place.js is missing`);
 }
 
 export function mapNamed(id: string): MapEntry {

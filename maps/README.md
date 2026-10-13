@@ -1,70 +1,76 @@
 # Maps
 
-A map of Pocket Duty is a plan written by hand in the terms of the reference's kit, built by the reference in Chrome, exported and cooked like the reference's own street. `maps/maps.json` lists the maps; the first is the reference's street, which has no file here.
+A map of Pocket Duty is a plan drawn by hand, built by the reference's kit in Chrome, exported and cooked like the reference's own street. `maps/maps.json` lists the maps; the first is the reference's street, which has no file here.
 
-| Map | Directory | What it is |
+| Map | File | What it is |
 | --- | --- | --- |
 | Market Street (`street`) | none: `web/src/world/layout.js`, the reference's | One long street, two alleys and a gate |
-| Twin Yards (`yards`) | `maps/yards/` | Two walled yards, a long lane, a covered way and the street between |
+| Twin Yards (`yards`) | `maps/yards/place.js` | Two sites, a long lane with a pit, a middle lane, covered ways on two heights, a high start |
 
 ## Where a map comes from
 
-A map may take its structure from a place a player knows: which grounds there are, how many ways join them, where a way is long and open and where it is narrow and roofed. Structure is the only thing taken, and it is taken by looking, never by reading a file.
+A map may be a place a player knows, restated by us: **its floor plan, its proportions, its heights and its landmarks follow the place; every surface, every piece of geometry and every name is ours.**
 
-**What is taken.** The count and order of the grounds, the ways between them, their rough proportions, and which of them is open, walled or roofed. A person who knows the place it resembles can find their way.
+**How a plan is drawn.** The author makes pictures of the place from above for their own study: its floors coloured by height over a grid of metres, and a note of its sizes. The plan is then **typed by hand against those pictures**, floor by floor, in the place's own coordinates (metres east and north of its middle, heights above its lowest floor): `maps/<id>/place.js`. A number in a plan is a number its author read and typed.
 
-**What is never taken.** No file of another game is opened by a tool of this repository, and nothing of such a file goes into the repository, a pack, a package or a page: **no vertex, no texture, no sound, no entity list, no file name, no map name, no name of that game or its series**. A layout holds numbers typed by its author and words of this repository.
+**What is never done.**
 
-**How a plan is written.**
+- **Nothing is converted.** No program turns a file of another game into geometry, and no tool of this repository reads one.
+- **Nothing of such a file is in the repository, a pack, a package or a page**: no vertex, no texture, no texel, no sound, no entity list, no file name, no map name, no name of that game or its series.
+- **The study stays out of every repository.** Its pictures and notes are the author's own working papers, kept outside the checkout; no committed file names where they are.
+- **Nothing written or painted on the place's walls is taken**: no marking, sign or word. A map has none, or marks of our own invention.
 
-1. Study the structure: play the place, or look at a picture of it from above. A study picture is the author's own working note. It stays under the ignored `.pocket-build/study/` and is never committed, attached or published.
-2. Write the plan from that understanding, in metres, on the kit's own grid: `maps/<id>/layout.js`. Every measure is the author's choice within the kit (a building is one of the kit's buildings at a size it builds, a wall is the kit's wall). The plan's header draws it in ASCII so a reviewer reads it without a tool.
-3. The look is this game's: the reference's materials, buildings, props, light and sky, the same as the street's. A plan states no surface of its own.
-4. The name is ours: a title and one line in `maps/maps.json`, and an id of lowercase letters. The title names what is on the map (yards, a depot, a causeway), never the place it resembles.
+**The look derives from the place's family and is made by our code.** A place has kinds of surface and a palette: for Twin Yards pale stone in courses, a band along the tops of walls, cream slab, cobbles in sand, orange-tan sand, weathered boards, under a clear sky. `web/src/pocket/placelook.js` draws each surface with a function of ours, baked by the reference's material system; the proportions of the courses, the band's motif, the doors and the crates are our own build, and the palette is shifted from the place's. No picture is read to make one.
 
-**What a reviewer checks.** The diff of a new map is `maps/<id>/layout.js`, `maps/<id>/views.json` and one entry of `maps/maps.json`: text. No binary file, no picture, no pack. `git grep` for the other game's names finds nothing.
+**How likeness is measured.** Beside the study, and out of the repository, a script compares the map's walk grid with the place's floor on cells of one metre: the share of the place's walkable floor the map has, the share of the map's floor the place has, and the mean difference of height where both have floor. A place is like when **both shares are 85% or more and the mean difference is under 0.5 m**; Twin Yards measures **98.1%, 88.5% and 0.07 m**. The numbers do not see the views a player knows a place by: those are looked at (`bun tools/duty.ts look`).
 
-## What a layout states
+**What a reviewer checks.** The diff of a new map is `maps/<id>/place.js`, `maps/<id>/views.json` and one entry of `maps/maps.json`: text. No binary file, no picture, no pack. `git grep` for the other game's names finds nothing.
 
-`layout.js` exports the reference's terms (read `web/src/world/layout.js` for their fields) and the terms a map of ours adds. Coordinates are metres in level space: **+x east, +z south**, the perimeter wall a square of **±58 m**, one level of ground at y = 0.
+## What a place states
 
-| Export | Whose | What it is |
-| --- | --- | --- |
-| `STREET` | reference | The one road with its kerbs, along x = 0 from `zMin` to `zMax`. The reference barricades both ends, so the ends reach a wall or a building |
-| `ALLEYS` | reference | Open ground with the junk the reference leaves in an alley: about **0.85 things a square metre**, a seventh of them with collision. Narrow ways only |
-| `BUILDINGS` | reference | The kit's buildings: place, size, floors, wall, the sides to leave out. They stand at y = 0 |
-| `GATE` | reference | The gate across the street, at `z` |
-| `SET_PIECES` | reference | Stalls, barriers, sandbags, wrecks, palms, lamps, cables, laundry, rubble, tyres |
-| `MAP` | ours | `id`, `title`, the level's turn in the world (`level.yaw`) and the starts: `[x, z, yaw, tag]`, the player's first, **four or more**. A yaw of 0 looks north (−z) |
-| `GROUND` | ours | Open ground with no junk: the slab the reference lays under an alley, alone |
-| `WALLS` | ours | Free walls from `a` to `b`. A wall with `y` starts above the ground: the lintel of a doorway |
-| `COVERED` | ours | A way under a roof with a block over it, and its bulbs |
-| `RAISED`, `RAMPS` | ours | Ground above the rest, and the wedges up to it |
-| `COVER` | ours | Crates, stacks, blocks and drums, each with its collision |
+`place.js` is read in the place's coordinates: **[east, north] in metres from the middle, heights in metres above the lowest floor**. `web/src/pocket/placekit.js` builds it; there is no street, no gate and no perimeter of a fixed size, and a place is as large as it is.
 
-`web/src/pocket/mapkit.js` builds the terms of ours with the reference's boxes, materials, props and collision proxies. A new term goes there, built from the kit, and is listed in this table.
+| Export | What it is |
+| --- | --- |
+| `PLACE` | `id`, `title`, `turn` (the level's turn in the world: which side the sun is on), `wall` (how high the walls stand over a floor), `starts`: `[east, north, facing in degrees from north toward east, tag]`, the player's first, **four or more** |
+| `LOOK` | `materials`: palette keys of the map, each `{ of, tint, scale }` over a surface of ours (`courses`, `cobbles`, `flutes`, `boards`) or of the reference's library; `keys`: which of them the kit uses for ground, walls, the band, wood; `windows`; `sky`: the hour and the weather |
+| `GROUND` | **The floors, as polygons**, level (`y`) or sloped (`y: { from, to }`). `roof` puts a roof over one (a covered way), `steps` draws steps over a slope, `key` names its surface |
+| `WALLS` | A wall along any line, of any height and thickness, with `holes` cut in it: doorways, windows (`sill`), arches (`arch`) |
+| `MASSES` | A solid of any footprint from `y` to `top` |
+| `HOUSES` | The reference's building, at any place, height and turn, in the map's stone |
+| `DOORS` | Two leaves of boards standing open in a doorway |
+| `CRATES` | `[east, north, side, turn, up]`: crates of boards with a frame and braces, on the floor or on one another |
+| `PROPS` | The reference's props: palms, and any prototype by its id |
+
+**The floors carry the plan.** Along every edge of a floor the kit builds nothing where another floor of the same height or higher lies beyond it, a face down to the lower floor where one lies beyond it, and **a wall where nothing lies beyond it**, with the band and a cap on its top and shuttered windows along it. Where there is no floor there is a block of houses, capped level with the nearest floor's walls. So a plan that has its floors right is closed, and its walls stand where the place's do.
+
+**One floor a place, for now.** Where two floors overlap, the higher one is the ground, and the walk grid holds one height a node. A room over a way, a roof a player walks on and a bridge with a way under it need a floor marked as standing over another and a grid with more than one height; the kit's terms leave room for both and build neither.
+
+A map in the reference's own terms (a street, alleys, buildings: `maps/<id>/layout.js`, built by `web/src/pocket/mapworld.js` and `mapkit.js`) is still read; no map uses it now.
 
 ## How a map reaches the reference
 
-`web/` outside `web/src/pocket` is the reference, unmodified. Three files of `web/src/pocket` stand between it and a layout of ours:
+`web/` outside `web/src/pocket` is the reference, unmodified. These files of `web/src/pocket` stand between it and a place:
 
-- `vite.config.js`: the export's server. With `DUTY_MAP=<id>` it answers the reference's `./layout.js`, imported by `web/src/world/`, with `maps/<id>/layout.js`. The reference's ground, buildings and dressing then build our plan with no change to their files.
-- `mapworld.js`: the reference's world system with another `init`: the same passes in the same order, then `mapkit.js`. It replaces what the reference keeps as constants of its own: the starts, the level's turn, the playable box.
-- `mapnav.js`: the walk grid. The reference's grid sends one ray a cell down from above the level, so a cell under a roof holds the roof. For each underside the world states (a covered way, a lintel, the gate's passage) the reference's grid class is built again with its rays started under it. A wall thinner than a cell is closed as a band **half a cell beyond each face**, and the ground beyond the perimeter is closed.
+- `vite.config.js`: the export's server. With `DUTY_MAP=<id>` the page's `@map/place` is `maps/<id>/place.js`, and the reference's own layout, which its world modules import, is a street of no length (`nolayout.js`).
+- `placeworld.js`: the reference's world system with another `init`: its prop prototypes and its lights, then the place from `placekit.js`. The reference's ground, gate, perimeter and street dressing are not run.
+- `placekit.js`: the kit above, made from the reference's boxes, wall panels with real openings, prisms, buildings, props and collision proxies.
+- `placelook.js`: the map's surfaces and palette keys, added to the reference's material library and palette while the page loads, and its sky.
+- `mapnav.js`: the walk grid. The reference's grid sends one ray a cell down from above the level, so a cell under a roof holds the roof. For each underside a place states (a covered way, a doorway's lintel) the reference's grid class is built again with its rays started under it, and a wall thinner than a cell is closed as a band.
 
-The cook, the pack, the match and the devices have no code for a particular map: the starts, the walk grid, the collision world and the sight lists are sections of the map's pack.
+The cook, the pack, the match and the devices have no code for a particular map. One thing in the cook follows a place: **its floors lie at any height and have surfaces of its own**, so the export's scene names the floors' surfaces (`ground` in `scene.json`), and the ground's shadow picture is taken at each floor's own height (`Lighting::floors`). Without that entry, as for the street, the cook is unchanged.
 
 ## Add a map
 
-1. `maps/<id>/layout.js`: the plan. Start from `maps/yards/layout.js`.
-2. `maps/<id>/views.json`: eye points for `look`, `[{ "name", "pos": [x, y, z], "look": [x, y, z], "fov" }]` in level coordinates. One from above and one for each ground and way.
+1. `maps/<id>/place.js`: the plan. Start from `maps/yards/place.js`.
+2. `maps/<id>/views.json`: eye points for `look`, `[{ "name", "pos": [east, north, up], "look": [east, north, up], "fov" }]`. One from above and nine a player knows the place by.
 3. One entry in `maps/maps.json`: `{ "id", "title", "line" }`. The interface's list, the Rust table (`duty_interface::maps`) and the tools read this file.
 
 ```
 bun tools/duty.ts look --map <id>      # pictures as the reference draws it → .pocket-build/validation/maps/<id>/reference (9 s)
 bun tools/duty.ts export --map <id>    # DutyIR → .pocket-build/duty/maps/<id>/ir (20 s)
 bun tools/duty.ts walk --map <id>      # the walk grid from the export: its parts, each start, walk.png. Exits 1 when a start is off the grid
-bun tools/duty.ts cook --map <id>      # the PSP's pack → .pocket-build/duty/maps/<id>/psp30/duty.pack (6 to 7 minutes)
+bun tools/duty.ts cook --map <id>      # the PSP's pack → .pocket-build/duty/maps/<id>/psp30/duty.pack (100 s for Twin Yards)
 cargo run --release -p duty-sim --example grid -- .pocket-build/duty/maps/<id>/psp30/duty.pack
 cargo run --release -p duty-sim --example match -- .pocket-build/duty/maps/<id>/psp30/duty.pack 10
 bun tools/wgpu.ts shot --map <id> --words "mode=play auto=1"   # a frame on this computer's GPU
@@ -76,13 +82,14 @@ bun tools/duty.ts maps                 # which maps are exported and cooked
 
 A map is ready when:
 
+- The likeness script, beside the study, reports **both shares at 85% or more and a mean height difference under 0.5 m**.
 - `walk` reports **every start on the part that stays** and **no ground off it**. Red in `walk.png` is ground a player reaches and a soldier does not.
 - The cook's `walk grid:` line reports **0 starts moved**.
-- The pack is near the street's **30.5 MB**. A PSP holds one pack in **50.8 MB** with the program, the interface and the match beside it; Twin Yards is **32.3 MB**.
-- A bench match finds its ways: `ways asked, found, not there, given up` with none `not there` and a share `given up` near the street's (32 of 402 in ten minutes).
-- The `look` pictures show each ground and way as the plan's header draws it.
+- The pack is **under 34 MB**. A PSP holds one pack in **50.8 MB** with the program, the interface and the match beside it; the street's is 30.5 MB, and Twin Yards, with 36 000 triangles in its export, is **9.2 MB**.
+- A bench match finds its ways: `ways asked, found, not there, given up` with none `not there`.
+- The `look` pictures show the views a player knows the place by.
 
-What costs triangles, from the first map: ground listed under `ALLEYS`, and buildings beyond the perimeter wall, where only what stands above the wall shows. With every open ground an alley and five large buildings beyond the wall, Twin Yards exported **2.42 million triangles** and cooked to **38.3 MB**; with the yards under `GROUND` and those buildings smaller, **1.68 million** and the size above.
+Two rules of the walk grid shape a plan: **a step between two floors is 0.45 m at most** (a ledge of half a metre is not walked), and **a slope rises 0.5 m a metre at most** (a stair is a slope with `steps` drawn over it).
 
 ## On the devices
 

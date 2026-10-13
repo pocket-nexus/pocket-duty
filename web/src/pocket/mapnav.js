@@ -28,10 +28,21 @@ export function mapGrid(ai, world, physics) {
   const MASK = physics.MASK.WORLD;
   const corner = new THREE.Vector3(), level = new THREE.Vector3();
   let opened = 0;
-  for (const { rect: [x0, z0, x1, z1], y } of world.ceilings ?? []) {
-    // The rect's box in the world (the level is turned), a cell wider on each side.
+  for (const ceiling of world.ceilings ?? []) {
+    // An underside is a rect or a polygon of level points.
+    const [x0, z0, x1, z1] = ceiling.rect ?? [0, 0, 0, 0];
+    const poly = ceiling.poly ?? [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
+    const y = ceiling.y;
+    const inside = (x, z) => {
+      let hit = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        if (poly[i][1] > z !== poly[j][1] > z && x < ((poly[j][0] - poly[i][0]) * (z - poly[i][1])) / (poly[j][1] - poly[i][1]) + poly[i][0]) hit = !hit;
+      }
+      return hit;
+    };
+    // The underside's box in the world (the level is turned), a cell wider on each side.
     const bounds = new THREE.Box3();
-    for (const [x, z] of [[x0, z0], [x1, z0], [x0, z1], [x1, z1]]) bounds.expandByPoint(world.levelToWorld(x, 0, z, corner));
+    for (const [x, z] of poly) bounds.expandByPoint(world.levelToWorld(x, 0, z, corner));
     bounds.expandByScalar(grid.cell);
     // (NavGrid starts its rays 4 m over its bounds' top.)
     bounds.min.y = -2;
@@ -42,7 +53,7 @@ export function mapGrid(ai, world, physics) {
       for (let ix = 0; ix < under.nx; ix++) {
         const x = under.worldX(ix), z = under.worldZ(iz);
         world.worldToLevel(x, 0, z, level);
-        if (level.x < x0 || level.x > x1 || level.z < z0 || level.z > z1) continue;
+        if (!inside(level.x, level.z)) continue;
         const gx = grid.cellX(x), gz = grid.cellZ(z);
         if (!grid.inside(gx, gz)) continue;
         const from = under.index(ix, iz), to = grid.index(gx, gz);
