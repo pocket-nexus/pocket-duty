@@ -402,6 +402,12 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
     // The map this run read, and the maps there is a pack for: what the interface's list offers.
     session.map_id = store::map().id;
     session.maps = store::maps().map(|map| map.id).collect();
+    // The map from above travels beside its pack: it goes into the interface's core, and the interface is told where.
+    session.chart = file.chart().and_then(|bytes| {
+        let (mut chart, entry) = duty_interface::Chart::parse(&bytes)?;
+        chart.handle = ui.picture(entry);
+        (chart.handle >= 0).then_some(chart)
+    });
     // The map picture's corner, as the compiler laid it out about the level's origin.
     session.map = (scene.level_origin[0] - 80.0, scene.level_origin[2] - 80.0);
     session.focal = 136.0 / tan(FOV * 0.5 * (PI / 180.0));

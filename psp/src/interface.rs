@@ -141,6 +141,15 @@ impl Ui {
     }
 
     /// The guest is on the screen.
+    /// Puts a picture (a PocketJS image entry) in the interface's core: its texture there, or -1.
+    pub unsafe fn picture(&mut self, entry: &[u8]) -> i32 {
+        if self.up() {
+            ffi::ui().upload_img_entry(entry)
+        } else {
+            -1
+        }
+    }
+
     pub fn up(&self) -> bool {
         self.guest.is_some()
     }
