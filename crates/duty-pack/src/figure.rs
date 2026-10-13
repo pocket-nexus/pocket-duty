@@ -195,6 +195,11 @@ pub struct Info {
     /// the pose for aiming down the sights, in the eye's space.
     pub ads_offset: [f32; 3],
     pub ads_turn: [f32; 3],
+    /// Held weapon: the same for a sprint, which lowers the weapon and turns it aside. The turn is
+    /// about the eye, so the place holds what brings the weapon back in front of it: a turn and
+    /// the plain difference of the two poses' places would swing the weapon out of the view.
+    pub sprint_offset: [f32; 3],
+    pub sprint_turn: [f32; 3],
     /// Soldier: each bone's position in the bind pose (hit zones run between them).
     pub joints: [[f32; 3]; bone::SOLDIER],
 }
@@ -530,7 +535,8 @@ mod tests {
         assert_eq!(size_of::<SkinVertex>(), 24);
         assert_eq!(size_of::<Pose>(), 48);
         assert_eq!(size_of::<Clip>(), 24);
-        assert_eq!(size_of::<Info>(), 68 + bone::SOLDIER * 12);
+        // (model, muzzle, eject, eject_dir, bolt_travel, then a place and a turn for the sights and for a sprint)
+        assert_eq!(size_of::<Info>(), 92 + bone::SOLDIER * 12);
     }
 
     #[test]

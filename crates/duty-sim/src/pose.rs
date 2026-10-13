@@ -231,10 +231,13 @@ impl<'a> Figures<'a> {
         let aim = smoothstep(0.0, 1.0, arms.ads);
         let player = &game.player;
         let stride = sin(game.time * 9.0) * min(player.speed() / 4.57, 1.4) * lerp(1.0, 0.25, aim);
-        let sprint = if player.sprinting { 1.0 } else { 0.0 };
+        // The sprint's turn and place are the weapon's own, from the pack, as the sights' are: the
+        // turn is about the eye, and the place brings the weapon back to where the reference holds it.
+        let sprint = arms.sprint;
+        let (st, so) = (info.sprint_turn, info.sprint_offset);
         let carry = euler(
-            [info.ads_turn[0] * aim - 0.35 * sprint - arms.back * 1.6, info.ads_turn[1] * aim + 0.52 * sprint, info.ads_turn[2] * aim + 0.33 * sprint + arms.roll],
-            [info.ads_offset[0] * aim - 0.03 * sprint + stride * 0.006, info.ads_offset[1] * aim - 0.075 * sprint - abs(stride) * 0.005, info.ads_offset[2] * aim + 0.025 * sprint + arms.back],
+            [info.ads_turn[0] * aim + st[0] * sprint - arms.back * 1.6, info.ads_turn[1] * aim + st[1] * sprint, info.ads_turn[2] * aim + st[2] * sprint + arms.roll],
+            [info.ads_offset[0] * aim + so[0] * sprint + stride * 0.006, info.ads_offset[1] * aim + so[1] * sprint - abs(stride) * 0.005, info.ads_offset[2] * aim + so[2] * sprint + arms.back],
         );
         let mut poses = [IDENTITY; part::WEAPON];
         for (b, pose) in poses.iter_mut().enumerate() {
@@ -269,4 +272,28 @@ pub fn sunlit(scene: &Scene, textures: &[Texture], texels: &[u8], x: f32, z: f32
     }
     let texel = t.texel(texels, 0, (u * t.width as f32) as usize, (v * t.height as f32) as usize);
     saturate(texel[1] as f32 / 127.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The carry of a sprint is a turn about the eye and a place. The reference holds its rifle
+    /// at the hip at (0.118, -0.185, -0.3) and in a sprint at (0.09, -0.262, -0.275), turned to
+    /// (-0.4, 0.6, 0.2) from (-0.05, 0.081, -0.135). The export writes the carry between the two
+    /// poses (`carried` in web/src/pocket/figures.js) and the pack holds it for each weapon.
+    /// The plain differences of the turns and of the places, which this file used before, swing
+    /// the rifle about the eye: 12 cm aside and 6 cm low, under the picture's lower edge.
+    #[test]
+    fn a_sprint_carries_the_rifle_to_where_the_reference_holds_it() {
+        let hip = [0.118, -0.185, -0.3];
+        let from_the_pack = euler([-0.313_975_5, 0.538_281_6, 0.290_624_8], [0.101_217_7, -0.019_738_9, 0.006_660_7]);
+        let at = apply(&from_the_pack, hip);
+        for (got, want) in [(at.x, 0.09), (at.y, -0.262), (at.z, -0.275)] {
+            assert!((got - want).abs() < 2e-3, "{got} is not {want}");
+        }
+        let plain = euler([-0.35, 0.519, 0.335], [-0.028, -0.077, 0.025]);
+        let wrong = apply(&plain, hip);
+        assert!(wrong.x < 0.0 && wrong.y < -0.31, "{} {}", wrong.x, wrong.y);
+    }
 }
