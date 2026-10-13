@@ -127,9 +127,9 @@ impl Duty {
     }
 
     /// The guest's turn in this frame, once a frame after `step`: the sixtieths of a second it is for, or 0
-    /// for a frame without one.
-    pub fn guest_due(&mut self) -> u32 {
-        let (ticks, buttons) = self.app.guest_due().unwrap_or((0, 0));
+    /// for a frame without one. `touching`: a contact is on a screen the guest draws, or has just left one.
+    pub fn guest_due(&mut self, touching: bool) -> u32 {
+        let (ticks, buttons) = self.app.guest_due(touching).unwrap_or((0, 0));
         self.handed = buttons;
         ticks
     }

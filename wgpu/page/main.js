@@ -3,7 +3,7 @@
 // tools/ui.ts), which a realm of the page runs on PocketJS's UI core and the
 // renderer lays over the street. The page itself is the Pocket3D player of
 // PocketJS's browser kernel (vendor/pocketjs/devices/web/pocket-web-wgpu,
-// staged beside this file): the bar, the PSP's shell with its keys, the dock
+// staged beside this file): the bar, a handheld's shell with its keys, the dock
 // that leads to the game's files and to a remix of it on Pocket Studio. This
 // file says what the game is and draws into the player's canvas.
 //
@@ -12,6 +12,7 @@
 //
 // The address chooses the pack and what a development host would say:
 //
+//   ?device=psp|3ds             the handheld the page opens as (the bar chooses another at any time)
 //   ?pack=URL                   the pack (the PSP's): its file, on a server that answers byte ranges,
 //                               or the manifest (.json) of one cut into pieces. Without it, the page's
 //                               own (<meta name="pocket-pack">)
@@ -26,9 +27,15 @@ import { openInterface, screens } from "./pocket3d-interface.js";
 import { createPlayer } from "./pocket3d-player.js";
 import init, { Duty, shapes, sound_rate } from "./pkg/duty_wgpu.js";
 
-// The one handheld the game runs on. Its screen is the renderer's shape of the same name and its
-// interface the bundle under ui/psp/.
-const DEVICES = [{ id: "psp", label: "PSP", sticks: 1 }];
+// The handhelds the game runs on. Each one's screen is the renderer's shape of the same name and its
+// interface the bundle under ui/<id>/, as that device's own build compiles it. A 3DS has a second screen,
+// which is the interface's alone: the level from above and four keys under a pointer or a finger.
+// (tools/platforms.test.ts holds this list, `runsOn` below, the renderer's shapes and the release's
+// targets to one another: a device with a package is a device here.)
+const DEVICES = [
+  { id: "psp", label: "PSP", sticks: 1 },
+  { id: "3ds", label: "Nintendo 3DS", sticks: 1 },
+];
 // Where the interface's settings are kept between visits (a PSP keeps them in a file beside the pack).
 const KEPT = "pocket-duty.interface";
 
@@ -37,16 +44,18 @@ const beside = (name) => new URL(name, import.meta.url).href;
 const message = (error) => String(error?.message ?? error);
 const started = performance.now();
 
-// The page: PocketJS's player.
-let device = DEVICES[0];
+// The page: PocketJS's player, with the device the address asks for.
+const wanted = query.get("device") ?? query.get("shape");
+let device = DEVICES.find((d) => d.id === wanted) ?? DEVICES[0];
+let present = () => {};
 const player = createPlayer({
   title: "Pocket Duty",
   tagline: { en: "A firefight on a market street.", ja: "市場通りでの銃撃戦。" },
   devices: DEVICES,
   device: device.id,
   // (the targets `bun tools/release.ts` builds a package for)
-  runsOn: ["psp"],
-  pick: () => {},
+  runsOn: ["psp", "3ds"],
+  pick: (id) => present(DEVICES.find((d) => d.id === id)),
 });
 const { canvas, stage, controls } = player;
 const say = (text) => player.say(text);
@@ -69,9 +78,10 @@ async function start() {
     return;
   }
   await init();
-  const shape = JSON.parse(shapes()).find((s) => s.name === device.id);
+  const all = JSON.parse(shapes());
+  let shape = all.find((s) => s.name === device.id);
 
-  // The shell, on the PSP's screen. It draws before there is a world: the interface says how much of the
+  // The shell, on the first device's screen. It draws before there is a world: the interface says how much of the
   // pack has arrived.
   stage.show({ device: device.id, width: shape.width, height: shape.height });
   const duty = await Duty.open(canvas, shape.name, kept());
@@ -80,7 +90,8 @@ async function start() {
 
   // What a frame's parts cost, in milliseconds summed since the start: the guest's turns, and the redraws
   // of its picture (`redrawMs`: the UI core's drawing, `drawMs` of it, then the upload).
-  const timing = { turns: 0, turnMs: 0, redraws: 0, redrawMs: 0, drawMs: 0 };
+  // (`lowers`, `lowerMs`: the second screen's redraws)
+  const timing = { turns: 0, turnMs: 0, redraws: 0, redrawMs: 0, drawMs: 0, lowers: 0, lowerMs: 0 };
   // (milliseconds from the page's start: the pack read, the interface up, the first frame, the first of the street)
   const report = { duty, device: () => device.id, shape: () => shape, ready: 0, interfaceReady: 0, firstFrame: 0, firstWorld: 0, frames: 0, failure: "", timing };
   window.pocketDuty = report;
@@ -97,18 +108,30 @@ async function start() {
     if (!ui) say(report.failure);
   });
 
-  // The PSP on the page: its screen, its controls, and the interface as the PSP loads it, in a realm.
+  // A device on the page: its screens, its controls, and its presentation of the interface in a new realm.
   let ui = null;
-  const present = async () => {
-    const plan = await (await fetch(beside(`ui/${device.id}/plan.json`))).json();
+  let lower = null;
+  present = async (next) => {
+    device = next;
+    const plan = await (await fetch(beside(`ui/${next.id}/plan.json`))).json();
+    if (device !== next) return;
     const of = screens(plan);
-    // The shell with its screen in it and its keys as the controls.
-    player.show(device.id, { width: shape.width, height: shape.height, sticks: device.sticks, glyphs: of.glyphs, touch: of.touch === "none" ? null : of.touch, viewport: of.viewport });
+    const to = all.find((s) => s.name === next.id);
+    // The device's shell with its screens in it, its keys as the controls, and the screen that takes touch.
+    player.show(next.id, { width: to.width, height: to.height, lower: of.auxiliary, sticks: next.sticks, glyphs: of.glyphs, touch: of.touch === "none" ? null : of.touch, viewport: of.viewport });
+    shape = JSON.parse(duty.reshape(to.name, to.width, to.height));
+    lower = of.auxiliary ? new ImageData(of.auxiliary[0], of.auxiliary[1]) : null;
+    // The guest of the device before goes with its realm; the new one is told the whole state on its first turn.
+    ui?.close();
+    ui = null;
     duty.overlay_hide();
     if (query.get("interface") === "off") return duty.interface_closed();
     try {
-      // (`simHz`: the turns a second the PSP's own host gives its interface)
-      ui = await openInterface({ realm: beside("app-instance.html"), wasm: beside("pocketjs.wasm"), bundle: beside(`ui/${device.id}/duty.js`), pak: beside(`ui/${device.id}/duty.pak`), plan, simHz: shape.turns });
+      // (`simHz`: the turns a second the device's own host gives its interface)
+      const opened = await openInterface({ realm: beside("app-instance.html"), wasm: beside("pocketjs.wasm"), bundle: beside(`ui/${next.id}/duty.js`), pak: beside(`ui/${next.id}/duty.pak`), plan, simHz: shape.turns });
+      // (another device was chosen while this one's interface was read)
+      if (device !== next) return opened.close();
+      ui = opened;
       duty.interface_opened();
       report.interfaceReady ||= performance.now() - started;
     } catch (error) {
@@ -117,7 +140,9 @@ async function start() {
       duty.interface_closed();
     }
   };
-  const presented = present();
+  let presented = present(device);
+  const chosen = present;
+  present = (next) => (presented = chosen(next));
 
   // Sound starts on the first key or pointer: a browser asks for a gesture. The mixer is the simulation
   // crate's, as on the PSP, and makes blocks at its own rate: the page's output is opened at that rate
@@ -149,7 +174,7 @@ async function start() {
     const held = controls.read();
     duty.step(now, held.buttons, held.left[0], held.left[1]);
     // (a turn is offered as often as the PSP offers one, and is that many sixtieths of a second)
-    const ticks = ui !== null ? duty.guest_due() : 0;
+    const ticks = ui !== null ? duty.guest_due(held.touching) : 0;
     const turned = ticks > 0;
     if (turned) {
       const from = performance.now();
@@ -166,6 +191,14 @@ async function start() {
         timing.redraws++;
         timing.drawMs += drew - turnedAt;
         timing.redrawMs += performance.now() - turnedAt;
+      }
+      const drawn = performance.now();
+      if (lower && ui.lowerChanged()) {
+        // The second screen is the interface's alone: its pixels go to its canvas as they are.
+        lower.data.set(ui.lower());
+        stage.lower.putImageData(lower, 0, 0);
+        timing.lowers++;
+        timing.lowerMs += performance.now() - drawn;
       }
       timing.turns++;
       timing.turnMs += turnedAt - from;
@@ -207,6 +240,10 @@ async function start() {
 
   // For a console and for tools/wgpu.ts.
   report.presented = () => presented;
+  // Another device while the game runs: `pocketDuty.present("3ds")`.
+  report.present = (id) => present(DEVICES.find((d) => d.id === id));
+  // The second screen as its canvas holds it (a PNG as a data URL), or null on a device with one screen.
+  report.captureLower = () => (stage.second.hidden ? null : stage.second.toDataURL("image/png"));
   report.interface = () => ui;
   report.sound = () => sound?.state ?? "none";
   // The frame as the canvas holds it, one pixel of the street to a pixel: a PNG as a data URL.

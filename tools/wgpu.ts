@@ -2,8 +2,8 @@
 // Pocket Duty drawn with wgpu (wgpu/): in a browser tab over WebGPU, and on
 // this machine, where frames go to files.
 //
-//   bun tools/wgpu.ts build                        wasm32 + wasm-bindgen + the page + the interface as the PSP
-//                                                  loads it (tools/ui.ts) on PocketJS's UI core → .pocket-build/wgpu/site
+//   bun tools/wgpu.ts build                        wasm32 + wasm-bindgen + the page + the interface as each
+//                                                  device loads it (tools/ui.ts) on PocketJS's UI core → .pocket-build/wgpu/site
 //   bun tools/wgpu.ts serve [--port 8802]          the site and the pack, with byte ranges
 //   bun tools/wgpu.ts dist [--piece 2]             the directory a static host serves → .pocket-build/wgpu/dist:
 //                                                  the page, the module under its build's name, and the pack
@@ -12,7 +12,8 @@
 //   bun tools/wgpu.ts shot [--out f.png] [--size WxH] [--frames N] [--words "mode=play auto=1"] [--cue N:WORDS]
 //                                                  one frame on this machine's GPU (Metal) → a PNG and the status
 //   bun tools/wgpu.ts check [--headed] [--seconds 5] [--dist]   the page in Chrome, driven by keys and pointer:
-//                                                  from the title into a match, the menu, the results, what a
+//                                                  from the title into a match, the menu, the results, the same
+//                                                  as a Nintendo 3DS with its lower screen's keys, what a
 //                                                  frame costs, what the first frame needs on a slow line
 //                                                  → .pocket-build/validation/web/
 //
@@ -35,7 +36,7 @@ const SITE = join(BUILD, "site");
 const DIST = join(BUILD, "dist");
 export const PACK = join(ROOT, ".pocket-build/duty/psp30/duty.pack");
 // The handhelds the page shows (`DEVICES` in wgpu/page/main.js, `SHAPES` in wgpu/src/app.rs).
-const SHOWN = ["psp"] as const satisfies readonly Device[];
+export const SHOWN = ["psp", "3ds"] as const satisfies readonly Device[];
 // What the host a build is deployed to allows (Pocket Studio's site deployments): the size of a file, the
 // files and the bytes of a deployment, and the top-level names it keeps for itself.
 const HOST = { file: 32 << 20, files: 4000, bytes: 1 << 30, reserved: ["play", "runtime"] };
@@ -159,7 +160,7 @@ const OPENED = "/api/events/player";
 const opens: { query: string; mode: string }[] = [];
 const APP = {
   kind: "site", id: "local", slug: "duty", url: null, title: "Pocket Duty", author: "local", tagline: "A firefight on a market street.", verified: true, status: "published",
-  packages: [{ target: "psp", filename: "pocket-duty-0.1.0-psp.zip", size: 16_000_000, version: "0.1.0" }],
+  packages: [{ target: "psp", filename: "pocket-duty-0.1.0-psp.zip", size: 16_000_000, version: "0.1.0" }, { target: "3ds", filename: "pocket-duty-0.1.0.3dsx", size: 31_000_000, version: "0.1.0" }],
   remixable: true, repository: "https://github.com/pocket-nexus/pocket-duty",
 };
 
@@ -472,6 +473,82 @@ if (command === "build") {
       await p.key("KeyZ");
       await p.mode("play");
       expect(`no error on the page (${p.problems.join("; ")})`, p.problems.length === 0);
+      await p.page.close();
+    }
+
+    // ---- the same match as a Nintendo 3DS: its two screens in its shell, the lower screen's keys under
+    // the pointer, and another device chosen from the bar while the match runs
+    {
+      const heard = opens.length;
+      const p = await visit("?device=3ds");
+      await p.up();
+      await p.mode("title");
+      await p.page.waitForTimeout(600);
+      const told = opens.slice(heard);
+      expect(`3ds: the page tells the host it opened as a 3DS (${JSON.stringify(told)})`, deployed ? told.length === 0 : told.length === 1 && told[0]!.query === "?app=local&layout=3ds");
+      const shape = (await p.status()).shape;
+      expect(`3ds: the renderer draws the upper screen's 400 by 240 (${JSON.stringify(shape)})`, shape.name === "3ds" && shape.width === 400 && shape.height === 240);
+      const screens = (await p.page.evaluate(`[...document.querySelectorAll("[data-pocket-screen]:not([hidden])")].map((c) => [c.dataset.pocketScreen, c.width, c.height])`)) as [string, number, number][];
+      expect(`3ds: the shell holds both screens (${JSON.stringify(screens)})`, JSON.stringify(screens) === JSON.stringify([["upper", 400, 240], ["lower", 320, 240]]));
+      const lowerSaved = async (name: string) => {
+        const url = (await p.page.evaluate("pocketDuty.captureLower()")) as string;
+        writeFileSync(join(directory, `${name}.png`), Buffer.from(url.slice(url.indexOf(",") + 1), "base64"));
+      };
+      await p.save("3ds-title");
+      await lowerSaved("3ds-title-lower");
+      await p.page.screenshot({ path: join(directory, "page-3ds-title.png") });
+      // The lower screen's START key, under the pointer, starts the match.
+      const low = (await p.page.locator("[data-pocket-screen=lower]").boundingBox())!;
+      const tap = async (x: number, y: number) => {
+        await p.page.mouse.move(low.x + (x / 320) * low.width, low.y + (y / 240) * low.height);
+        await p.page.mouse.down();
+        await p.page.waitForTimeout(150);
+        await p.page.mouse.up();
+        await p.page.waitForTimeout(400);
+      };
+      await tap(280, 217);
+      await p.mode("play");
+      await p.say("god=1");
+      // The interface drew the level from above on the lower screen: it is not one colour.
+      const colours = (await p.page.evaluate(`(() => { const c = document.querySelector("[data-pocket-screen=lower]"); const d = c.getContext("2d").getImageData(0, 0, 240, 240).data; const seen = new Set(); for (let i = 0; i < d.length; i += 4 * 97) seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]); return seen.size; })()`)) as number;
+      expect(`3ds: the lower screen shows the level from above (${colours} colours)`, colours > 20);
+      // Its keys: the next weapon, the fire mode, the menu.
+      const before = await p.status();
+      await tap(280, 107);
+      await p.page.waitForFunction(`JSON.parse(pocketDuty.duty.status()).match.weapon !== ${before.match.weapon}`, undefined, { timeout: 5_000 }).catch(() => {});
+      const armed = await p.status();
+      expect(`3ds: the lower screen's WEAPON key takes the next weapon (${before.match.weapon} to ${armed.match.weapon})`, armed.match.weapon !== before.match.weapon);
+      await p.page.waitForTimeout(900);
+      await p.save("3ds-play");
+      await lowerSaved("3ds-play-lower");
+      await p.page.screenshot({ path: join(directory, "page-3ds-play.png") });
+      // The upper screen is played by the same keys as a PSP's: R fires.
+      await p.page.keyboard.down("KeyE");
+      await p.page.waitForTimeout(500);
+      await p.page.keyboard.up("KeyE");
+      expect(`3ds: R fires (${(await p.status()).match.shots} rounds)`, (await p.status()).match.shots > 0);
+      await tap(280, 217);
+      await p.mode("menu");
+      await p.save("3ds-menu");
+      await p.key("KeyZ");
+      await p.mode("play");
+      // The mark's sentence names the device shown.
+      const mark = (await p.page.locator("[data-pocket-mark]").first().boundingBox())!;
+      await p.page.mouse.move(mark.x + mark.width / 2, mark.y + mark.height / 2);
+      await p.page.waitForTimeout(300);
+      const said = (await p.page.evaluate(`document.getElementById("pocket-simulated").textContent`)) as string;
+      expect(`3ds: the mark says the picture is simulated ("${said}")`, said === "Your browser draws this picture. A real Nintendo 3DS draws Pocket Duty with its own hardware, so it looks and runs differently there.");
+      await p.page.mouse.move(4, 400);
+      // Another device from the bar: the match goes on in a PSP's shell, with one screen.
+      const tick = (await p.status()).match.tick;
+      await p.page.evaluate(`pocketDuty.present("psp")`);
+      await p.page.waitForFunction(`pocketDuty.device() === "psp" && pocketDuty.interface() && JSON.parse(pocketDuty.duty.status()).shape.name === "psp"`, undefined, { timeout: 20_000 });
+      await p.page.waitForTimeout(800);
+      const after = await p.status();
+      const left = (await p.page.evaluate(`[...document.querySelectorAll("[data-pocket-screen]:not([hidden])")].map((c) => [c.dataset.pocketScreen, c.width, c.height])`)) as [string, number, number][];
+      expect(`3ds: a PSP chosen while the match runs keeps the match (${after.mode}, tick ${tick} to ${after.match.tick}) on one screen (${JSON.stringify(left)})`, after.mode === "play" && after.match.tick > tick && after.match.weapon === armed.match.weapon && JSON.stringify(left) === JSON.stringify([["upper", 480, 272]]));
+      await p.save("3ds-then-psp");
+      expect(`3ds: no error on the page (${p.problems.join("; ")})`, p.problems.length === 0);
       await p.page.close();
     }
 
