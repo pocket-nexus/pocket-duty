@@ -697,7 +697,7 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
                 let toward = (steer.way.points[steer.way_at as usize] - at).flat();
                 if toward.len2() < 0.4 * 0.4 {
                     steer.way_at += 1;
-                    // A way holds sixteen points: a long walk asks again from where one ends.
+                    // A way holds 32 points: a long walk asks again from where one ends.
                     if steer.way_at == steer.way.len {
                         if (to - at).flat().len2() > 1.5 * 1.5 {
                             steer.way_asked = false;
