@@ -12,7 +12,7 @@
  *  +18  |        | yard   | ROOM   |solid | P |  +-------+ BACK ROOM |ramp  |
  *  +17  |        +=gate===+ (10)   |      | A |  | LONG  +-----------+ down |
  *       | watch  |        +--------+------+ S +--+ ROOM (10)   | dock (3.1) |
- *   +8  | way    | SIDE   | west rooms    | S |  +------+------+-----+------+
+ *   +8  | way    | SIDE   | west rooms    | S |  +------+------+--(dock under)--+
  *       | (8)    | YARD   | over the way  +---+--+ mid  | EAST HALL (10)    |
  *    0  | two    | (5.5)  | under (4.7)   | solid | room |                  |
  *       | windows| van    +--crates-+-----+-------+------+-----+------------+
@@ -63,7 +63,7 @@ export const PLACE = {
 // rooms, the stairs' landings, the passage under the west rooms, the dock. TOP is where every wall ends.
 const Y = 5.5, F = 10, G = 6.95, U = 8, L = 8.4, T = 4.7, P = 3.1, TOP = 13.5;
 const SNOW = 'ch_snow', ROAD = 'ch_road', CARPET = 'ch_carpet', SLAB = 'ch_slab', ASPHALT = 'ch_asphalt';
-const PLASTER = 'ch_plaster', CEILING = 'ch_ceiling', CONCRETE = 'ch_concrete', BRICK = 'ch_brick', BLOCK = 'ch_block';
+const ROOF = 'ch_roof', PLASTER = 'ch_plaster', CEILING = 'ch_ceiling', CONCRETE = 'ch_concrete', BRICK = 'ch_brick', BLOCK = 'ch_block';
 
 /** A rectangle from its west, south, east and north. */
 const R = (w, s, e, n) => [[w, s], [e, s], [e, n], [w, n]];
@@ -84,9 +84,11 @@ export const GROUND = [
   { at: [[-35, -21], [-24, -21], [-24, -18], [-10.5, -18], [-10.5, -15.5], [-14, -15.5], [-14, -10.5], [-10.5, -10.5], [-10.5, -8], [-7.5, -8], [-7.5, -2.5], [-24, -2.5], [-24, 5.5], [-26.5, 5.5], [-26.5, 8], [-24, 8], [-24, 17.5], [-35, 17.5], [-35, 8], [-37.5, 8], [-37.5, -13], [-35, -13]], y: Y },
   { at: [[-17.5, -2.5], [-17.5, -7], [-14, -8], [-7.5, -8], [-7.5, -2.5]], y: { from: [-17.5, -5, Y], to: [-12.5, -5, G] } },
   // ------------------------------------------------------------------ the yards north and east of the house, the ramp down to the dock
-  { at: [[-35, 17.5], [-24, 17.5], [-24, 19.5], [-26.5, 19.5], [-26.5, 22.5], [-24, 22.5], [-24, 30], [-18, 30], [-18, 36], [42, 36], [42, 30], [48, 30], [48, 20], [50, 20], [50, 28], [57, 28], [57, 19.5], [59, 19.5], [59, 47], [-35, 47]], y: Y },
-  { at: R(50, 19.5, 57, 28), y: { from: [53.5, 28, Y], to: [53.5, 19.5, P] }, key: ASPHALT, side: CONCRETE },
-  { at: R(50, 10, 58, 19.5), y: P, key: ASPHALT, roof: 6.4, walls: TOP - P, wall: CONCRETE, roofKey: CONCRETE, crown: false },
+  { at: [[-35, 17.5], [-24, 17.5], [-24, 19.5], [-26.5, 19.5], [-26.5, 22.5], [-24, 22.5], [-24, 30], [-18, 30], [-18, 36], [42, 36], [42, 30], [48, 30], [48, 20], [50, 20], [50, 28], [57.5, 28], [57.5, 19.5], [59, 19.5], [59, 47], [-35, 47]], y: Y },
+  { at: R(50, 19.5, 57.5, 28), y: { from: [53.5, 28, Y], to: [53.5, 19.5, P] }, key: ASPHALT, side: CONCRETE },
+  { at: R(50, 10, 57.5, 19.5), y: P, key: ASPHALT, roof: 6.4, walls: TOP - P, wall: CONCRETE, roofKey: CONCRETE, crown: false },
+  // (the dock's south end lies under the east hall: listed here, before the hall's floor over it)
+  { at: R(50, 6.5, 57.5, 10), y: P, key: ASPHALT, walls: TOP - P, wall: CONCRETE, crown: false },
   // ------------------------------------------------------------------ the front yard, its drift, the covered corner
   { at: [[14.3, -44], [16.5, -44], [16.5, -46], [33, -46], [33, -36], [37, -36], [37, -25.5], [33.5, -25.5], [33.5, -19], [19, -19], [19, -26.5], [23, -26.5], [23, -31.5], [19, -31.5], [19, -34.5], [16.5, -34.5], [16.5, -36], [14.3, -36]], y: Y, wall: BRICK },
   { at: R(27, -45.5, 33, -37), y: { from: [27, -41, Y], to: [33, -41, 7.15] }, side: SNOW },
@@ -180,7 +182,9 @@ export const GROUND = [
   door(R(39, 2.5, 40.5, 5.5)),
   door(R(40.5, 10.5, 43.5, 12.5)),
   door(R(42, -5, 43.5, -3)),
-  room([[40.5, 1], [43.5, 1], [43.5, -3], [60, -3], [60, 10], [50, 10], [50, 14], [43.5, 14], [43.5, 7.5], [40.5, 7.5]]),
+  room([[40.5, 1], [43.5, 1], [43.5, -3], [60, -3], [60, 10], [58, 10], [58, 6], [49.5, 6], [49.5, 14], [43.5, 14], [43.5, 7.5], [40.5, 7.5]]),
+  // (its floor over the dock's south end: a slab, and the soldiers' floor of the two)
+  room(R(49.5, 6, 58, 10), { over: true, soldiers: true, rail: 0, side: CONCRETE }),
   room(R(43.5, -7, 50, -3)),
 ];
 
@@ -216,7 +220,7 @@ export const WALLS = [
   // ---- the garage: the wall across it, the wall beside the stairs; the dock's front
   { line: [[-5, -15.5], [-5, -10.5]], y: G, h: TOP - G, t: 0.4, key: CONCRETE, crown: false, holes: [{ at: 2.5, w: 3.5, h: 2.55 }] },
   { line: [[1.5, -15.5], [1.5, -10.5]], y: G, h: TOP - G, t: 0.4, key: CONCRETE, crown: false },
-  { line: [[50, 19.5], [58, 19.5]], y: P, h: TOP - P, t: 0.5, key: CONCRETE, holes: [{ at: 3.5, w: 5, h: 3.8 }] },
+  { line: [[50, 19.5], [57.5, 19.5]], y: P, h: TOP - P, t: 0.5, key: CONCRETE, holes: [{ at: 3.75, w: 5, h: 3.8 }] },
 ];
 
 /** Doors: leaves standing open (`facing`: the way they swing, in degrees from north toward east), and roller doors raised. */
@@ -224,7 +228,7 @@ export const DOORS = [
   // the street's door to the front yard, the garage's, the dock's
   { at: [14.3, -40], facing: 90, w: 7.6, h: 3.6, kind: 'roller', raised: 0.64 },
   { at: [-10.5, -13], facing: 270, w: 5, h: 3.4, kind: 'roller', raised: 0.7 },
-  { at: [53.5, 19.5], facing: 0, w: 5, h: 3.8, kind: 'roller', raised: 0.6 },
+  { at: [53.75, 19.5], facing: 0, w: 5, h: 3.8, kind: 'roller', raised: 0.6 },
   // leaves in the house's doorways
   { at: [-3, 10.25], facing: 90, w: 3, h: 2.25, y: F },
   { at: [3, -8.5], facing: 0, w: 3, h: 2.25, y: F },
@@ -254,6 +258,15 @@ export const MASSES = [
     { at: R(w, -36.7, w + 2.5, -36), y: Y, top: 10.2, key: CONCRETE, crown: true },
     { at: R(w, -44, w + 2.5, -43.3), y: Y, top: 10.2, key: CONCRETE, crown: true },
   ]),
+  // the roofs: tar under drifted snow, over the house, the bridge and the watch way
+  { at: [[-24, 30], [-18, 30], [-18, 36], [42, 36], [42, 30], [48, 30], [48, 20], [50, 20], [50, 19.5], [60.6, 19.5], [60.6, -25.5], [33.5, -25.5], [33.5, -19], [19, -19], [19, -34.5], [16.5, -34.5], [16.5, -36], [-26, -36], [-26, -21], [-24, -21], [-24, -18], [-10.5, -18], [-10.5, -8], [-6.5, -8], [-6.5, -1.5], [-24, -1.5]], y: TOP, top: TOP + 0.12, key: ROOF },
+  { at: R(-34, -25, -26, -21), y: TOP, top: TOP + 0.12, key: ROOF },
+  { at: [[-43.1, -24.5], [-35, -24.5], [-35, -13], [-37.5, -13], [-37.5, 7.6], [-43.1, 7.6]], y: TOP, top: TOP + 0.12, key: ROOF },
+  // the ledge round the house at the rooms' floor, north, west and east, with the snow on it
+  ...[R(-18, 36, 42, 36.5), R(-24.5, 18.6, -24, 30.5), R(-24, 30, -18, 30.5), R(-18.5, 30.5, -18, 36.5), R(42, 30, 42.5, 36.5), R(42.5, 30, 48, 30.5), R(47.5, 20.5, 48, 30)].flatMap((at) => [
+    { at, y: 9.25, top: 9.6, key: CONCRETE },
+    { at, y: 9.6, top: 9.68, key: 'ch_cap' },
+  ]),
   // the ceiling over each ladder's shaft
   { at: R(-19.5, 5, -16.5, 6.5), y: F + 3.05, top: TOP, key: CEILING },
   { at: R(-18.5, 16, -17, 19), y: F + 3.05, top: TOP, key: CEILING },
@@ -265,6 +278,10 @@ export const MASSES = [
   { at: R(39.5, 23.5, 40.7, 27.2), y: F, top: F + 1, key: 'ch_desk' },
   { at: R(47.5, 1.5, 49, 6), y: F, top: F + 3.05, key: PLASTER },
   { at: R(44.2, 2.6, 46.2, 4.8), y: F, top: F + 0.8, key: 'ch_desk' },
+  { at: R(30, 2.2, 33.5, 3.3), y: F, top: F + 0.8, key: 'ch_desk' },
+  { at: R(39.6, -9.6, 41.4, -6.4), y: F, top: F + 0.8, key: 'ch_desk' },
+  { at: R(-13.5, 13.4, -10.5, 14.6), y: F, top: F + 0.8, key: 'ch_desk' },
+  { at: R(30, 15.8, 34.5, 16.8), y: F, top: F + 0.8, key: 'ch_desk' },
 ];
 
 /** Ladders in the two shafts of the passage: drawn, and not climbed yet. */
@@ -299,6 +316,8 @@ export const BLOCKS = [
 
 /** Lamps under the roofs: [east, north]. A room has one or more; the passage under the west rooms has its own. */
 export const LAMPS = [
+  // under the east hall, in the dock's south end: [east, north, up]
+  [53.75, 8.4, 8.9],
   // the bridge, the watch way and its ramp, the watch room and its ramp
   [-30, -23], [-40, -20], [-40, -11], [-40, -3], [-40, 4], [-19, -28], [-13, -28], [-13, -22], [-18, -21],
   // the garage and its stairs
@@ -310,7 +329,7 @@ export const LAMPS = [
   // the west rooms
   [-14, 2], [-9, 5], [-19.5, 2], [-21.8, 13.7], [-11.5, 14], [-12, 17.2], [-12, 25.5], [-19.5, 26],
   // the middle room, the south-east room, its closet, the long room, the back room, the east hall, the dock
-  [34, 3.7], [38, -6], [46.5, -5], [35.2, -13], [26, 11], [33, 12.5], [38.5, 12.5], [31.5, 19.5], [37, 24], [43.5, 22], [43.8, 27], [45.5, 5.8], [52, 0.5], [56, 6.5], [46.8, 12], [54, 14.5],
+  [34, 3.7], [38, -6], [46.5, -5], [35.2, -13], [26, 11], [33, 12.5], [38.5, 12.5], [31.5, 19.5], [37, 24], [43.5, 22], [43.8, 27], [45.5, 5.8], [52, 0.5], [56, 6.5], [46.8, 12], [53.75, 15],
   // the covered corner of the front yard, and the passage under the west rooms
   [35.2, -42], [-20.7, 6.75], [-17.25, 12], [-20.7, 21],
 ];

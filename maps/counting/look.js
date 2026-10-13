@@ -29,18 +29,18 @@ export const SURFACES = {
   // The road: tar and grit where wheels went, packed snow and ice between.
   packed: cold(surface(`
     vec2 p = uv * P + uSeed * 5.7;
-    float cover = owFbm01(owWarp(p * 1.25, P * 1.25, 0.4, 2), P * 1.25, 4, 0.55);
+    float cover = owFbm01(owWarp(p * 2.5, P * 2.5, 0.4, 2), P * 2.5, 4, 0.55);
     float grain = owFbm01(p * 18.0, P * 18.0, 4, 0.55);
     vec4 stone = owWorley(p * 10.0, P * 10.0, 1.0);
-    float snow = smoothstep(0.40, 0.58, cover);
-    float ice = smoothstep(0.34, 0.40, cover) * (1.0 - snow);
-    vec3 tar = owSRGB(vec3(0.19, 0.20, 0.23)) * (0.8 + 0.4 * grain);
-    tar = mix(tar, owSRGB(vec3(0.42, 0.43, 0.45)), smoothstep(0.07, 0.02, stone.x) * step(0.6, stone.z) * 0.7);
-    tar = mix(tar, owSRGB(vec3(0.46, 0.52, 0.60)), ice * 0.7);
-    vec3 white = owSRGB(vec3(0.85, 0.88, 0.94)) * (0.95 + 0.08 * grain);
+    float snow = smoothstep(0.30, 0.46, cover);
+    float ice = smoothstep(0.24, 0.30, cover) * (1.0 - snow);
+    vec3 tar = owSRGB(vec3(0.30, 0.31, 0.34)) * (0.8 + 0.4 * grain);
+    tar = mix(tar, owSRGB(vec3(0.48, 0.49, 0.51)), smoothstep(0.07, 0.02, stone.x) * step(0.6, stone.z) * 0.7);
+    tar = mix(tar, owSRGB(vec3(0.52, 0.58, 0.66)), ice * 0.7);
+    vec3 white = mix(owSRGB(vec3(0.74, 0.78, 0.86)), owSRGB(vec3(0.88, 0.90, 0.95)), smoothstep(0.46, 0.8, cover)) * (0.95 + 0.08 * grain);
     alb = mix(tar, white, snow);
     h = mix(0.34 + (grain - 0.5) * 0.06, 0.58 + (cover - 0.5) * 0.25, snow);
-    rough = mix(0.9, 0.86, snow) - ice * 0.5; metal = 0.0; ao = 1.0;
+    rough = mix(0.9, 0.86, snow) - ice * 0.4; metal = 0.0; ao = 1.0;
   `, { metres: 4.8, relief: 0.04, seed: 37, surface: 'concrete', like: 'ground' }), { weather: [0.05, 0, 0, 0.08] }),
   // Carpet in squares of 0.6 m: slate pile with a paler fleck, each square laid its own way, worn in patches.
   carpet: cold(surface(`
@@ -51,9 +51,9 @@ export const SURFACES = {
     float pile = owFbm01(p * 40.0, P * 40.0, 3, 0.6);
     float fleck = smoothstep(0.62, 0.7, owFbm01(p * 28.0 + 3.0, P * 28.0, 2, 0.5));
     float worn = owFbm01(p * 1.5, P * 1.5, 3, 0.5);
-    vec3 c = mix(owSRGB(vec3(0.16, 0.21, 0.29)), owSRGB(vec3(0.24, 0.30, 0.39)), pile);
+    vec3 c = mix(owSRGB(vec3(0.13, 0.17, 0.25)), owSRGB(vec3(0.20, 0.25, 0.34)), pile);
     c *= 0.9 + 0.2 * rnd.x;
-    c = mix(c, owSRGB(vec3(0.40, 0.45, 0.50)), fleck * 0.45);
+    c = mix(c, owSRGB(vec3(0.34, 0.38, 0.44)), fleck * 0.45);
     c = mix(c, c * 1.2 + 0.01, smoothstep(0.55, 0.85, worn) * 0.5);
     alb = c * (0.78 + 0.22 * seam);
     h = 0.5 + (pile - 0.5) * 0.1 - (1.0 - seam) * 0.12;
@@ -73,7 +73,7 @@ export const SURFACES = {
     vec4 pit = owWorley(p * 12.0, P * 12.0, 1.0);
     float pits = smoothstep(0.08, 0.02, pit.x) * step(0.7, pit.z);
     h = joint * (0.6 + (rnd.x - 0.5) * 0.08 + (grain - 0.5) * 0.05) - pits * 0.05;
-    vec3 c = mix(owSRGB(vec3(0.45, 0.49, 0.53)), owSRGB(vec3(0.60, 0.63, 0.65)), rnd.y);
+    vec3 c = mix(owSRGB(vec3(0.40, 0.44, 0.49)), owSRGB(vec3(0.54, 0.57, 0.60)), rnd.y);
     c *= 0.9 + 0.2 * grain;
     c = mix(c, c * 0.78, smoothstep(0.5, 0.8, streak) * 0.6);
     c = mix(c, owSRGB(vec3(0.30, 0.32, 0.35)), pits * 0.6);
@@ -112,21 +112,23 @@ export const LOOK = {
     ch_slab: { of: 'concrete_floor', tint: 0xa4a9b0, surface: 'concrete' },
     ch_asphalt: { of: 'asphalt', tint: 0x8f959e },
     ch_block: { of: 'blockwork', tint: 0xffffff },
-    ch_brick: { of: 'brick', tint: 0xa98f88 },
-    ch_concrete: { of: 'concrete', tint: 0xa7acb3 },
+    ch_brick: { of: 'brick', tint: 0xd6c2bc },
+    ch_concrete: { of: 'concrete', tint: 0x98a6b8 },
     ch_plaster: { of: 'plaster', tint: 0xffffff },
     ch_ceiling: { of: 'tiles', tint: 0xffffff },
-    ch_band: { of: 'concrete', tint: 0x62676e },
+    ch_band: { of: 'concrete', tint: 0x586272 },
     ch_cap: { of: 'snow', tint: 0xf6f8fb },
-    ch_wood: { of: 'boards', tint: 0xcdb497 },
-    ch_wood_dark: { of: 'boards', tint: 0x7a5a43 },
-    ch_desk: { of: 'wood', tint: 0xa9794f },
-    ch_van: { of: 'metal_painted', tint: 0x9aa7b4 },
-    ch_van_box: { of: 'metal_painted', tint: 0xc9ced2 },
+    ch_roof: { of: 'packed', tint: 0x9da2ab },
+    ch_wood: { of: 'boards', tint: 0xdcd6ca },
+    ch_wood_dark: { of: 'boards', tint: 0x8e8478 },
+    ch_desk: { of: 'wood', tint: 0xd8b48a },
+    ch_van: { of: 'metal_painted', tint: 0x5f7fa8 },
+    ch_van_box: { of: 'corrugated', tint: 0xb4c2d0 },
     ch_tin: { of: 'corrugated', tint: 0x8d5b4a },
   },
   keys: { ground: 'ch_snow', side: 'ch_concrete', wall: 'ch_block', band: 'ch_band', cap: 'ch_cap', lid: 'ch_snow', wood: 'ch_wood', woodDark: 'ch_wood_dark', iron: 'metal_dark', apron: 'ch_snow' },
-  sky: { hour: 11, weather: { coverage: 0.45, turbidity: 3 } },
-  // The cook's light for this place: a cold sky, what the sunlit snow sends back, the rooms' lamps.
-  light: { sky: [1.05, 1.15, 1.35], bounce: [0.6, 0.66, 0.78], lamp: [7.6, 7.1, 6.2], reach: 12 },
+  sky: { hour: 11, weather: { coverage: 0.55, turbidity: 3 } },
+  // The cook's light for this place: the sky's fill brought from blue toward grey (the rooms take a
+  // share of it), what the sunlit snow sends back, the rooms' lamps.
+  light: { sky: [1.2, 1.05, 0.92], bounce: [0.7, 0.72, 0.76], lamp: [10, 9.4, 8.4], reach: 14 },
 };
