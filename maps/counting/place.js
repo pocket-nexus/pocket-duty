@@ -28,7 +28,8 @@
  * One house on a slope of two heights: snow yards at 5.5 on every side, the rooms at 10. The ways up are
  * the garage's stairs, the entrance hall's stairs, and the crates under the two open windows of the
  * ledge. A passage runs under the west rooms from the side yard to the yard north of the wall, with a
- * ladder's shaft at each bend; the rooms over it are floors over a floor.
+ * ladder's shaft at each bend; the rooms over it are floors over a floor, and so is the east hall over
+ * the south end of the dock.
  */
 
 /** The map's name, its turn in the world (which side the sun is on), its walls' height, the starts. */
@@ -40,7 +41,7 @@ export const PLACE = {
   // [east, north, facing in degrees from north toward east, tag]. The first is the player's.
   starts: [
     // (the title shows this one's view: the side yard, the crates' climb to the ledge ahead, the garage to the right)
-    [-33.5, -6.5, 85, 'side yard'],
+    [-33.5, -6.5, 95, 'side yard'],
     [-30, -40, 20, 'the lot'],
     [-32, -34, 10, 'the lot'],
     [-28, -31, 0, 'the lot'],
@@ -81,7 +82,7 @@ export const GROUND = [
   { at: R(-34, -44, -26, -25), y: Y, key: ROAD, wall: CONCRETE },
   { at: R(-34, -25, -26, -21), y: Y, key: ROAD, roof: 4.6, wall: CONCRETE, roofKey: CONCRETE },
   { at: [[-26, -44], [-12, -44], [-12, -45], [-4.5, -45], [-4.5, -44], [14.3, -44], [14.3, -36], [-26, -36]], y: Y, key: ROAD, wall: CONCRETE },
-  // ------------------------------------------------------------------ the side yard, its drift up to the crates, the wall north of it (WALLS) and its gate
+  // ------------------------------------------------------------------ the side yard, its drift up to the crates, the wall north of it (WALLS)
   { at: [[-35, -21], [-24, -21], [-24, -18], [-10.5, -18], [-10.5, -15.5], [-14, -15.5], [-14, -10.5], [-10.5, -10.5], [-10.5, -8], [-7.5, -8], [-7.5, -2.5], [-24, -2.5], [-24, 5.5], [-26.5, 5.5], [-26.5, 8], [-24, 8], [-24, 17.5], [-35, 17.5], [-35, 8], [-37.5, 8], [-37.5, -13], [-35, -13]], y: Y },
   { at: [[-17.5, -2.5], [-17.5, -7], [-14, -8], [-7.5, -8], [-7.5, -2.5]], y: { from: [-17.5, -5, Y], to: [-12.5, -5, G] } },
   // ------------------------------------------------------------------ the yards north and east of the house, the ramp down to the dock
@@ -128,7 +129,7 @@ export const GROUND = [
   // ------------------------------------------------------------------ the passage under the west rooms (before the floors over it)
   { at: R(-26.5, 5.5, -24, 8), y: { from: [-26.5, 6.75, Y], to: [-24, 6.75, T] }, side: SNOW },
   { at: R(-26.5, 19.5, -24, 22.5), y: { from: [-26.5, 21, Y], to: [-24, 21, T] }, side: SNOW },
-  { at: R(-24, 5.5, -22.5, 8), y: T, key: SLAB, roof: 2.6, walls: TOP - T, wall: CONCRETE, crown: false },
+  { at: R(-24, 5.5, -22.5, 8), y: T, key: SLAB, roof: 2.6, walls: TOP - T, wall: CONCRETE, roofKey: CONCRETE, crown: false },
   { at: R(-22.5, 5.5, -19, 8), y: T, key: SLAB, roof: 2.6, walls: 4.9, wall: CONCRETE, roofKey: CONCRETE },
   { at: R(-19, 5.5, -16.5, 6.5), y: T, key: SLAB, walls: TOP - T, wall: CONCRETE, crown: false },
   { at: [[-19, 6.5], [-16.5, 6.5], [-16.5, 5.5], [-15.5, 5.5], [-15.5, 8], [-19, 8]], y: T, key: SLAB, roof: 2.6, walls: 4.9, wall: CONCRETE, roofKey: CONCRETE },
@@ -138,11 +139,14 @@ export const GROUND = [
   { at: R(-17, 16, -15.5, 19), y: T, key: SLAB, roof: 2.6, walls: 4.9, wall: CONCRETE, roofKey: CONCRETE },
   { at: R(-19, 19, -15.5, 22.5), y: T, key: SLAB, roof: 2.6, walls: 4.9, wall: CONCRETE, roofKey: CONCRETE },
   { at: R(-22.5, 19.5, -19, 22.5), y: T, key: SLAB, roof: 2.6, walls: 4.9, wall: CONCRETE, roofKey: CONCRETE },
-  { at: R(-24, 19.5, -22.5, 22.5), y: T, key: SLAB, roof: 2.6, walls: TOP - T, wall: CONCRETE, crown: false },
-  // The rooms' floor over the passage: a slab with an underside, and the soldiers' floor of the two.
-  room(R(-22.5, 19, -15, 23), { over: true, soldiers: true, rail: 0, side: CONCRETE }),
-  room([[-19.5, 8.5], [-15, 8.5], [-15, 19], [-17, 19], [-17, 16], [-18.5, 16], [-18.5, 19], [-19.5, 19]], { over: true, soldiers: true, rail: 0, side: CONCRETE }),
-  room([[-22.5, 5], [-19.5, 5], [-19.5, 6.5], [-16.5, 6.5], [-16.5, 5], [-15, 5], [-15, 8.5], [-22.5, 8.5]], { over: true, soldiers: true, rail: 0, side: CONCRETE }),
+  { at: R(-24, 19.5, -22.5, 22.5), y: T, key: SLAB, roof: 2.6, walls: TOP - T, wall: CONCRETE, roofKey: CONCRETE, crown: false },
+  // The rooms' floor over the passage: slabs with an underside, round the two shafts. Soldiers have both floors.
+  room(R(-22.5, 19, -15, 23), { over: true, rail: 0, side: CONCRETE }),
+  room([[-19.5, 8.5], [-15, 8.5], [-15, 19], [-17, 19], [-17, 16], [-18.5, 16], [-18.5, 19], [-19.5, 19]], { over: true, rail: 0, side: CONCRETE }),
+  room(R(-22.5, 6.5, -15, 8.5), { over: true, rail: 0, side: CONCRETE }),
+  room(R(-22.5, 4.5, -19, 6.5), { over: true, rail: 0, side: CONCRETE }),
+  room(R(-16.5, 4.5, -15, 6.5), { over: true, rail: 0, side: CONCRETE }),
+  room(R(-19, 4.5, -16.5, 5.5), { over: true, rail: 0, side: CONCRETE }),
   // ------------------------------------------------------------------ the west rooms: the glass room, the rooms south of it
   room([[-15, 19], [-6, 19], [-6, 27.5], [-9, 27.5], [-9, 28], [-10, 28], [-10, 29.5], [-13, 29.5], [-13, 28], [-14, 28], [-14, 27.5], [-17.5, 27.5], [-17.5, 30], [-24, 30], [-24, 23], [-15, 23]], { side: BLOCK }),
   room([[-15, 15.5], [-9.5, 15.5], [-9.5, 17.5], [-6, 17.5], [-6, 19], [-15, 19]]),
@@ -151,8 +155,8 @@ export const GROUND = [
   room(R(-15, 12.5, -8.5, 15.5)),
   room(R(-21, 10, -19.5, 12)),
   room(R(-22.5, 8.5, -19.5, 10)),
-  room(R(-22.5, -0.5, -16.5, 5)),
-  room([[-16, -1.5], [-12, -1.5], [-12, 8], [-15, 8], [-15, 5], [-16, 5]]),
+  room(R(-22.5, -0.5, -16.5, 4.5)),
+  room([[-16, -1.5], [-12, -1.5], [-12, 8], [-15, 8], [-15, 4.5], [-16, 4.5]]),
   room(R(-12, 1.5, -6.5, 8)),
   // ------------------------------------------------------------------ the passages: middle, south, the two between them, the north one
   room(R(-15, 8, 20.5, 12.5)),
@@ -184,15 +188,15 @@ export const GROUND = [
   door(R(40.5, 10.5, 43.5, 12.5)),
   door(R(42, -5, 43.5, -3)),
   room([[40.5, 1], [43.5, 1], [43.5, -3], [60, -3], [60, 10], [58, 10], [58, 6], [49.5, 6], [49.5, 14], [43.5, 14], [43.5, 7.5], [40.5, 7.5]]),
-  // (its floor over the dock's south end: a slab, and the soldiers' floor of the two)
-  room(R(49.5, 6, 58, 10), { over: true, soldiers: true, rail: 0, side: CONCRETE }),
+  // (its floor over the dock's south end: a slab; soldiers have both floors)
+  room(R(49.5, 6, 58, 10), { over: true, rail: 0, side: CONCRETE }),
   room(R(43.5, -7, 50, -3)),
 ];
 
 /** Walls along a line, with what is cut in them: `holes` of `{ at, w, h, sill, arch, frame, glass }`, `at` in metres from the first point. */
 export const WALLS = [
-  // ---- the wall between the side yard and the yard north of it, with the gate of ours through it
-  { line: [[-35, 17.5], [-24, 17.5]], y: Y, h: 8, t: 1, key: BLOCK, holes: [{ at: 5, w: 3.2, h: 3.2, arch: 0.4 }] },
+  // ---- the wall between the side yard and the yard north of it: the way round it is the passage under the west rooms
+  { line: [[-35, 17.5], [-24, 17.5]], y: Y, h: 8, t: 1, key: BLOCK },
   // ---- windows. The glass room's, west and north: panes.
   { line: [[-24, 23], [-24, 30]], y: F, h: 3.5, t: 0.4, key: CONCRETE, holes: [{ at: 1.9, w: 2.6, h: 1.9, sill: 0.45, frame: true, glass: true }, { at: 5.1, w: 2.6, h: 1.9, sill: 0.45, frame: true, glass: true }] },
   { line: [[-24, 30], [-17.5, 30]], y: F, h: 3.5, t: 0.4, key: CONCRETE, holes: [{ at: 1.75, w: 2.4, h: 1.9, sill: 0.45, frame: true, glass: true }, { at: 4.75, w: 2.4, h: 1.9, sill: 0.45, frame: true, glass: true }] },
@@ -208,9 +212,7 @@ export const WALLS = [
   { line: [[-37.5, -13], [-37.5, 7]], y: U, h: TOP - U, t: 0.4, key: BLOCK, holes: [{ at: 4.9, w: 2.5, h: 1.6, sill: 0.8, frame: true }, { at: 7.7, w: 2.5, h: 1.6, sill: 0.8, frame: true }, { at: 13.4, w: 2.5, h: 1.6, sill: 0.8, frame: true }, { at: 16.2, w: 2.5, h: 1.6, sill: 0.8, frame: true }] },
   // ---- the rooms' walls where a floor over the passage ends at one, and the wall between the west rooms and the way beside them
   { line: [[-22.5, 19], [-21, 19]], y: F, h: 3.5, t: 0.3, key: PLASTER, crown: false },
-  { line: [[-22.5, 19], [-22.5, 23]], y: F, h: 3.5, t: 0.2, key: PLASTER, crown: false },
-  { line: [[-22.5, 5], [-22.5, 8.5]], y: F, h: 3.5, t: 0.2, key: PLASTER, crown: false },
-  { line: [[-16.25, 5], [-16.25, 12]], y: F, h: 3.5, t: 0.3, key: PLASTER, crown: false },
+  { line: [[-16.25, 4.5], [-16.25, 12]], y: F, h: 3.5, t: 0.3, key: PLASTER, crown: false },
   // ---- doorways of the house: a wall across a passage with its frame
   { line: [[-3, 8], [-3, 12.5]], y: F, h: 3.5, t: 0.3, key: PLASTER, crown: false, holes: [{ at: 2.25, w: 3, h: 2.3, frame: true }] },
   { line: [[0.5, -8.5], [5.5, -8.5]], y: F, h: 3.5, t: 0.3, key: PLASTER, crown: false, holes: [{ at: 2.5, w: 3, h: 2.3, frame: true }] },
@@ -271,13 +273,14 @@ export const MASSES = [
   { at: [[-24, 30], [-18, 30], [-18, 36], [42, 36], [42, 30], [48, 30], [48, 20], [50, 20], [50, 19.5], [60.6, 19.5], [60.6, -25.5], [33.5, -25.5], [33.5, -19], [19, -19], [19, -34.5], [16.5, -34.5], [16.5, -36], [-26, -36], [-26, -21], [-24, -21], [-24, -18], [-10.5, -18], [-10.5, -8], [-6.5, -8], [-6.5, -1.5], [-24, -1.5]], y: TOP, top: TOP + 0.12, key: ROOF },
   { at: R(-34, -25, -26, -21), y: TOP, top: TOP + 0.12, key: ROOF },
   { at: [[-43.1, -24.5], [-35, -24.5], [-35, -13], [-37.5, -13], [-37.5, 7.6], [-43.1, 7.6]], y: TOP, top: TOP + 0.12, key: ROOF },
-  // the ledge round the house at the rooms' floor, north, west and east, with the snow on it
-  ...[R(-18, 36, 42, 36.5), R(-24.5, 18.6, -24, 30.5), R(-24, 30, -18, 30.5), R(-18.5, 30.5, -18, 36.5), R(42, 30, 42.5, 36.5), R(42.5, 30, 48, 30.5), R(47.5, 20.5, 48, 30)].flatMap((at) => [
+  // the ledge round the house at the rooms' floor, north, west and east, with the snow on it (none over
+  // the passage's mouth: a solid over walked ground takes it from the walk grid)
+  ...[R(-18, 36, 42, 36.5), R(-24.5, 23.2, -24, 30.5), R(-24, 30, -18, 30.5), R(-18.5, 30.5, -18, 36.5), R(42, 30, 42.5, 36.5), R(42.5, 30, 48, 30.5), R(47.5, 20.5, 48, 30)].flatMap((at) => [
     { at, y: 9.25, top: 9.6, key: CONCRETE },
     { at, y: 9.6, top: 9.68, key: 'ch_cap' },
   ]),
   // the ceiling over each ladder's shaft
-  { at: R(-19.5, 5, -16.5, 6.5), y: F + 3.05, top: TOP, key: CEILING },
+  { at: R(-19, 5.5, -16.5, 6.5), y: F + 3.05, top: TOP, key: CEILING },
   { at: R(-18.5, 16, -17, 19), y: F + 3.05, top: TOP, key: CEILING },
   // furniture: the glass room's table, the desks, the long room's counter, the east hall's pier
   { at: R(-11, 21, -9, 24), y: F, top: F + 0.8, key: 'ch_desk' },
@@ -293,10 +296,10 @@ export const MASSES = [
   { at: R(30, 15.8, 34.5, 16.8), y: F, top: F + 0.8, key: 'ch_desk' },
 ];
 
-/** Ladders in the two shafts of the passage: drawn, and not climbed yet. */
+/** Ladders in the two shafts of the passage, from its floor up to the rooms': a player and soldiers climb them. */
 export const LADDERS = [
-  { at: [-17.75, 5.6], facing: 0, h: F - T, y: T },
-  { at: [-17.75, 18.9], facing: 180, h: F - T, y: T },
+  { at: [-17.75, 5.65], facing: 0, h: F - T, y: T },
+  { at: [-17.75, 18.85], facing: 180, h: F - T, y: T },
 ];
 
 /** Crates: [east, north, side, turn in degrees, up]. Without `up` a crate stands on the floor. */

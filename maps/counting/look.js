@@ -130,7 +130,7 @@ export const LOOK = {
   sky: { hour: 11, weather: { coverage: 0.55, turbidity: 3 } },
   // The cook's light for this place: the sky's fill brought from blue toward grey (the rooms take a
   // share of it), what the sunlit snow sends back, the rooms' lamps. The exposure is the reference's
-  // at the player's first start, in the open yard on sunlit snow (0.77): the fill, the bounce and the
+  // at the player's first start, in the open yard on sunlit snow (0.83): the fill, the bounce and the
   // lamps are large so that snow in shade and the rooms still show at it.
-  light: { sky: [3.18, 2.32, 1.68], bounce: [1.59, 1.63, 1.73], lamp: [31.8, 30, 26.8], reach: 14 },
+  light: { sky: [2.94, 2.15, 1.56], bounce: [1.47, 1.51, 1.6], lamp: [29.4, 27.8, 24.8], reach: 14 },
 };
