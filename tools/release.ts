@@ -104,13 +104,26 @@ function tree(directory: string, prefix: string): { name: string; path?: string 
 }
 
 /**
- * Writes a zip whose bytes follow from its entries alone: the entries named
- * in `first`, then the others in the order of their names, every date
- * 1980-01-01 00:00, modes 0644, or 0755 for a directory and for a file its
- * owner may execute, no extra fields. An entry is deflated at level 6 unless
- * that makes it longer.
+ * The commit's moment as a zip's time and date words (UTC, two seconds a
+ * step). A PSP's XMB did not list a folder unpacked from a zip whose entries
+ * were all dated 1980-01-01 00:00 with EBOOT.PBP among the last of them; both
+ * were changed at once, so which of the two it needs is not known.
+ */
+function zipStamp(): [number, number] {
+  const at = new Date(Number(line(["git", "log", "-1", "--format=%ct"])) * 1000);
+  const year = Math.max(1980, at.getUTCFullYear());
+  return [(at.getUTCHours() << 11) | (at.getUTCMinutes() << 5) | (at.getUTCSeconds() >> 1), ((year - 1980) << 9) | ((at.getUTCMonth() + 1) << 5) | at.getUTCDate()];
+}
+
+/**
+ * Writes a zip whose bytes follow from its entries and the commit alone: the
+ * entries named in `first`, then the others in the order of their names,
+ * every date the commit's, modes 0644, or 0755 for a directory and for a
+ * file its owner may execute, no extra fields. An entry is deflated at level
+ * 6 unless that makes it longer.
  */
 function writeZip(output: string, entries: { name: string; path?: string }[], first: string[] = []): void {
+  const [time, date] = zipStamp();
   const rank = (name: string) => (first.includes(name) ? first.indexOf(name) : first.length);
   const fd = openSync(output, "w");
   const directory: Buffer[] = [];
@@ -127,7 +140,8 @@ function writeZip(output: string, entries: { name: string; path?: string }[], fi
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(method, 8);
-    local.writeUInt16LE(0x0021, 12);
+    local.writeUInt16LE(time, 10);
+    local.writeUInt16LE(date, 12);
     local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(body.length, 18);
     local.writeUInt32LE(data.length, 22);
@@ -162,7 +176,10 @@ async function psp(log: string, output: string): Promise<void> {
   rmSync(join(ROOT, "dist/psp/PSP"), { recursive: true, force: true });
   await run(log, ["bun", "tools/psp.ts", "build"]);
   await run(log, ["bun", "tools/psp.ts", "package"]);
-  writeZip(output, [{ name: "PSP/" }, { name: "PSP/GAME/" }, ...tree(join(ROOT, "dist/psp/PSP/GAME/PocketDuty"), "PSP/GAME/PocketDuty")]);
+  // EBOOT.PBP is the folder's first file, as it was while the pack was one file beside it: an unpacker writes
+  // a card's directory in the zip's order, and the pieces' names sort before it.
+  const folder = "PSP/GAME/PocketDuty";
+  writeZip(output, [{ name: "PSP/" }, { name: "PSP/GAME/" }, ...tree(join(ROOT, "dist/psp", folder), folder)], ["PSP/", "PSP/GAME/", `${folder}/`, `${folder}/EBOOT.PBP`]);
 }
 
 /** The memory card's folder (`tools/n3ds.ts` `card`): the `.3dsx` without a pack, and every map's pack beside it. */
