@@ -129,16 +129,16 @@ async function start() {
   // A device's packs: its own where the page has them and this GPU reads their blocks, the PSP's otherwise.
   const own = new Map(DEVICES.map((d) => [d.id, packsOf(d.id)]));
   const packsFor = (d) => (own.get(d.id).size > 0 && duty.reads_blocks() ? own.get(d.id) : packs);
-  let held = packsFor(device);
-  duty.maps([...held.keys()].join(","));
-  report.packs = () => ({ own: held !== packs, maps: [...held.keys()] });
+  let using = packsFor(device);
+  duty.maps([...using.keys()].join(","));
+  report.packs = () => ({ own: using !== packs, maps: [...using.keys()] });
   // A map's pack, read beside everything else. The shell holds one world: it let the last one go
   // before it asked for this map. A read that another has overtaken (another device's pack was asked
   // for while it was under way) gives its world back.
   let reads = 0;
   const read = (map) => {
     const turn = ++reads;
-    return duty.reader().read(new URL(held.get(map), location.href).href).then((world) => {
+    return duty.reader().read(new URL(using.get(map), location.href).href).then((world) => {
       if (turn !== reads) return world.free();
       duty.enter(world);
       if (!report.ready && query.get("words")) duty.control(query.get("words"));
@@ -150,7 +150,7 @@ async function start() {
       if (!ui) say(report.failure);
     });
   };
-  const first = held.has(query.get("map")) ? query.get("map") : held.keys().next().value;
+  const first = using.has(query.get("map")) ? query.get("map") : using.keys().next().value;
   duty.reads(first);
   read(first);
 
@@ -169,9 +169,9 @@ async function start() {
     lower = of.auxiliary ? new ImageData(of.auxiliary[0], of.auxiliary[1]) : null;
     // A device whose packs are others than the held one's: the held map is read again from its own, as
     // another map is (the loading words, then the title or the match it left).
-    if (packsFor(next) !== held) {
-      held = packsFor(next);
-      duty.maps([...held.keys()].join(","));
+    if (packsFor(next) !== using) {
+      using = packsFor(next);
+      duty.maps([...using.keys()].join(","));
       duty.repack();
     }
     // The guest of the device before goes with its realm; the new one is told the whole state on its first turn.
@@ -230,7 +230,7 @@ async function start() {
     const map = duty.map_wanted();
     if (map) {
       // (a map the shown device has no pack for gives way to the first it has)
-      const has = held.has(map) ? map : held.keys().next().value;
+      const has = using.has(map) ? map : using.keys().next().value;
       if (has !== map) duty.reads(has);
       read(has);
     }
