@@ -34,9 +34,9 @@ bun tools/psp.ts package           # dist/psp/PSP/GAME/PocketDuty for a Memory S
 Those are the first map's commands, the reference's street. Another map is the same with `--map <id>` (`maps/maps.json` lists them):
 
 ```
-bun tools/duty.ts export --map yards   # maps/yards/layout.js through the reference → .pocket-build/duty/maps/yards/ir
+bun tools/duty.ts export --map yards   # maps/yards/place.js through the reference's kit → .pocket-build/duty/maps/yards/ir
 bun tools/duty.ts walk --map yards     # where the soldiers can walk, read from the export
-bun tools/duty.ts cook --map yards     # → .pocket-build/duty/maps/yards/psp30/duty.pack (7 minutes)
+bun tools/duty.ts cook --map yards     # → .pocket-build/duty/maps/yards/psp30/duty.pack (100 s)
 bun tools/psp.ts emu --map yards       # the PSP program started on it
 bun tools/duty.ts maps                 # which maps are exported and cooked
 ```
@@ -114,12 +114,12 @@ Left out: leaning, lying down, and the reference's ragdolls (a soldier who falls
 
 ## Maps
 
-A map is a plan written by hand in the terms of the reference's kit (`maps/<id>/layout.js`), built by the reference in Chrome, exported and cooked like the street. **`maps/maps.json` lists the maps**: the reference's street first, then Twin Yards (`maps/yards/`): two walled yards, a long lane, a covered way and the street between.
+A map is a plan drawn by hand (`maps/<id>/place.js`): **floors as polygons at their heights**, in the place's own coordinates, built by the reference's kit in Chrome, exported and cooked like the street. **`maps/maps.json` lists the maps**: the reference's street first, then Twin Yards: two sites, a long lane with a pit, a middle lane, covered ways on two heights and a high start.
 
-- The export's server hands the reference's world a layout of ours in place of its own (`web/src/pocket/vite.config.js`); the reference's files are unchanged. `web/src/pocket/mapkit.js` builds what a layout adds to the reference's terms (open ground, walls, covered ways, raised ground, cover) from the kit's own boxes, materials and props, and `mapnav.js` finds the walk grid under roofs and closes it at thin walls.
+- `web/src/pocket/placekit.js` builds a place with no street, gate or perimeter: a wall where a floor's edge has nothing beyond it, a face where a lower floor lies beyond, a cap over each block between, and what a plan lists beside its floors (walls with openings, covered ways, doors, crates, houses). `placelook.js` gives a map surfaces of its own, drawn by functions of ours and baked by the reference's material system, and its sky. The reference's files are unchanged.
 - The cook, the pack, the match and the devices hold no code for a particular map: starts, walk grid, collision and sight lists are sections of each map's pack.
 - **A device holds one map's pack at a time.** The interface lists the maps a device has a pack for. A browser tab reads the other pack in place of the first; a PSP, which cannot give a pack's memory back, writes the map's name beside its packs and starts itself again; a 3DS's package holds one map, the first unless `bun tools/n3ds.ts build --map <id>` names another.
-- **A map may resemble a place a player knows in its structure, and takes nothing else**: no file of another game is read, and no vertex, texture, sound, entity list, file name or map name of one enters the repository, a pack, a package or a page.
+- **A map may be a place a player knows, restated by us.** Its plan, proportions, heights and landmarks follow the place, typed by hand against the author's own study pictures; its surfaces are made by our code in the place's family of colours; its names are ours. Nothing is converted from a file of another game, and nothing of one enters the repository, a pack, a package or a page.
 
 `maps/README.md` is how a map is made, what a layout states, how to add one and how it is checked.
 
