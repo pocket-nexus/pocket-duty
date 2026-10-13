@@ -83,8 +83,13 @@ impl Reader {
     pub async fn read(self, url: String) -> Result<World, JsError> {
         let source = Source::open(&url).await.map_err(|e| JsError::new(&e))?;
         let world = app::World::read(self.gpu, self.format, source, self.progress).await.map_err(|e| JsError::new(&e))?;
-        // (a pack named in a manifest has its picture under the same manifest; a lone file has none)
-        let chart = if url.contains(".packs#") { read_chart(&format!("{url}-map")).await } else { None };
+        // A pack named in a manifest has its picture under the same manifest, as `<map>-map`. A pack served
+        // as a file (the development server) has it beside the file, under the same name with `.chart`.
+        let chart = match url.strip_suffix(".pack") {
+            _ if url.contains(".packs#") => read_chart(&format!("{url}-map")).await,
+            Some(stem) => read_chart(&format!("{stem}.chart")).await,
+            None => None,
+        };
         Ok(World { world, chart })
     }
 }
