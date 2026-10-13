@@ -1,0 +1,34 @@
+// A fragment of the street: the picture's texel under the vertex's baked light, then the haze.
+//   CUTOUT  the picture has holes: a texel under half opaque is not drawn
+//   GROUND  the sun's shadow over the ground comes from a picture (one half is all of the sun)
+//   FLASH   a muzzle's light reaches what is near it: uFlash xyz where, w its strength; uFlashColour
+//   uLook   rgb: the haze's colour; a: how opaque the surface is (glass)
+
+uniform sampler2D uPicture;
+#ifdef GROUND
+uniform sampler2D uShadow;
+#endif
+uniform float4 uLook;
+#ifdef FLASH
+uniform float4 uFlash;
+uniform float4 uFlashColour;
+#endif
+
+half4 main(float2 vUv : TEXCOORD0, float2 vSun : TEXCOORD1, float3 vAt : TEXCOORD2, half4 vColor : COLOR0) : COLOR
+{
+    half4 texel = tex2D(uPicture, vUv);
+#ifdef CUTOUT
+    if (texel.a < 0.5)
+        discard;
+#endif
+    half3 lit = texel.rgb * vColor.rgb * 2.0;
+#ifdef GROUND
+    lit *= min((half3)tex2D(uShadow, vSun).rgb * 2.0, 1.0);
+#endif
+#ifdef FLASH
+    float3 to = vAt - uFlash.xyz;
+    lit += texel.rgb * (half3)uFlashColour.rgb * (half)(uFlash.w / (1.0 + dot(to, to)));
+#endif
+    lit = lerp((half3)uLook.rgb, min(lit, 1.0), vColor.a);
+    return half4(lit, (half)uLook.a);
+}

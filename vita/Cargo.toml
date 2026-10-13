@@ -1,0 +1,46 @@
+[package]
+name = "pocket-duty-vita"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pocket Duty on PS Vita: the street through GXM at 960 × 544 with four samples a pixel and 60 frames per second, the match, and the interface's guest over it"
+
+# cargo-vita builds a lone crate.
+[workspace]
+resolver = "2"
+
+[dependencies]
+# The interface (ui/) runs on PocketJS's Vita host library: QuickJS, the UI core and its vita2d backend.
+pocketjs-vita = { path = "../vendor/pocketjs/hosts/vita", default-features = false }
+pocket-vita-gxm = { path = "../vendor/pocketjs/devices/vita/pocket-vita-gxm", features = ["runtime-compiler"] }
+pocket3d-title = { path = "../vendor/pocketjs/engine/pocket3d/crates/pocket3d-title" }
+# The maps' packs as pieces named by their bytes, read through one manifest.
+pocket3d-packs = { path = "../vendor/pocketjs/engine/pocket3d/crates/pocket3d-packs", default-features = false }
+duty-sim = { path = "../crates/duty-sim" }
+duty-pack = { path = "../crates/duty-pack" }
+duty-interface = { path = "../crates/duty-interface", features = ["guest"] }
+libquickjs-sys = { git = "https://github.com/pocket-nexus/quickjs-rs.git", rev = "ba5bdd0dc013518768e76cd9e05cd30ed53dd35b" }
+serde_json = "1"
+
+[target.'cfg(target_os = "vita")'.dependencies]
+vita2d-sys = "0.1.1"
+vitasdk-sys = { version = "0.3.3", features = ["SceGxm_stub", "SceKernelThreadMgr_stub", "SceLibKernel_stub", "ScePower_stub", "SceCtrl_stub", "SceDisplay_stub"] }
+
+[features]
+default = ["usb-debug"]
+# The wired debug host of a development build (Pocket Devkit's native slot). A package is built without it.
+usb-debug = ["pocketjs-vita/usb-debug"]
+
+[package.metadata.vita]
+title_id = "PKDT00001"
+title_name = "Pocket Duty"
+build_std = "std,panic_abort"
+
+# vita-elf-create reads sceUserMainThreadStackSize from the ELF's symbols; stripped, the main thread gets 4 KiB.
+[package.metadata.vita.profile.release]
+strip_symbols = false
+
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1

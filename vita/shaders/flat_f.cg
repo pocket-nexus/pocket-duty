@@ -1,0 +1,26 @@
+// PICTURE: a picture's colour under the vertex's (the sky's band). PLAIN: the vertex's colour (the sky's cap).
+// Otherwise the effects' picture, white with a shape in its alpha, times the vertex's colour and alpha; GLOW
+// hands the colour over times its alpha, for a blend that adds it to what is there.
+
+#ifndef PLAIN
+uniform sampler2D uPicture;
+#endif
+
+half4 main(float2 vUv : TEXCOORD0, half4 vColor : COLOR0) : COLOR
+{
+#ifdef PLAIN
+    return half4(vColor.rgb, 1.0);
+#else
+    half4 texel = tex2D(uPicture, vUv);
+#ifdef PICTURE
+    return half4(texel.rgb * vColor.rgb, 1.0);
+#else
+    half4 c = texel * vColor;
+#ifdef GLOW
+    return half4(c.rgb * c.a, c.a);
+#else
+    return c;
+#endif
+#endif
+#endif
+}

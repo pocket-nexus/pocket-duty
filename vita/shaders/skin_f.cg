@@ -1,0 +1,4 @@
+half4 main(half4 vColor : COLOR0) : COLOR
+{
+    return vColor;
+}
