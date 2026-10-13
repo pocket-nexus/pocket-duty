@@ -57,7 +57,7 @@ python3 -I <study>/likeness.py <letter> compare .pocket-build/duty/maps/<id>/ir 
 | Export | What it is |
 | --- | --- |
 | `PLACE` | `id` (the directory's name), `title` (as in `map.json`), `turn` (the level's turn in the world: which side the sun is on), `wall` (how high the walls stand over a floor), `starts`: `[east, north, facing in degrees from north toward east, tag]`, the player's first, **four or more** |
-| `GROUND` | **The floors, as polygons** of `[east, north]`, level (`y`) or sloped (`y: { from, to }`, each `[east, north, up]`). `key` names its surface, `roof` puts a roof over it at that clear height (a covered way), `steps` draws steps over a slope, `walls` is its own wall height or `false` |
+| `GROUND` | **The floors, as polygons** of `[east, north]`, level (`y`) or sloped (`y: { from, to }`, each `[east, north, up]`). `key` names its surface, `roof` puts a roof over it at that clear height (a covered way), `steps` draws steps over a slope, `walls` is its own wall height or `false`, `over: true` makes it a floor over another (below) |
 | `BLOCKS` | The tops of the blocks of houses beside the floors, where they are not `PLACE.wall` over the floor: **a floor's wall rises to the block beyond it**. A block lower than a floor gives that floor a parapet |
 | `HOUSES` | **A building's face on a solid**: the reference's building (plinth, windows with frames and glass, shutters, balconies, a door, a roof) at any place, height and turn, in the map's stone: `{ at, size: [w, d], turn, y, floors, balconies, skipSides, … }`. Where a house stands at a floor's edge the kit builds no wall and no cap: the house's own face is the wall |
 | `WALLS` | A wall along any line: `{ line, y, h, t, key }` with `holes` cut in it, each `{ at, w, h, sill, arch, frame, glass }`: a doorway (`sill` 0), a window (`sill`), an arch (`arch` 0…1), `frame: true` for a frame of boards, `glass: true` for a pane a player does not pass |
@@ -79,7 +79,14 @@ python3 -I <study>/likeness.py <letter> compare .pocket-build/duty/maps/<id>/ir 
 - **A ladder is drawn and listed, and nobody climbs it yet.** The match has no ladder: a player gets up only what his own climb reaches, and a soldier never uses one. Where a ladder is the only way up, give the player ledges of 1.85 m at most beside it, or wait for the walk grid's second level, which carries ladders with it.
 - **Glass** stops a player and a bullet's surface is `glass`; a hole without `glass` is open.
 
-**One floor a place, for now.** Where two floors overlap, the higher one is the ground, and the walk grid holds one height a node. A room over a way, a roof a player walks on and a bridge with a way under it need the second level.
+**A second level.** A floor with `over: true` stands over another: a storey, a roof a player walks on, a bridge, a gallery. `thick` is its slab (0.3 m), `rail` the rail along its open edges (1 m; 0 for none).
+
+- It is closed as the first level is: a slab with an underside, a side and a rail where it ends in the air, nothing where it meets a floor of its own height. A wall of the floor under it stops at its underside.
+- **A player walks on it and under it.** He gets up by a stair (a sloped floor, `steps: true`) or by ledges his climb reaches.
+- **The walk grid holds one height a node**, so soldiers have one of the two floors: the one under it, or, with `soldiers: true` on the upper floor, the upper one and not the ground beneath. A bridge soldiers cross has `soldiers: true` and a way under it they do not take; a gallery a player alone uses has none.
+- `compare` reports the second level on its own line: the place's floor over floor against the plan's `over` floors.
+
+**What the walk grid still lacks for soldiers on both levels at one place**: a second set of flags and heights in the export's grid and the cook's `NAVG` for the nodes that have a floor over a floor, neighbours across the two sets where the step allows (a stair's head, a bridge's end) in `duty_sim::level` and its pathfinder, cover and starts by set, and ladders as links between nodes. Until then a place with two storeys gives soldiers the storey its sites are on.
 
 A map in the reference's own terms (a street, alleys, buildings: `maps/<id>/layout.js`, built by `web/src/pocket/mapworld.js` and `mapkit.js`) is still read; no map uses it now.
 
