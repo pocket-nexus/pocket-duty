@@ -296,7 +296,7 @@ async function bench(from: string[]): Promise<void> {
   };
   const out = record(`bench-${end.map}`, from);
   writeFileSync(out, JSON.stringify(run, null, 2) + "\n");
-  console.log(`vita: ${end.map}: ${run.frameMs.toFixed(2)} ms a frame, worst ${run.worstMs.toFixed(1)}, ${end.late} late of ${end.frames} (cpu ${end.lateBy.cpu}, gpu ${end.lateBy.gpu}), ${Math.round(run.tris.mean)} triangles (most ${run.tris.most}), ${Math.round(record.draws.mean)} draws → ${out}`);
+  console.log(`vita: ${end.map}: ${run.frameMs.toFixed(2)} ms a frame, worst ${run.worstMs.toFixed(1)}, ${end.late} late of ${end.frames} (cpu ${end.lateBy.cpu}, gpu ${end.lateBy.gpu}), ${Math.round(run.tris.mean)} triangles (most ${run.tris.most}), ${Math.round(run.draws.mean)} draws → ${out}`);
   ctl("auto=0 stats=0", from);
 }
 
