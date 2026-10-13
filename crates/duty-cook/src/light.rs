@@ -110,6 +110,26 @@ pub struct Lighting {
     rays: Vec<[f32; 3]>,
     /// A place's floors lie at any height: which materials are a floor's, and a height over everything.
     floors: Option<(Vec<bool>, f32)>,
+    /// The light a place states beside the sun and the sky (`light` in its scene).
+    place: Option<PlaceLight>,
+}
+
+/// What a place adds to the sun and the sky: how warm the sky's fill is, what the sunlit ground sends
+/// back up, and lamps.
+pub struct PlaceLight {
+    /// The sky's fill, times this, colour by colour.
+    pub sky: [f32; 3],
+    /// What open ground sends back of the sun, linear: its colour before light times a strength.
+    pub bounce: [f32; 3],
+    pub lamps: Vec<Lamp>,
+}
+
+pub struct Lamp {
+    pub at: V3,
+    /// Its light on a face turned to it one metre away, linear.
+    pub colour: [f32; 3],
+    /// Metres at which its light is gone.
+    pub reach: f32,
 }
 
 /// Directions over the half space about +Y, their density following the cosine.
@@ -142,7 +162,47 @@ impl Lighting {
             tris.extend(soup.idx.chunks_exact(3).map(|t| bvh::Tri { v: [base + t[0], base + t[1], base + t[2]], tag }));
         }
         let nodes = bvh::build(&verts, &mut tris);
-        Lighting { verts, tris, nodes, sky, rays: hemisphere(rays), floors: None }
+        Lighting { verts, tris, nodes, sky, rays: hemisphere(rays), floors: None, place: None }
+    }
+
+    /// The place's own light, from here on.
+    pub fn place(&mut self, light: PlaceLight) {
+        self.place = Some(light);
+    }
+
+    /// The sky's fill, as the place warms it (1 without a place's light).
+    pub fn sky_gain(&self) -> [f32; 3] {
+        self.place.as_ref().map_or([1.0; 3], |p| p.sky)
+    }
+
+    /// The light a place adds at a point of a surface, before the surface's own colour: what the sunlit
+    /// ground sends up to a face that looks at it (more to a wall than to a floor, and as much as the
+    /// face is open to the sky), and each lamp that sees the point.
+    pub fn added(&self, p: V3, n: V3, open: f32) -> [f32; 3] {
+        let Some(place) = &self.place else { return [0.0; 3] };
+        // (the share of a face's half space that the ground fills is (1 - n.y) / 2)
+        let ground = (1.0 - n.y) * 0.5 * open * self.sky.sun.y.max(0.0) * core::f32::consts::FRAC_1_PI;
+        let mut light: [f32; 3] = core::array::from_fn(|k| place.bounce[k] * self.sky.sun_colour[k] * ground);
+        let from = p + n * 0.03;
+        for lamp in &place.lamps {
+            let to = lamp.at - from;
+            let far = to.len();
+            if far >= lamp.reach || far < 1e-3 {
+                continue;
+            }
+            let d = to * (1.0 / far);
+            let facing = n.dot(d);
+            if facing <= 0.0 || self.bvh().occluded(from, d, far - 0.05, tag::CLEAR) {
+                continue;
+            }
+            // Square of the distance, eased to nothing at the lamp's reach.
+            let fade = 1.0 - (far / lamp.reach) * (far / lamp.reach);
+            let amount = facing * fade * fade / (far * far + 1.0) * core::f32::consts::FRAC_1_PI;
+            for k in 0..3 {
+                light[k] += lamp.colour[k] * amount;
+            }
+        }
+        light
     }
 
     /// The map's floors lie at any height: `floor` says of each material whether it is a floor's, and

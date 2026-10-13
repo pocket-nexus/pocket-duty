@@ -116,6 +116,13 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     if scene_json["ground"].is_object() {
         lighting.floors(world.materials.iter().map(|m| settings.ground_families.contains(&m.family)).collect(), settings.ground_below);
     }
+    // A place states its own light beside the sun and the sky: `light` in its scene.
+    if scene_json["light"].is_object() {
+        let stated = &scene_json["light"];
+        let lamps = stated["lamps"].as_array().map(|all| all.iter().map(|l| light::Lamp { at: { let p = list(&l["at"], [0.0; 3]); v3(p[0], p[1], p[2]) }, colour: list(&l["colour"], [1.0, 0.7, 0.4]), reach: number(&l["reach"], 10.0) }).collect()).unwrap_or_default();
+        lighting.place(light::PlaceLight { sky: list(&stated["sky"], [1.0; 3]), bounce: list(&stated["bounce"], [0.0; 3]), lamps });
+        println!("light: the place's own: sky x {:?}, bounce {:?}, {} lamps", list(&stated["sky"], [1.0; 3]), list(&stated["bounce"], [0.0; 3]), stated["lamps"].as_array().map_or(0, |a| a.len()));
+    }
     println!("light: {} triangles stand in its way, sun {:.3} {:.3} {:.3} at {:.1} h ({:.1} s)", lighting.triangles(), lighting.sky.sun.x, lighting.sky.sun.y, lighting.sky.sun.z, lighting.sky.hour, t2.elapsed().as_secs_f32());
 
     let mut scene = Scene {
@@ -222,7 +229,8 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
         }
     }
     let mean = |sum: [f64; 3]| sum.map(|s| (s / count.max(1) as f64) as f32);
-    let shadow = ground::shadow(&lighting, &tone, &level, number(&profile["ground"]["shadow"]["extent"], 128.0), profile["ground"]["shadow"]["side"].as_u64().unwrap_or(512) as usize, mean(albedo), mean(ambient));
+    let gain = lighting.sky_gain();
+    let shadow = ground::shadow(&lighting, &tone, &level, number(&profile["ground"]["shadow"]["extent"], 128.0), profile["ground"]["shadow"]["side"].as_u64().unwrap_or(512) as usize, mean(albedo), core::array::from_fn(|k| mean(ambient)[k] * gain[k]));
     scene.shadow_texture = texels.add(&shadow.image, &tex::Options { levels: 1, flags: texture::CLAMP, dither: false });
     scene.shadow_rows = shadow.rows;
     let s = &profile["sky"];

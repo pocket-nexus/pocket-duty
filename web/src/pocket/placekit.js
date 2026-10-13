@@ -13,7 +13,8 @@
 // beside them: `WALLS` (a wall along any line, with doorways, windows and arches cut in it), `MASSES`
 // (a solid of any footprint: the top of a block of houses, a pillar, a low wall), `HOUSES` (the
 // reference's building at any place, height and turn, in the map's own stone), `DOORS` (two leaves of
-// boards standing open), `CRATES`, `PROPS`.
+// boards standing open), `CRATES`, `LAMPS`, `PROPS`, and `BLOCKS`: the tops of the blocks of houses
+// beside the floors, where they are not the walls' usual height (a wall rises to the block beyond it).
 //
 // Every piece is made from the reference's kit: its boxes, its wall panels with real openings, its
 // prisms, its buildings, its props, its collision proxies. The surfaces are the map's (./placelook.js).
@@ -27,6 +28,7 @@ import * as THREE from 'three';
 import { BOX, BOX_THIN, IDENT, LL } from '../world/kit.js';
 import { fillMasks, polyPrism, solidSlabs, wallPanel } from '../world/util.js';
 import { buildBuilding } from '../world/buildings.js';
+import { hangingBulb } from '../world/interiors.js';
 
 const RAD = Math.PI / 180;
 const _m = new THREE.Matrix4();
@@ -71,8 +73,8 @@ function within(A, matrix, build) {
 }
 
 /**
- * Builds a place. Returns `{ groundAt(e, n), ceilings, barriers, extent, floors }`: the floor's height at
- * a point (null where there is none), what the walk grid needs, the box the place fills
+ * Builds a place. Returns `{ groundAt(e, n), ceilings, barriers, lamps, extent, floors }`: the floor's height
+ * at a point (null where there is none), what the walk grid needs, the lamps' places in the level, the box the place fills
  * (`{ e0, n0, e1, n1, top, low }`) and the library names of the floors' surfaces.
  */
 export function buildPlace(A, rng, place) {
@@ -89,6 +91,12 @@ export function buildPlace(A, rng, place) {
     return y;
   };
   const standAt = (e, n, y) => y ?? groundAt(e, n) ?? 0;
+  /** The top of the block of houses the plan states at a point (`BLOCKS`), or null. */
+  const blockTop = (e, n) => {
+    let top = null;
+    for (const b of place.BLOCKS ?? []) if (contains(b.at, e, n)) top = Math.max(top ?? -Infinity, b.top);
+    return top;
+  };
   const solid = (key, geo, matrix = null, masks = [0.5, 0.7, 0.4]) => {
     A.add(key, geo, matrix, { masks });
     A.collideGeo(A.surfaceOf(key), geo, matrix);
@@ -149,12 +157,14 @@ export function buildPlace(A, rng, place) {
         const mine = heightOf(g, pe, pn);
         let other = contains(g.at, qe, qn) ? mine : null;
         for (const o of grounds) if (o !== g && contains(o.at, qe, qn)) other = Math.max(other ?? -Infinity, heightOf(o, qe, qn));
-        beyond.push(other === null ? 'free' : other >= mine - 0.06 ? 'joined' : other);
+        // (a free edge's wall rises to the block that stands beyond it, where the plan states one)
+        beyond.push(other === null ? `free${blockTop(qe + out[0] * 0.5, qn + out[1] * 0.5) ?? ''}` : other >= mine - 0.06 ? 'joined' : other);
       }
       for (let k = 0; k < count; ) {
-        const kind = typeof beyond[k] === 'number' ? 'drop' : beyond[k];
+        const what = typeof beyond[k] === 'number' ? 'drop' : beyond[k];
+        const kind = what.startsWith('free') ? 'free' : what;
         let end = k, low = Infinity;
-        while (end < count && (typeof beyond[end] === 'number' ? 'drop' : beyond[end]) === kind) low = Math.min(low, typeof beyond[end] === 'number' ? beyond[end] : Infinity), end++;
+        while (end < count && (typeof beyond[end] === 'number' ? 'drop' : beyond[end]) === what) low = Math.min(low, typeof beyond[end] === 'number' ? beyond[end] : Infinity), end++;
         const t0 = k / count, t1 = end / count;
         const pa = [a[0] + de * t0, a[1] + dn * t0], pb = [a[0] + de * t1, a[1] + dn * t1];
         const ya = heightOf(g, pa[0], pa[1]), yb = heightOf(g, pb[0], pb[1]);
@@ -172,7 +182,8 @@ export function buildPlace(A, rng, place) {
           face.dispose();
         } else if (kind === 'free' && g.walls !== false) {
           // Nothing beyond: the place's own wall, standing outside the edge, with its crown.
-          const wallTop = Math.max(ya, yb) + (g.walls ?? wallH);
+          const stated = what.length > 4 ? Number(what.slice(4)) : null;
+          const wallTop = stated === null ? Math.max(ya, yb) + (g.walls ?? wallH) : Math.max(stated, Math.max(ya, yb) + 1.1);
           const more = (t0 === 0 ? T : 0) + (t1 === 1 ? T : 0);
           // (a wall is to the right of an anticlockwise edge: `run` counts to the left)
           const [p, q] = side > 0 ? [lb, la] : [la, lb];
@@ -237,17 +248,24 @@ export function buildPlace(A, rng, place) {
     const nx = Math.ceil((e1 + margin - ce0) / C), nz = Math.ceil((n1 + margin - cn0) / C);
     const lid = new Float32Array(nx * nz).fill(NaN), floor = new Uint8Array(nx * nz);
     let queue = [];
+    const blocked = [];
     for (let j = 0; j < nz; j++) {
       for (let i = 0; i < nx; i++) {
         const e = ce0 + (i + 0.5) * C, n = cn0 + (j + 0.5) * C;
         let best = null;
         for (const g of grounds) if (contains(g.at, e, n) && (best === null || heightOf(g, e, n) > heightOf(best, e, n))) best = g;
-        if (!best) continue;
+        if (!best) {
+          // (a block the plan states has its own top; the others take the nearest floor's walls')
+          const stated = blockTop(e, n);
+          if (stated !== null) lid[j * nx + i] = Math.round(stated * 4) / 4, blocked.push(j * nx + i);
+          continue;
+        }
         floor[j * nx + i] = 1;
         lid[j * nx + i] = Math.round((highest(best) + (best.walls === false ? wallH : (best.walls ?? wallH))) * 2) / 2;
         queue.push(j * nx + i);
       }
     }
+    queue.push(...blocked);
     while (queue.length) {
       const next = [];
       for (const c of queue) {
@@ -268,8 +286,12 @@ export function buildPlace(A, rng, place) {
           i++;
           continue;
         }
-        let end = i;
+        let end = i + 1;
         while (end < nx && !floor[j * nx + end] && lid[j * nx + end] === lid[j * nx + i]) end++;
+        if (Number.isNaN(lid[j * nx + i])) {
+          i = end;
+          continue;
+        }
         const x0 = ce0 + i * C, x1 = ce0 + end * C, z0 = -(cn0 + (j + 1) * C), z1 = -(cn0 + j * C), y = lid[j * nx + i] - 0.02;
         quads.push(x0, y, z0, x0, y, z1, x1, y, z1, x0, y, z0, x1, y, z1, x1, y, z0);
         i = end;
@@ -375,6 +397,17 @@ export function buildPlace(A, rng, place) {
     A.box('wood', e, y + s / 2, -n, s, s, s, -turn * RAD);
   }
 
+  // ------------------------------------------------------------------ lamps
+  // A bare bulb of the reference's on its flex, and the light it gives in the cook's pass ([east, north,
+  // up]; without `up`, under the roof of the floor it hangs over).
+  const lamps = [];
+  for (const [e, n, up] of place.LAMPS ?? []) {
+    const g = grounds.find((each) => each.roof && contains(each.at, e, n));
+    const y = up ?? (g ? highest(g) + g.roof : (groundAt(e, n) ?? 0) + 3.2);
+    hangingBulb(A, rng, e, y, -n);
+    lamps.push([e, y - 0.55, -n]);
+  }
+
   // ------------------------------------------------------------------ the reference's props
   for (const [id, e, n, a = 0, b = 1, up] of place.PROPS ?? []) {
     const y = standAt(e, n, up);
@@ -393,5 +426,5 @@ export function buildPlace(A, rng, place) {
     }
   }
 
-  return { groundAt, ceilings, barriers, extent: { e0, n0, e1, n1, top, low }, floors: [...floors] };
+  return { groundAt, ceilings, barriers, lamps, extent: { e0, n0, e1, n1, top, low }, floors: [...floors] };
 }

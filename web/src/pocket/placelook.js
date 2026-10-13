@@ -102,12 +102,30 @@ const BOARDS = HEAD + `
   ao = 0.6 + 0.4 * gap;
 }`;
 
+/** Level sand of fine grain, a pebble here and there: what lies in a yard that is walked. */
+const GRIT = HEAD + `
+  vec2 p = uv * P + uSeed * 4.4;
+  float low = owFbm01(p * 0.5, P * 0.5, 3, 0.55);
+  float mid = owFbm01(p * 4.0, P * 4.0, 4, 0.5);
+  float grain = owFbm01(p * 22.0, P * 22.0, 4, 0.6);
+  vec4 cell = owWorley(p * 6.0, P * 6.0, 1.0);
+  float pebble = smoothstep(0.09, 0.03, cell.x) * step(0.8, cell.z);
+  h = 0.5 + (low - 0.5) * 0.05 + (mid - 0.5) * 0.04 + (grain - 0.5) * 0.03 + pebble * 0.12;
+  vec3 c = mix(owSRGB(vec3(0.76, 0.60, 0.40)), owSRGB(vec3(0.85, 0.70, 0.49)), low * 0.6 + mid * 0.4);
+  c *= 0.92 + 0.16 * grain;
+  alb = mix(c, owSRGB(vec3(0.60, 0.50, 0.40)), pebble * 0.8);
+  rough = 0.96;
+  metal = 0.0;
+  ao = 1.0 - pebble * 0.1;
+}`;
+
 const stone = { parallax: 0.016, detile: 0, detail: [8, 0.9, 0.5, 22], macro: [0.085, 0.6, 0.22, 0.5], macroBig: [2.0, 0.12, 0.03, 0], weather: [0.3, 0.4, 0.5, 0.5], wearColor: 0xc4b094, dustColor: 0xb89c72, grimeColor: 0x3a3024, roughness: [0.96, -0.02, 0.26] };
 
 /** The surfaces of ours, as the reference's library lists its own: the name a palette key gives as `of`. */
 export const SURFACES = {
   courses: { glsl: COURSES, surface: 'concrete', bake: { size: 1024, worldSize: 3.0, relief: 0.05, seed: 41 }, mat: { scale: 3.0, ...stone } },
   cobbles: { glsl: COBBLES, surface: 'dirt', bake: { size: 1024, worldSize: 2.4, relief: 0.07, seed: 17 }, mat: { uvMode: 'triplanar', scale: 2.4, detile: 0, detail: [8, 0.7, 0.3, 18], macro: [0.05, 0.44, 0.14, 0.35], weather: [0.15, 0, 0, 0.18], dustColor: 0xb89c72, grimeColor: 0x4c4132, roughness: [1.0, 0.0, 0.3] } },
+  grit: { glsl: GRIT, surface: 'sand', bake: { size: 1024, worldSize: 2.6, relief: 0.03, seed: 53 }, mat: { uvMode: 'triplanar', scale: 2.6, detile: 0, detail: [8, 0.7, 0.3, 18], macro: [0.05, 0.44, 0.14, 0.35], weather: [0.15, 0, 0, 0.18], dustColor: 0xb89c72, grimeColor: 0x4c4132, roughness: [1.0, 0.0, 0.3] } },
   flutes: { glsl: FLUTES, surface: 'concrete', bake: { size: 1024, worldSize: 2.4, relief: 0.05, seed: 7 }, mat: { scale: 2.4, ...stone } },
   boards: { glsl: BOARDS, surface: 'wood', bake: { size: 1024, worldSize: 1.6, relief: 0.03, seed: 29 }, mat: { scale: 1.6, parallax: 0.008, detail: [10, 0.8, 0.42, 18], macro: [0.085, 0.34, 0.14, 0.5], weather: [0.3, 0.35, 0.5, 0.45], wearColor: 0xa88b62 } },
 };

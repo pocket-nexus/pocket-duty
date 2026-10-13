@@ -62,6 +62,11 @@ export class PlaceWorldSystem extends WorldSystem {
     this.barriers = built.barriers;
     // Floors at any height take the ground's shadow picture, whatever their surface (crates/duty-cook).
     this.ground = { families: [...new Set(built.floors.map((key) => PALETTE[key]?.name ?? libraryName(key)))], below: top + 1 };
+    // The place's own light for the cook: a warmer sky, what its sunlit ground sends back, its lamps.
+    const light = place.LOOK?.light;
+    if (light || built.lamps.length) {
+      this.light = { sky: light?.sky ?? [1, 1, 1], bounce: light?.bounce ?? [0, 0, 0], lamps: built.lamps.map(([x, y, z]) => ({ at: A.toWorld(x, y, z).toArray(), colour: light?.lamp ?? [9, 5.5, 2.4], reach: light?.reach ?? 11 })) };
+    }
     // A start: [east, north, facing in degrees from north toward east, tag]. A yaw of 0 looks north.
     this.spawnPoints = plan.starts.map(([e, n, facing = 0, tag]) => {
       const y = built.groundAt(e, n);
