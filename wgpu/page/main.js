@@ -12,12 +12,18 @@
 //
 // The address chooses the pack and what a development host would say:
 //
-//   ?device=psp|3ds|vita             the handheld the page opens as (the bar chooses another at any time)
+//   ?device=psp|3ds|vita        the handheld the page opens as (the bar chooses another at any time).
+//                               Without it: the PS Vita on a computer, the PSP on a phone or for a
+//                               visitor who asked for less data
 //   ?pack=URL                   the first map's pack (the PSP's): its file, on a server that answers
 //                               byte ranges, or the manifest of the packs in pieces and the map (`….packs#yards`). Without it,
 //                               the page's own (<meta name="pocket-pack">)
 //   ?map=yards                  the map the page opens on, of those it has a pack for
 //                               (<meta name="pocket-packs">: `<map>=<pack>` with spaces between)
+//
+// The PSP and the 3DS draw the PSP's pack. A device with packs of its own (the PS Vita:
+// <meta name="pocket-packs-vita">, every map's as `<map>=<pack>`) draws those, where the tab's GPU reads
+// their pictures' blocks; choosing such a device in the bar reads the held map again from its pack.
 //   ?words=mode=play+auto=1     what a development host would send the game (App::control)
 //   ?interface=off              the street alone, played by the pad: no guest is started
 //   ?sound=off                  no sound
@@ -47,9 +53,23 @@ const beside = (name) => new URL(name, import.meta.url).href;
 const message = (error) => String(error?.message ?? error);
 const started = performance.now();
 
-// The page: PocketJS's player, with the device the address asks for.
+// The packs a device has of its own, by map (`<meta name="pocket-packs-<device>">`), or none.
+function packsOf(id) {
+  const own = new Map();
+  for (const word of (document.querySelector(`meta[name="pocket-packs-${id}"]`)?.content ?? "").split(/\s+/).filter(Boolean)) {
+    const at = word.indexOf("=");
+    if (at > 0) own.set(word.slice(0, at), word.slice(at + 1));
+  }
+  return own;
+}
+
+// The page: PocketJS's player, with the device the address asks for. Without one it opens as the
+// PS Vita, whose pack is the richest picture, where the page has that pack and the visitor sits at a
+// computer; as the PSP on a small screen or under a finger (a phone's GPU reads no blocks, and the
+// Vita's packs are three to seven times the PSP's bytes) and for a visitor who asked for less data.
 const wanted = query.get("device") ?? query.get("shape");
-let device = DEVICES.find((d) => d.id === wanted) ?? DEVICES[0];
+const roomy = Math.min(screen.width, screen.height) >= 700 && matchMedia("(pointer: fine)").matches && navigator.connection?.saveData !== true;
+let device = DEVICES.find((d) => d.id === wanted) ?? ((roomy && packsOf("vita").size > 0 && DEVICES.find((d) => d.id === "vita")) || DEVICES[0]);
 let present = () => {};
 const player = createPlayer({
   title: "Pocket Duty",
@@ -99,25 +119,38 @@ async function start() {
   const report = { duty, device: () => device.id, shape: () => shape, ready: 0, interfaceReady: 0, firstFrame: 0, firstWorld: 0, frames: 0, failure: "", timing };
   window.pocketDuty = report;
 
-  // The packs by map: the first map's, and those of the other maps the page names.
+  // The packs by map: the first map's, and those of the other maps the page names. They are the PSP's,
+  // which the 3DS draws too.
   const packs = new Map([[JSON.parse(maps())[0].id, query.get("pack") ?? document.querySelector('meta[name="pocket-pack"]').content]]);
   for (const word of (document.querySelector('meta[name="pocket-packs"]')?.content ?? "").split(/\s+/).filter(Boolean)) {
     const at = word.indexOf("=");
     if (at > 0) packs.set(word.slice(0, at), word.slice(at + 1));
   }
-  duty.maps([...packs.keys()].join(","));
+  // A device's packs: its own where the page has them and this GPU reads their blocks, the PSP's otherwise.
+  const own = new Map(DEVICES.map((d) => [d.id, packsOf(d.id)]));
+  const packsFor = (d) => (own.get(d.id).size > 0 && duty.reads_blocks() ? own.get(d.id) : packs);
+  let using = packsFor(device);
+  duty.maps([...using.keys()].join(","));
+  report.packs = () => ({ own: using !== packs, maps: [...using.keys()] });
   // A map's pack, read beside everything else. The shell holds one world: it let the last one go
-  // before it asked for this map.
-  const read = (map) => duty.reader().read(new URL(packs.get(map), location.href).href).then((world) => {
-    duty.enter(world);
-    if (!report.ready && query.get("words")) duty.control(query.get("words"));
-    report.ready ||= performance.now() - started;
-  }).catch((error) => {
-    report.failure = message(error);
-    duty.fail(report.failure);
-    if (!ui) say(report.failure);
-  });
-  const first = packs.has(query.get("map")) ? query.get("map") : packs.keys().next().value;
+  // before it asked for this map. A read that another has overtaken (another device's pack was asked
+  // for while it was under way) gives its world back.
+  let reads = 0;
+  const read = (map) => {
+    const turn = ++reads;
+    return duty.reader().read(new URL(using.get(map), location.href).href).then((world) => {
+      if (turn !== reads) return world.free();
+      duty.enter(world);
+      if (!report.ready && query.get("words")) duty.control(query.get("words"));
+      report.ready ||= performance.now() - started;
+    }).catch((error) => {
+      if (turn !== reads) return;
+      report.failure = message(error);
+      duty.fail(report.failure);
+      if (!ui) say(report.failure);
+    });
+  };
+  const first = using.has(query.get("map")) ? query.get("map") : using.keys().next().value;
   duty.reads(first);
   read(first);
 
@@ -134,6 +167,13 @@ async function start() {
     player.show(next.id, { width: to.width, height: to.height, lower: of.auxiliary, sticks: next.sticks, glyphs: of.glyphs, touch: of.touch === "none" ? null : of.touch, viewport: of.viewport });
     shape = JSON.parse(duty.reshape(to.name, to.width, to.height));
     lower = of.auxiliary ? new ImageData(of.auxiliary[0], of.auxiliary[1]) : null;
+    // A device whose packs are others than the held one's: the held map is read again from its own, as
+    // another map is (the loading words, then the title or the match it left).
+    if (packsFor(next) !== using) {
+      using = packsFor(next);
+      duty.maps([...using.keys()].join(","));
+      duty.repack();
+    }
     // The guest of the device before goes with its realm; the new one is told the whole state on its first turn.
     ui?.close();
     ui = null;
@@ -188,7 +228,12 @@ async function start() {
     duty.step(now, held.buttons, held.left[0], held.left[1]);
     // The interface asked for a match on another map: its pack is read, and the match starts when it is there.
     const map = duty.map_wanted();
-    if (map) read(map);
+    if (map) {
+      // (a map the shown device has no pack for gives way to the first it has)
+      const has = using.has(map) ? map : using.keys().next().value;
+      if (has !== map) duty.reads(has);
+      read(has);
+    }
     // (a turn is offered as often as the PSP offers one, and is that many sixtieths of a second)
     const ticks = ui !== null ? duty.guest_due(held.touching) : 0;
     const turned = ticks > 0;

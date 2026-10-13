@@ -101,7 +101,8 @@ impl Duty {
     pub async fn open(canvas: web_sys::HtmlCanvasElement, shape: String, prefs: String) -> Result<Duty, JsError> {
         std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&info.to_string().into())));
         let shape = Shape::named(&shape).ok_or_else(|| JsError::new("no such shape"))?;
-        let (gpu, surface) = Gpu::for_canvas(canvas).await.map_err(|e| JsError::new(&e))?;
+        // (the PS Vita's pack holds its surfaces in blocks: a GPU that reads them takes them as they are)
+        let (gpu, surface) = Gpu::for_canvas_wanting(canvas, pocket_web_wgpu::wgpu::Features::TEXTURE_COMPRESSION_BC).await.map_err(|e| JsError::new(&e))?;
         // (the street has a target of its own; the canvas takes the frame in the display's colours)
         let screen = Screen::canvas(&gpu, surface, shape.width, shape.height, 1);
         let mut app = App::open(gpu, screen, shape);
@@ -142,6 +143,17 @@ impl Duty {
     /// Whether the world is there.
     pub fn entered(&self) -> bool {
         self.app.entered()
+    }
+
+    /// The held map is to be read again, from the pack of the device the page now shows: the world goes and
+    /// the loading screen stands until `enter`; `map_wanted` names the map on the next frame.
+    pub fn repack(&mut self) {
+        self.app.repack();
+    }
+
+    /// Whether this tab's GPU reads pictures in blocks as they are: the PS Vita's pack is read where it does.
+    pub fn reads_blocks(&self) -> bool {
+        self.app.reads_blocks()
     }
 
     /// The start failed: the interface says why.

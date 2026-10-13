@@ -3,6 +3,7 @@
 //!
 //!   duty-shot --pack duty.pack --out frame.png [--map yards] [--size 480x272] [--frames 240]
 //!             [--words "mode=play auto=1 …"] [--cue 300:"at=…"]… [--status status.json] [--log 60]
+//!             [--shape psp|3ds|vita] [--blocks off]
 //!   duty-shot --pack duty.pack --film frames.rgba --frames 900 [--from 600] …
 //!   duty-shot --compare a.png b.png
 //!
@@ -15,6 +16,10 @@
 //! every frame from `--from` on as rows of RGBA, one frame after another (`-`
 //! for the standard output), for an encoder to read. `--log N` prints the
 //! status every N frames to the standard error.
+//!
+//! `--shape` is the device's screen (a PSP's without it). A pack whose pictures are in blocks (the PS
+//! Vita's) goes to this machine's GPU as blocks; `--blocks off` takes them apart into rows of true colour
+//! first, as a GPU that reads no blocks is given them.
 //!
 //! `--compare` says how far two pictures of one size are apart: the mean
 //! difference of a colour in 255ths and the share of pixels where a colour
@@ -108,7 +113,9 @@ mod native {
             return Err("--out PNG or --film FILE".into());
         }
 
-        let gpu = task::wait(Gpu::headless())?;
+        // (a pack in blocks goes to a GPU that reads blocks as it is; `--blocks off` draws as a GPU that reads none)
+        let wanted = if option("--blocks").as_deref() == Some("off") { pocket_web_wgpu::wgpu::Features::empty() } else { pocket_web_wgpu::wgpu::Features::TEXTURE_COMPRESSION_BC };
+        let gpu = task::wait(Gpu::headless_wanting(wanted))?;
         let screen = Screen::texture(&gpu, shape.width, shape.height, 1);
         let source = task::wait(Source::open(&pack))?;
         let world = task::wait(World::read(gpu.clone(), screen.format, source, Progress::default()))?;

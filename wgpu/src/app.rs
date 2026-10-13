@@ -519,6 +519,23 @@ impl App {
         self.world.is_some()
     }
 
+    /// The held map is to be read again from another pack (a device whose own pack is another's: the
+    /// PS Vita's): its world goes as for another map, the loading screen stands, and the page reads the
+    /// map it is told ([`App::map_wanted`]). A match that was running begins again on it; a title stays one.
+    pub fn repack(&mut self) {
+        let (map, asked) = self.reading;
+        // (a read that was under way keeps what it was for: a match, or the title)
+        let play = if self.world.is_some() { !matches!(self.session.mode, Mode::Title | Mode::Loading | Mode::Error) } else { asked };
+        self.leave(map);
+        self.reading.1 = play;
+    }
+
+    /// Whether this GPU reads pictures in blocks as they are (`texture-compression-bc`): the PS Vita's pack
+    /// holds its surfaces so.
+    pub fn reads_blocks(&self) -> bool {
+        self.gpu.features.contains(pocket_web_wgpu::wgpu::Features::TEXTURE_COMPRESSION_BC)
+    }
+
     /// The held map from above, or none: the interface is told with the rest of the state.
     pub fn chart(&mut self, chart: Option<duty_interface::Chart>) {
         self.session.chart = chart;
@@ -858,7 +875,7 @@ impl App {
         self.records.clear();
         self.batches.clear();
         self.figure_triangles = 0;
-        let (mut held, mut flash) = (None, None);
+        let (mut held, mut flash, mut light) = (None, None, None);
         if stood || self.set.view.is_some() {
             let renderer = &w.renderer;
             self.figure_triangles += w.figures.soldiers(&w.scene, &vp, camera.eye, look, &w.game, |x, z| renderer.sunlit(x, z), &mut self.records, &mut self.batches);
@@ -870,6 +887,9 @@ impl App {
                 self.figure_triangles += triangles;
                 held = Some(frustum);
                 if w.game.arms.flash > 0 {
+                    // A muzzle's light on the street, where the muzzle is in the world (the PS Vita's pack: `vita/src/main.rs`).
+                    let right = look.cross(V3::UP).norm_or(v3(1.0, 0.0, 0.0));
+                    light = Some((camera.eye + right * muzzle.x + right.cross(look) * muzzle.y - look * muzzle.z, 1.4 * w.game.arms.flash as f32));
                     let (at, half) = (muzzle + v3(0.0, 0.0, -0.06), 0.035 + 0.012 * w.game.arms.flash as f32);
                     flash = Some([(-1.0, 1.0), (1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)].map(|(sx, sy): (f32, f32)| FxVertex { uv: [0.02 + (sx * 0.5 + 0.5) * 0.46, 0.52 + (0.5 - sy * 0.5) * 0.46], colour: [255, 220, 160, 240], pos: [at.x + sx * half, at.y + sy * half, at.z] }));
                 }
@@ -891,6 +911,7 @@ impl App {
             covering,
             glowing,
             flash,
+            light,
             look: Look { sixteen: self.set.look.sixteen && self.shape.sixteen, ..self.set.look },
         };
         self.drawn = w.renderer.frame(&self.gpu, &self.screen, &self.overlay, &w.chunks, &view)?;
@@ -964,6 +985,8 @@ impl App {
             status["clusters"] = json!({"listed": c.clusters, "unseen": c.unseen, "outside": c.outside, "turned": c.turned, "drawn": c.drawn});
             status["chunks"] = json!({"listed": c.listed, "seen": c.chunks});
             status["gpuBytes"] = json!(w.renderer.bytes);
+            // How the pack is drawn: as the PSP's GE draws its own, or as the PS Vita's programs draw that console's.
+            status["drawn"] = json!({"as": if w.renderer.rich { "vita" } else { "psp" }, "samples": w.renderer.samples, "sunDepth": w.renderer.sun_depth.is_some(), "blocks": w.renderer.blocks});
             status["eye"] = json!([self.camera.eye.x, self.camera.eye.y, self.camera.eye.z]);
             status["yaw"] = json!(self.camera.yaw * (180.0 / PI));
             status["pitch"] = json!(self.camera.pitch * (180.0 / PI));
