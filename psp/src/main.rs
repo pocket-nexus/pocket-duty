@@ -504,6 +504,9 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
     let mut measured = Some(Measured { index: 0, map: session.map_id, ms: 0, frames: 0, sum: 0.0, worst: 0.0 });
     let mut record = String::with_capacity(4096);
     let mut record_due = false;
+    // The arena's free bytes and its largest free block, as last counted: the count walks every free
+    // block, so it is made once a change (for its line), never in a frame's status.
+    let mut counted = arena::debug_free();
     {
         // What the interface asked to have kept in an earlier run.
         let mut buf = [0u8; store::KEPT_MAX];
@@ -843,7 +846,8 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
             if m.frames == Measured::FRAMES {
                 // The line of this change: what it took, the arena as it stands after 120 frames on the
                 // new map, the memory the map and the pak hold, the frames, the opens off the main thread.
-                let (free, largest) = arena::debug_free();
+                counted = arena::debug_free();
+                let (free, largest) = counted;
                 if record.is_empty() {
                     let _ = writeln!(record, "Pocket Duty on PSP: changes of map in the running program");
                     let _ = writeln!(record, "free at start {}, held back {}, arena {}, kernel stretch {}, tail stretch {}, pak {}", free_at_start, core::ptr::addr_of!(mem::HELD_BACK).read(), arena::stats().capacity_bytes, mem::kernel_stretch(), mem::tail_reserved(), pak_bytes);
@@ -1005,7 +1009,7 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
             // (the changes of map and the opens made off the main thread, before the record's last brace)
             if status.ends_with('}') {
                 status.pop();
-                let (free, largest) = arena::debug_free();
+                let (free, largest) = counted;
                 let _ = write!(status, ",\"changes\":{},\"strayOpens\":{},\"heldBack\":{},\"arenaFree\":{},\"arenaLargest\":{},\"mapBytes\":{}}}", changed, store::stray_opens(), core::ptr::addr_of!(mem::HELD_BACK).read(), free, largest, mem::map_bytes());
             }
             store::publish(&status);
