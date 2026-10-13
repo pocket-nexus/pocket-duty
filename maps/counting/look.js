@@ -103,6 +103,10 @@ export const SURFACES = {
   `, { metres: 2.4, relief: 0.01, seed: 43, surface: 'plaster', like: 'ground' }), { weather: [0, 0, 0, 0.04], wearColor: 0xcfcfca, dustColor: 0xc4c4be, grimeColor: 0x55534d }),
 };
 
+// The roofs take the road's surface under a name of their own: a floor's surface is lit as open ground
+// (the ground's shadow picture), a roof's as any solid.
+SURFACES.roofing = SURFACES.packed;
+
 /** The palette keys, which of them the kit uses for what, the sky and the cook's light. */
 export const LOOK = {
   materials: {
@@ -118,7 +122,7 @@ export const LOOK = {
     ch_ceiling: { of: 'tiles', tint: 0xffffff },
     ch_band: { of: 'concrete', tint: 0x586272 },
     ch_cap: { of: 'snow', tint: 0xf6f8fb },
-    ch_roof: { of: 'packed', tint: 0x9da2ab },
+    ch_roof: { of: 'roofing', tint: 0x9da2ab },
     ch_wood: { of: 'boards', tint: 0xdcd6ca },
     ch_wood_dark: { of: 'boards', tint: 0x8e8478 },
     ch_desk: { of: 'wood', tint: 0xd8b48a },
