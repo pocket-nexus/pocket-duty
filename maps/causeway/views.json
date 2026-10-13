@@ -2,13 +2,11 @@
   { "name": "above", "pos": [0, -6, 260], "look": [0, 0, 0], "fov": 40 },
   { "name": "bridge", "pos": [-13, 16.5, 10.5], "look": [3, 16.5, 9.6], "fov": 75 },
   { "name": "under-the-bridge", "pos": [-7, 2, 1.7], "look": [-7, 16.5, 8], "fov": 80 },
-  { "name": "west-start", "pos": [-72, -8, 7.2], "look": [-60, 10, 7.5], "fov": 75 },
-  { "name": "west-site", "pos": [-50, 13, 9.8], "look": [-40, 26, 9.6], "fov": 75 },
-  { "name": "mid-west-court", "pos": [-45, -12, 9.8], "look": [-24, -6, 10], "fov": 75 },
-  { "name": "river-court", "pos": [-6, -38, 9.8], "look": [-6, -12, 6.5], "fov": 78 },
-  { "name": "terraces", "pos": [14, -12, 9.8], "look": [2, -34, 6], "fov": 78 },
-  { "name": "east-court", "pos": [8, 2, 9.8], "look": [30, 8, 6.5], "fov": 75 },
-  { "name": "east-start", "pos": [72, 9, 8.2], "look": [60, -6, 7.5], "fov": 75 },
-  { "name": "water-court", "pos": [33, 23, 2.5], "look": [20, 12, 4], "fov": 78 },
-  { "name": "hall-from-above", "pos": [-9, 9, 17.2], "look": [-9, 17, 6], "fov": 85 }
+  { "name": "west-start", "pos": [-73.5, -4, 7.2], "look": [-60, 9, 7.6], "fov": 78 },
+  { "name": "west-site", "pos": [-51.5, 19.5, 9.8], "look": [-38, 24.5, 9.6], "fov": 75 },
+  { "name": "crossing-door", "pos": [-40, -6, 9.8], "look": [-19.8, -11.3, 9.9], "fov": 72 },
+  { "name": "river-court", "pos": [-11, -36.7, 9.8], "look": [-7, -11, 5.5], "fov": 78 },
+  { "name": "ramp-to-the-water", "pos": [3.5, -34.8, 9.8], "look": [3.2, -17, 1.2], "fov": 80 },
+  { "name": "water-stair", "pos": [16.5, 8.3, 9.8], "look": [33, 8.6, 1.6], "fov": 80 },
+  { "name": "east-start", "pos": [72, 9, 8.2], "look": [60, -6, 7.5], "fov": 75 }
 ]

@@ -18,9 +18,9 @@
  *   -1        | (5.5)      || MID-WEST COURT (8.1)            +--+--+----------------+ |rm.| (6.5) |east
  *             |            ||          +--THE CROSSING (8.1) over the river--+ link    |   |       |room
  *  -12        +--stair-----++---+------+--stair to the river--+--------------+---+     +---+ramp---+---+
- *             | SOUTH-WEST      |      |  bank | river (0)| terraces | SOUTH-|
- *  -24        | COURT (8.1) +---+      |       |          | 3.7 4.9  | EAST  |
- *             |             | tunnel: two rooms +---------+ 7.7      | COURT |
+ *             | SOUTH-WEST      |      |  bank | river (0)| the ramp | SOUTH-|
+ *  -24        | COURT (8.1) +---+      |       |          | down to  | EAST  |
+ *             |             | tunnel: two rooms +---------+ the water| COURT |
  *  -36        +-------------+----------+ THE PLATFORM (8.1) over it  | (8.1) |
  *  -44                                 +-----------------------------+-------+
  *  -49                                        far pool (0)
@@ -34,6 +34,7 @@ export const PLACE = {
   wall: 7.2,
   // [east, north, facing in degrees from north toward east, tag]. The first is the player's.
   starts: [
+    [-11, -36.7, 8, 'platform'],
     [-13, 16.5, 90, 'bridge'],
     [-66, 4, 90, 'west start'],
     [-70, -3, 80, 'west start'],
@@ -49,7 +50,7 @@ export const PLACE = {
     [45, 0, 270, 'east room'],
     [24, 2, 270, 'east court'],
     [11, -30, 0, 'south-east court'],
-    [-4, -40, 0, 'platform'],
+    [1, -40, 350, 'platform'],
   ],
 };
 
@@ -60,13 +61,15 @@ const M = 8.13, H = 8.53, GA = 8.94, WS = 5.5, AN = 5.08, ES = 6.5, TOP = 15.33,
 const BANK = 0.81, SH = 0.42, WL = 0.65;
 // A roofed way's clear height, and the walls that carry the mass over it.
 const CLEAR = 4.1;
+// The surfaces the floors name (look.js): turf in the open courts, the river's bed and banks.
+const TURF = 'cw_turf', BED = 'cw_bed';
 
 /** A rectangle's corners from its west, south, east and north sides. */
 const box = (w, s, e, n) => [[w, s], [e, s], [e, n], [w, n]];
 /** A roofed way at the common level or another: the mass stands over it to its top. */
 const way = (at, y = M) => ({ at, y, roof: CLEAR, walls: CAP - (typeof y === 'number' ? y : Math.max(y.from[2], y.to[2])), crown: false });
 /** A stretch of the river's bed or its banks in the open: the courts' walls stand over it. */
-const bed = (at, y) => ({ at, y, walls: TOP - y });
+const bed = (at, y) => ({ at, y, key: BED, walls: TOP - y });
 
 /**
  * The floors: polygons of [east, north], level (`y`) or sloped (`y: { from, to }`, each [east, north, up]).
@@ -81,26 +84,28 @@ export const GROUND = [
   // ------------------------------------------------------------------ the rope bridge, sagging to its middle; the east room over the channel
   { at: box(-16.5, 15, -6.75, 18), y: { from: [-16, 16.5, GA], to: [-6.75, 16.5, 8.5] }, over: true, thick: 0.12, key: 'cw_wood', side: 'cw_wood_dark', railKey: 'cw_wood_dark' },
   { at: box(-6.75, 15, 3, 18), y: { from: [-6.75, 16.5, 8.5], to: [2.5, 16.5, GA] }, over: true, thick: 0.12, key: 'cw_wood', side: 'cw_wood_dark', railKey: 'cw_wood_dark' },
-  { at: box(3, 13, 16, 21), y: GA, over: true, thick: 0.8, rail: 0, roof: CLEAR, walls: CAP - GA, crown: false },
+  // (its slab reaches 0.7 m past its east wall: a wall closes the walk grid half a cell to each side, and the
+  // channel under the slab stays open only under the slab; the platform's does the same past its two walls)
+  { at: box(3, 13, 16.7, 21), y: GA, over: true, thick: 0.8, rail: 0, roof: CLEAR, walls: CAP - GA, crown: false },
   // ------------------------------------------------------------------ the crossing over the river, and the platform over it in the south
   { at: box(-19.8, -14.5, 6.5, -8.2), y: M, over: true, thick: 0.8, rail: 0, roof: CLEAR, walls: CAP - M, crown: false },
-  { at: box(-17.3, -44.3, 5, -35.5), y: M, over: true, thick: 0.9, rail: 0.9 },
+  { at: box(-18, -45, 5, -35.5), y: M, over: true, thick: 0.9, rail: 0.9 },
 
   // ------------------------------------------------------------------ the west start: its court, the annex, the north part, the two stairs up
-  { at: [[-88, -2], [-75, -2], [-75, 5], [-81, 5], [-81, 17], [-88, 17]], y: AN, walls: TOP - AN },
-  { at: [[-75, -11.5], [-69.5, -11.5], [-69.5, -7], [-64, -7], [-64, -11.5], [-58, -11.5], [-58, 14.8], [-75, 14.8]], y: WS, walls: TOP - WS },
-  { at: [[-69, 14.8], [-52.5, 14.8], [-52.5, 21.25], [-57, 21.25], [-57, 27.25], [-52.5, 27.25], [-52.5, 31], [-69, 31]], y: WS, walls: TOP - WS },
+  { at: [[-88, -2], [-75, -2], [-75, 5], [-81, 5], [-81, 17], [-88, 17]], y: AN, key: TURF, walls: TOP - AN },
+  { at: [[-75, -11.5], [-69.5, -11.5], [-69.5, -7], [-64, -7], [-64, -11.5], [-58, -11.5], [-58, 14.8], [-75, 14.8]], y: WS, key: TURF, walls: TOP - WS },
+  { at: [[-69, 14.8], [-52.5, 14.8], [-52.5, 21.25], [-57, 21.25], [-57, 27.25], [-52.5, 27.25], [-52.5, 31], [-69, 31]], y: WS, key: TURF, walls: TOP - WS },
   { at: box(-57, 21.25, -52.5, 27.25), y: { from: [-57, 24.25, WS], to: [-53, 24.25, M] }, steps: true, walls: TOP - M },
   { at: box(-69.5, -11.5, -64, -7), y: { from: [-66.75, -7, WS], to: [-66.75, -11, M] }, steps: true, walls: TOP - M },
   // ------------------------------------------------------------------ the south-west court, the tunnel of two rooms east of it
-  { at: [[-75, -36], [-52, -36], [-52, -24], [-58, -24], [-58, -11.5], [-75, -11.5]], y: M },
+  { at: [[-75, -36], [-52, -36], [-52, -24], [-58, -24], [-58, -11.5], [-75, -11.5]], y: M, key: TURF },
   way(box(-52, -34.3, -49.5, -27.7)),
   way(box(-49.5, -36, -33, -26.2)),
   way(box(-33, -34.3, -30, -27.7)),
   way(box(-30, -42, -19.8, -26.2)),
   way(box(-19.8, -41.5, -17.3, -36)),
   // ------------------------------------------------------------------ the west site, its passages south and east
-  { at: box(-52.5, 11, -36, 31), y: M },
+  { at: box(-52.5, 11, -36, 31), y: M, key: TURF },
   way(box(-46, 4, -39, 11)),
   way(box(-36, 13.5, -34, 17), { from: [-36, 15.25, M], to: [-34.4, 15.25, GA] }),
   // ------------------------------------------------------------------ the mid-west court: its raised walk, its floor, the way north
@@ -114,12 +119,19 @@ export const GROUND = [
   way(box(-34, 13, -18.6, 21), GA),
   { at: box(-18.6, 14.5, -16.5, 18.5), y: GA },
 
-  // ------------------------------------------------------------------ the river: the pool in the hall, the bed through the south-east court and under the platform
-  bed([[-17.5, -44.3], [-13, -44.3], [-13, 23], [-18, 23], [-18, 18.5], [-16.5, 18.5], [-16.5, 14.5], [-18, 14.5], [-18, -8.2], [-17.5, -8.2]], BANK),
-  bed(box(-13, -44.3, -11, 19), SH),
-  bed(box(-11, -44.3, -3, 19), 0),
-  bed(box(-3, -44.3, -1, 13), SH),
-  bed([[-1, -44.3], [0.5, -44.3], [0.5, -16], [6.5, -16], [6.5, -14.5], [7, -14.5], [7, -3], [2, -3], [2, 11], [-1, 11]], BANK),
+  // ------------------------------------------------------------------ the river: its bed through the south-east court and under the platform
+  // (each strip in two pieces, cut under the crossing: no piece of a floor runs past 40 m)
+  bed([[-17.5, -44.3], [-13, -44.3], [-13, -11.35], [-17.5, -11.35]], BANK),
+  bed(box(-13, -44.3, -11, -11.35), SH),
+  bed(box(-11, -44.3, -3, -11.35), 0),
+  bed(box(-3, -44.3, -1, -11.35), SH),
+  bed([[-1, -44.3], [0.5, -44.3], [0.5, -15.5], [6.5, -15.5], [6.5, -14.5], [7, -14.5], [7, -11.35], [-1, -11.35]], BANK),
+  // the pool in the hall
+  bed([[-17.5, -11.35], [-13, -11.35], [-13, 23], [-18, 23], [-18, 18.5], [-16.5, 18.5], [-16.5, 14.5], [-18, 14.5], [-18, -8.2], [-17.5, -8.2]], BANK),
+  bed(box(-13, -11.35, -11, 19), SH),
+  bed(box(-11, -11.35, -3, 19), 0),
+  bed(box(-3, -11.35, -1, 13), SH),
+  bed([[-1, -11.35], [7, -11.35], [7, -3], [2, -3], [2, 11], [-1, 11]], BANK),
   bed(box(-13, 19, -3, 21), SH),
   bed(box(-13, 21, 3, 23), BANK),
   bed(box(-1, 11, 3, 13), SH),
@@ -128,35 +140,35 @@ export const GROUND = [
   bed(box(-3, 18.5, 16, 21), SH),
   // the far pool south of the platform's wall
   bed(box(-17.5, -49, 5, -44.3), 0),
-  // ------------------------------------------------------------------ the terraces down the river's east bank, with a ramp of ours along the court's wall
-  { at: box(0.5, -21.5, 4.9, -16), y: 3.66 },
-  { at: box(4.9, -21.5, 6.5, -16), y: { from: [5.7, -16, BANK], to: [5.7, -21, 3.66] } },
-  { at: box(0.5, -24, 6.5, -21.5), y: { from: [3.5, -21.5, 3.66], to: [3.5, -24, 4.88] } },
+  // ------------------------------------------------------------------ the ramp down the river's east bank, a landing half way
+  { at: box(0.5, -24, 6.5, -15.5), y: { from: [3.5, -15.5, BANK], to: [3.5, -24, 4.88] } },
   { at: box(0.5, -26.5, 6.5, -24), y: 4.88 },
-  { at: box(0.5, -32.5, 4.9, -26.5), y: 7.72 },
-  { at: box(4.9, -32.5, 6.5, -26.5), y: { from: [5.7, -26.5, 4.88], to: [5.7, -32, 7.72] } },
-  { at: box(0.5, -35.5, 6.5, -32.5), y: M },
+  { at: box(0.5, -33, 6.5, -26.5), y: { from: [3.5, -26.5, 4.88], to: [3.5, -33, M] } },
+  { at: box(0.5, -35.5, 6.5, -33), y: M },
   // ------------------------------------------------------------------ the south-east court
-  { at: [[5, -44.3], [16.5, -44.3], [16.5, -8.2], [6.5, -8.2], [6.5, -35.5], [5, -35.5]], y: M },
+  { at: [[5, -44.3], [16.5, -44.3], [16.5, -8.2], [6.5, -8.2], [6.5, -35.5], [5, -35.5]], y: M, key: TURF },
 
   // ------------------------------------------------------------------ the east court: its floor, the way south, the way east, the link to the east room
-  { at: [[6, -2], [38.5, -2], [38.5, 8], [36, 8], [36, 6.5], [18, 6.5], [18, 10], [6, 10]], y: M },
+  { at: [[6, -2], [38.5, -2], [38.5, 8], [36, 8], [36, 6.5], [18, 6.5], [18, 10], [6, 10]], y: M, key: TURF },
   way(box(8, -8.2, 15, -2)),
   way(box(38.5, -2, 42, 5)),
   way(box(12, 10, 15, 13), { from: [13.5, 10, M], to: [13.5, 12.5, GA] }),
   // the stair down to the water court, a landing half way
-  { at: box(18, 6.5, 24, 10), y: { from: [18, 8.25, M], to: [24, 8.25, 4.6] }, steps: true, walls: TOP - M },
-  { at: box(24, 6.5, 27, 10), y: 4.6, walls: TOP - 4.6 },
-  { at: box(27, 6.5, 32, 10), y: { from: [27, 8.25, 4.6], to: [32, 8.25, BANK] }, steps: true, walls: TOP - 4.6 },
+  { at: box(18, 6.5, 24.5, 10), y: { from: [18, 8.25, M], to: [24.5, 8.25, 4.47] }, steps: true, walls: TOP - M },
+  { at: box(24.5, 6.5, 26, 10), y: 4.47, walls: TOP - 4.47 },
+  { at: box(26, 6.5, 32, 10), y: { from: [26, 8.25, 4.47], to: [32, 8.25, BANK] }, steps: true, walls: TOP - 4.47 },
   bed(box(32, 6.5, 36, 10), BANK),
   // ------------------------------------------------------------------ the water courts and the channel between them
   bed(box(17, 10, 36, 12), BANK),
-  bed([[16, 12], [36, 12], [36, 11], [57, 11], [57, 14], [16, 14]], SH),
-  bed(box(16, 14, 53, 18.5), 0),
-  bed(box(16, 18.5, 53, 21), SH),
+  bed(box(16, 12, 36, 14), SH),
+  bed(box(36, 11, 57, 14), SH),
+  bed(box(16, 14, 36, 18.5), 0),
+  bed(box(36, 14, 57, 18.5), 0),
+  bed(box(16, 18.5, 36, 21), SH),
+  bed(box(36, 18.5, 57, 21), SH),
   bed(box(17, 21, 36, 25), BANK),
-  bed([[39, 21], [53, 21], [53, 20], [57, 20], [57, 25], [39, 25]], BANK),
-  bed(box(53, 14, 65, 20), BANK),
+  bed(box(39, 21, 57, 25), BANK),
+  bed(box(57, 14, 65, 20), BANK),
   // the arm north of the second court, the far pool behind it
   bed(box(47, 25, 57, 34), 0.6),
   bed(box(51, 34, 56, 44), SH),
@@ -169,18 +181,20 @@ export const GROUND = [
   // ------------------------------------------------------------------ the east start: its court, the room and the ramp west of it, the way and the room east of it
   { at: box(58, -12, 75, 12), y: ES, walls: TOP - ES },
   { at: box(42, -12, 49, 8), y: M },
-  way(box(49, -12, 58, -6), { from: [49, -9, M], to: [55, -9, ES] }),
+  way(box(49, -12, 58, -6), { from: [49, -9, M], to: [57.5, -9, ES] }),
   way(box(75, -6, 80, 2), ES),
   way(box(80, -14, 88, 11), ES),
 ];
 
 /** Water: a surface at a height over the floor that is its bed. */
 export const WATER = [
-  { at: box(-13, -44.3, -1, 21), y: WL },
+  { at: box(-13, -44.3, -1, -11.35), y: WL },
+  { at: box(-13, -11.35, -1, 21), y: WL },
   { at: box(-1, 11, 3, 13), y: WL },
-  { at: box(-3, 13, 16, 21), y: WL },
+  { at: box(-1, 13, 16, 21), y: WL },
   { at: box(-17.5, -49, 5, -44.3), y: WL },
-  { at: [[16, 12], [36, 12], [36, 11], [57, 11], [57, 14], [53, 14], [53, 21], [16, 21]], y: WL },
+  { at: box(16, 12, 36, 21), y: WL },
+  { at: box(36, 11, 57, 21), y: WL },
   { at: box(47, 25, 57, 34), y: WL },
   { at: box(51, 34, 56, 44), y: WL },
   { at: box(41, 44, 66, 49), y: WL },
@@ -188,11 +202,12 @@ export const WATER = [
 
 /** Walls along a line, with what is cut in them: `holes` of `{ at, w, h, sill }`, `at` in metres from the first point. */
 export const WALLS = [
-  // the crossing: its north wall, its south wall with four windows over the river, a doorway at each end
+  // the crossing: its north wall, its south wall with four windows over the river (it stands in from the
+  // slab's edge, a sill outside it), a doorway at each end
   { line: [[-19.8, -8.2], [6.5, -8.2]], y: M, h: CLEAR, t: 0.6, crown: false },
-  { line: [[-19.8, -14.5], [6.5, -14.5]], y: M, h: CLEAR, t: 0.6, crown: false, holes: [{ at: 4.8, w: 2.2, h: 1.7, sill: 0.9 }, { at: 9.8, w: 2.2, h: 1.7, sill: 0.9 }, { at: 14.8, w: 2.2, h: 1.7, sill: 0.9 }, { at: 19.8, w: 2.2, h: 1.7, sill: 0.9 }] },
-  { line: [[-19.5, -14.5], [-19.5, -8.2]], y: M, h: CLEAR, t: 0.6, crown: false, holes: [{ at: 3.15, w: 3.2, h: 3.3 }] },
-  { line: [[6.2, -14.5], [6.2, -8.2]], y: M, h: CLEAR, t: 0.6, crown: false, holes: [{ at: 3.15, w: 3.2, h: 3.3 }] },
+  { line: [[-19.8, -13.8], [6.5, -13.8]], y: M, h: CLEAR, t: 0.6, crown: false, holes: [{ at: 4.8, w: 2.2, h: 1.7, sill: 0.9 }, { at: 9.8, w: 2.2, h: 1.7, sill: 0.9 }, { at: 14.8, w: 2.2, h: 1.7, sill: 0.9 }, { at: 19.8, w: 2.2, h: 1.7, sill: 0.9 }] },
+  { line: [[-19.5, -13.8], [-19.5, -8.5]], y: M, h: CLEAR, t: 0.6, crown: false, holes: [{ at: 2.65, w: 3.2, h: 3.3 }] },
+  { line: [[6.2, -13.8], [6.2, -8.5]], y: M, h: CLEAR, t: 0.6, crown: false, holes: [{ at: 2.65, w: 3.2, h: 3.3 }] },
   // the east room: its walls on the slab, the doorway the bridge comes in by, the doorway of the link
   { line: [[3.3, 13], [3.3, 21]], y: GA, h: CLEAR, t: 0.6, crown: false, holes: [{ at: 3.5, w: 3, h: 3.3 }] },
   { line: [[3, 13], [16, 13]], y: GA, h: CLEAR, t: 0.6, crown: false, holes: [{ at: 10.5, w: 3, h: 3.3 }] },
@@ -224,8 +239,8 @@ export const DOORS = [
   { at: [-17.3, -38.75], y: M, facing: 90, w: 5.5, h: 3.6, open: 62 },
   // the pair in the way between the east court and the crossing, the crossing's own
   { at: [11.5, -4.6], y: M, facing: 0, w: 6.6, h: 3.6, open: 52 },
-  { at: [-19.5, -11.35], y: M, facing: 270, w: 3.2, h: 3.3, open: 100 },
-  { at: [6.2, -11.35], y: M, facing: 90, w: 3.2, h: 3.3, open: 100 },
+  { at: [-19.5, -11.15], y: M, facing: 270, w: 3.2, h: 3.3, open: 100 },
+  { at: [6.2, -11.15], y: M, facing: 90, w: 3.2, h: 3.3, open: 100 },
 ];
 
 /** Solids of any footprint, from `y` to `top`. */
@@ -251,6 +266,8 @@ export const MASSES = [
   { at: box(14.7, -38.5, 16.5, -35.5), y: M, top: TOP },
   { at: box(-2.3, -44.3, 1, -42.3), y: M, top: TOP },
   { at: box(7.3, -44.3, 10.7, -42.3), y: M, top: TOP },
+  // the pier under the crossing's east end, where the river's bank runs in under the south-east court
+  { at: box(6.5, -14.5, 7.3, -8.2), y: 0, top: M - 0.8 },
   // the pier in the east court's south wall
   { at: box(28.3, -2, 31.3, 0.2), y: M, top: TOP },
 ];
@@ -266,8 +283,8 @@ export const CRATES = [
   [8, 15, 1.7, 0, GA], [8, 16.7, 1.7, 8, GA], [8.7, 19.6, 1.5, -12, GA],
   // the east court and its bay, the room east of it
   [8.4, 8.3, 3.2, 0, M], [10.9, 8.9, 1.7, 10, M], [24.5, 4.8, 1.6, 0, M], [43.2, -5, 1.6, 0, M],
-  // the south-east court: by the terraces, in its north-east corner, in its south-east corner, on the platform's parapet side
-  [7.7, -19.6, 3.2, 5, M], [7.5, -21.9, 1.6, -15, M],
+  // the south-east court: by the ramp to the water, in its north-east corner, in its south-east corner, on the platform's parapet side
+  [8.4, -19.6, 3.2, 5, M], [7.7, -22.1, 1.6, -15, M],
   [15.2, -9.7, 1.6, 0, M], [15.3, -11.4, 1.7, 8, M], [15.25, -10.5, 1.5, 12, M + 1.7],
   [12.2, -42.2, 1.7, 30, M], [13.9, -41.1, 1.7, 40, M],
   [-6.3, -36.5, 1.5, 10, M], [-4.6, -36.4, 1.5, -8, M],
@@ -277,36 +294,50 @@ export const CRATES = [
 
 /** The tops of the blocks beside the floors, where they are not `PLACE.wall` over the floor: the mass the courts are cut in, a step back from their walls. */
 export const BLOCKS = [
+  // (three heights about the mass's top, no two alike side by side: a top that runs past 40 m in one piece is drawn askew)
   // west of the annex and of the west start, north of them and of the west site
   { at: box(-96, -3.5, -89.5, 18.5), top: CAP },
-  { at: box(-96, 18.5, -70.5, 39), top: CAP },
-  { at: box(-70.5, 32.5, -30, 39), top: CAP },
-  { at: box(-79.5, 6.5, -76.5, 18.5), top: CAP },
-  { at: box(-96, -44, -76.5, -3.5), top: CAP },
-  { at: box(-76.5, -44, -19, -37.5), top: CAP },
+  { at: box(-96, 18.5, -70.5, 58), top: CAP - 0.5 },
+  { at: box(-70.5, 32.5, -50, 58), top: CAP },
+  { at: box(-50, 32.5, -30, 58), top: CAP + 0.5 },
+  { at: box(-79.5, 6.5, -76.5, 18.5), top: CAP + 0.5 },
+  { at: box(-96, -58, -76.5, -3.5), top: CAP + 0.5 },
+  // south of the south-west court and of the tunnel
+  { at: box(-76.5, -58, -50, -37.5), top: CAP },
+  { at: box(-50, -58, -25, -37.5), top: CAP - 0.5 },
   // between the west start and the courts east of it; south of the mid-west court
-  { at: box(-56.5, -22.5, -52.5, 9.5), top: CAP },
-  { at: box(-50.5, -24.5, -19.5, -19.5), top: CAP },
+  { at: box(-56.5, -22.5, -52.5, 9.5), top: CAP - 0.5 },
+  { at: box(-50.5, -24.5, -19.5, -19.5), top: CAP + 0.5 },
   { at: box(-34.5, -19.5, -27.5, -16), top: CAP },
-  // the hall's south wall, over the east court's bay
+  // north of the hall and of the two rooms; the hall's south wall, over the east court's bay
+  { at: box(-30, 24.6, -8, 58), top: CAP - 0.5 },
+  { at: box(-8, 24.6, 15, 58), top: CAP },
   { at: box(3.9, 10.3, 16, 13), top: CAP },
-  // east and south of the river court; south of the east court
-  { at: box(18, -50, 30, -3.5), top: CAP },
-  { at: box(-25, -58, 18, -50.5), top: CAP },
+  // south and east of the river court; south of the east court
+  { at: box(-25, -58, -4, -50.5), top: CAP + 0.5 },
+  { at: box(-4, -58, 18, -50.5), top: CAP },
+  { at: box(18, -58, 30, -3.5), top: CAP - 0.5 },
   { at: box(30, -9.5, 40.5, -3.5), top: CAP },
+  { at: box(30, -58, 56, -20), top: CAP + 0.5 },
   // around the east start and the room west of it
-  { at: box(40.5, -20, 76.5, -13.5), top: CAP },
+  { at: box(40.5, -20, 76.5, -13.5), top: CAP - 0.5 },
   { at: box(50.5, -4.5, 56.5, 9.5), top: CAP },
+  { at: box(56, -58, 76.5, -22), top: CAP },
+  { at: box(76.5, -58, 97, -22), top: CAP - 0.5 },
+  { at: box(89.5, -22, 97, 13.5), top: CAP + 0.5 },
   // around the water courts, the ramps and the far pool
-  { at: box(15, 26.5, 37.5, 33), top: CAP },
-  { at: box(37.5, 26.5, 45.5, 42.5), top: CAP },
-  { at: box(45.5, 35.5, 49.5, 42.5), top: CAP },
-  { at: box(73.5, 13.5, 82, 42.5), top: CAP },
-  { at: box(57.5, 35.5, 73.5, 42.5), top: CAP },
-  { at: box(39.5, 50.5, 67.5, 58), top: CAP },
-  { at: box(33, 42.5, 39.5, 58), top: CAP },
-  { at: box(67.5, 42.5, 82, 58), top: CAP },
+  { at: box(15, 26.5, 33, 58), top: CAP + 0.5 },
+  { at: box(33, 26.5, 45.5, 42.5), top: CAP },
+  { at: box(33, 42.5, 39.5, 58), top: CAP - 0.5 },
+  { at: box(45.5, 35.5, 49.5, 42.5), top: CAP - 0.5 },
+  { at: box(57.5, 35.5, 73.5, 42.5), top: CAP + 0.5 },
+  { at: box(73.5, 13.5, 97, 42.5), top: CAP },
+  { at: box(39.5, 50.5, 67.5, 58), top: CAP + 0.5 },
+  { at: box(67.5, 42.5, 97, 58), top: CAP - 0.5 },
 ];
+
+/** A mark of ours at each of the two sites. */
+export const MARKS = [{ at: [-4.1, -40], y: M, size: 4 }, { at: [-42.5, 25.2], y: M, size: 4 }];
 
 /** Lamps: [east, north, up], `up` what a lamp hangs from. */
 export const LAMPS = [
@@ -320,6 +351,10 @@ export const LAMPS = [
   [-7, -11.3, M - 0.8],
   // the east room, the link, the ways off the east court
   [6.5, 17, GA + CLEAR], [12, 17, GA + CLEAR], [13.5, 11.5, GA + CLEAR - 0.3], [11.5, -6.5, M + CLEAR], [11.5, -2.8, M + CLEAR], [40.2, 1.5, M + CLEAR],
+  // the hall: over the bridge's two doorways, along its walls above the bridge and above the water
+  [-18.1, 16.5, GA + 4], [2.6, 16.5, GA + 4],
+  [-12, 23.1, 12.2], [-3, 23.1, 12.2], [-17.6, 8, 12.2], [-17.6, -2, 12.2], [1.6, 8, 12.2], [1.6, 0, 12.2],
+  [-12, 23.1, 5.4], [-2, 23.1, 5.4], [-17.6, 6, 5.4], [-17.6, -4, 5.4], [1.6, 6, 5.4],
   // under the bridge's ends and the east room, over the pool and the channel
   [-15, 16.5, GA - 0.9], [1.5, 16.5, GA - 0.9], [9.5, 15.5, GA - 0.8],
   // under the platform
