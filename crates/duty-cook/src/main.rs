@@ -152,6 +152,7 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
         &tone,
         &chunks::Settings {
             open_floor: number(&profile["light"]["openFloor"], 0.3),
+            leaves_both: profile["light"]["leaves"].as_str() == Some("both"),
             texture_of,
             texture_flags,
             largest: list(&profile["lod"]["largest"], [4.0, 8.0, 0.0]),
