@@ -38,10 +38,10 @@ export const PLACE = {
   wall: 7,
   // [east, north, facing in degrees from north toward east, tag]. The first is the player's.
   starts: [
-    [-52, -21, 110, 'low start'],
-    [-54.5, -18, 100, 'low start'],
-    [-50, -27, 90, 'low start'],
-    [-55, -24, 100, 'low start'],
+    [-51.5, -16.5, 155, 'low start'],
+    [-54, -19.5, 140, 'low start'],
+    [-49.5, -21, 160, 'low start'],
+    [-53.5, -24.5, 120, 'low start'],
     [-29, -21, 90, 'alley yard'],
     [-8, -19, 90, 'cross street'],
     [3, 16, 180, 'bent lane'],
@@ -56,7 +56,7 @@ export const PLACE = {
 };
 
 // The heights most floors lie at.
-const LOW = 1.6, ALLEY = 3.25, MID = 5.7, LANE = 6.5, SITE = 7.3, EAST = 5.3, ROOMS = 8.1, WALK = 8.9, GALLERY = 10.2;
+const LOW = 1.6, ALLEY = 3.25, MID = 5.7, LANE = 6.5, SITE = 7.3, EAST = 5.3, ROOMS = 8.1, WALK = 8.9, GALLERY = 10.2, DECK = 10.6;
 // The clear height under a roof: a room, a hall.
 const ROOM = 3.2, HALL = 4;
 // Floors that are not cobbles, and walls that are not limewash (./look.js).
@@ -88,7 +88,7 @@ export const GROUND = [
   // ------------------------------------------------------------------ the rooms upstairs, on both sides of the south street
   { at: [[-26.5, -32.5], [-26.5, -26], [-17.5, -26], [-17.5, -23.5], [-8, -23.5], [-8, -27.5], [-6, -27.5], [-6, -34], [-14.5, -34], [-14.5, -32.5]], y: ROOMS, roof: ROOM, key: PLANK, side: ROSE },
   // (the room over the street: a floor over a floor, half a metre wider than its walls on each side)
-  { at: [[-23.5, -40.5], [-18, -40.5], [-18, -32.5], [-23.5, -32.5]], y: ROOMS, over: true, rail: 0, key: PLANK, side: ROSE },
+  { at: [[-23.5, -40.5], [-18, -40.5], [-18, -32.5], [-23.5, -32.5]], y: ROOMS, over: true, rail: 0, roof: ROOM, key: PLANK, side: ROSE },
   { at: [[-26.5, -49.5], [-26.5, -40.5], [-16, -40.5], [-16, -43.5], [-12.5, -43.5], [-12.5, -47], [-16, -47], [-16, -49.5]], y: ROOMS, roof: ROOM, key: PLANK, side: OCHRE },
   // their stair down east to the passage, the passage and its mouth on the south street
   { at: [[-12.5, -47], [-9.5, -47], [-9.5, -43.5], [-12.5, -43.5]], y: { from: [-9.5, -45.25, LANE], to: [-12.5, -45.25, ROOMS] }, steps: true, roof: ROOM },
@@ -104,6 +104,8 @@ export const GROUND = [
   // ------------------------------------------------------------------ the middle: the ramp from the alley yard, the cross street
   { at: [[-21.5, -14], [-14, -14], [-14, -10.5], [-21.5, -10.5]], y: { from: [-21.5, -12, ALLEY], to: [-14, -12, MID] }, wall: RUBBLE },
   { at: [[-14, -14], [-10, -14], [-10, -16.5], [-5.5, -16.5], [-5.5, -10.5], [-14, -10.5]], y: MID },
+  // (the deck over the ramp's head, which the ladder climbs to: a floor over a floor)
+  { at: [[-15.5, -14], [-10.5, -14], [-10.5, -10.5], [-15.5, -10.5]], y: DECK, over: true, key: PLANK },
   { at: [[-10, -23.5], [-6.5, -23.5], [-6.5, -21], [14, -21], [14, -23], [15, -23], [15, -16.5], [-10, -16.5]], y: MID },
   // the sunken path beside it, down from the street and north to a dead end under the way to the neck
   { at: [[-3, -16.5], [3.5, -16.5], [3.5, -14.5], [-3, -14.5]], y: { from: [3, -15.5, MID], to: [0.5, -15.5, 4.5] } },
@@ -136,11 +138,12 @@ export const GROUND = [
   // ------------------------------------------------------------------ the east start: its yard, its loggia, the ramp from the north street
   { at: [[45.5, 33.5], [47.5, 33.5], [47.5, 36], [45.5, 36]], y: 6.4 },
   { at: [[45.5, 31.5], [55.5, 31.5], [55.5, 33.5], [45.5, 33.5]], y: { from: [46, 32.5, 6.4], to: [55.5, 32.5, EAST] } },
-  { at: [[43.5, 11], [56.5, 11], [56.5, 31], [55.5, 31], [55.5, 31.5], [45.5, 31.5], [45.5, 33], [39, 33], [39, 25.5], [34.5, 25.5], [34.5, 23.5], [45.5, 23.5], [45.5, 16.5], [43.5, 16.5]], y: EAST, wall: SAGE },
+  { at: [[43.5, 11], [56.5, 11], [56.5, 31], [55.5, 31], [55.5, 31.5], [45.5, 31.5], [45.5, 33], [39, 33], [39, 23.5], [45.5, 23.5], [45.5, 16.5], [43.5, 16.5]], y: EAST, wall: SAGE },
   { at: [[56.5, 11], [58.5, 11], [58.5, 31], [56.5, 31]], y: EAST, roof: 4.5 },
-  // the cellar ramp west of it
-  { at: [[30, 25.5], [39, 25.5], [39, 30.5], [30, 30.5]], y: { from: [39, 28, EAST], to: [30, 28, 2.6] }, wall: RUBBLE },
-  { at: [[28, 23.5], [34.5, 23.5], [34.5, 25.5], [30, 25.5], [30, 30.5], [28, 30.5]], y: 2.6, wall: RUBBLE },
+  // the cellar ramp west of it, down under a house, and the kerb between it and the north street
+  { at: [[27.5, 23.5], [39, 23.5], [39, 31], [27.5, 31]], y: { from: [39, 27, EAST], to: [27.5, 27, 2.45] }, wall: RUBBLE },
+  { at: [[22.5, 23.5], [27.5, 23.5], [27.5, 31], [22.5, 31]], y: 2.45, roof: ROOM, wall: RUBBLE },
+  { at: [[27.5, 31.5], [38.5, 31.5], [38.5, 33.5], [27.5, 33.5]], y: 6.9 },
   // the stair up west to the west yard, the yard and its arch south to the hall
   { at: [[41, 11], [43.5, 11], [43.5, 16.5], [41, 16.5]], y: { from: [41, 13.5, SITE], to: [43.5, 13.5, EAST] }, steps: true },
   { at: [[30, 5.5], [39, 5.5], [39, 10], [41, 10], [41, 17], [30, 17]], y: SITE, wall: ROSE },
@@ -227,8 +230,6 @@ export const MASSES = [
   ...[-16.2, -22.5, -28.8].map((n) => ({ at: [[44.2, n - 0.3], [44.8, n - 0.3], [44.8, n + 0.3], [44.2, n + 0.3]], y: SITE, top: SITE + HALL, key: 'qt_wood_dark' })),
   ...[11.4, 16.2, 21, 25.8, 30.6].map((n) => ({ at: [[56.3, n - 0.25], [56.8, n - 0.25], [56.8, n + 0.25], [56.3, n + 0.25]], y: EAST, top: EAST + 4.5, key: 'qt_wood_dark' })),
   ...[-17.3, -21.3, -25.3, -29.3, -33.2].map((n) => ({ at: [[55.4, n - 0.2], [55.8, n - 0.2], [55.8, n + 0.2], [55.4, n + 0.2]], y: SITE, top: SITE + 2.8, key: 'qt_wood_dark' })),
-  // the roof of the room over the south street (its floor is a floor over a floor, which carries none)
-  { at: [[-23.2, -40.5], [-18.3, -40.5], [-18.3, -32.5], [-23.2, -32.5]], y: ROOMS + ROOM, top: ROOMS + 7, key: ROSE },
   // the hall's stubs of walls
   { at: [[36.5, -4], [36.9, -4], [36.9, -1.5], [36.5, -1.5]], y: SITE, top: SITE + HALL },
   { at: [[24.3, -7.5], [24.7, -7.5], [24.7, -5], [24.3, -5]], y: SITE, top: SITE + HALL },
@@ -245,7 +246,13 @@ export const DOORS = [
   { at: [51.25, -5.25], facing: 90, w: 1.6, h: 2.3, leaves: 1, hinge: 1 },
   // shut: the door at the head of the alley's stair, the cellar's under the east start
   { at: [-33.42, -38.2], facing: 90, w: 1.3, h: 2.3, leaves: 1, open: 2 },
-  { at: [28.08, 27], facing: 90, w: 4.4, h: 3, open: 2 },
+  { at: [22.58, 27.25], facing: 90, w: 4.4, h: 3, open: 2 },
+];
+
+/** Ladders: rails and rungs `h` tall at `at`, looking `facing` (away from what they climb). */
+export const LADDERS = [
+  // from the middle up to the deck over the ramp
+  { at: [-10.3, -11.6], facing: 90, h: DECK - MID },
 ];
 
 /** Crates: [east, north, side, turn in degrees, up]. Without `up` a crate stands on the floor. */
@@ -282,7 +289,7 @@ export const LAMPS = [
   [-7, -45.2], [-2.75, -46], [3, -51], [12.5, -50], [18.75, -51.3],
   [22, -42.75], [29, -42.75], [35, -42.75], [17.5, -30], [16.5, -37.5],
   [26.5, -5], [33, -5], [26.5, -12.5], [39.75, -19], [39.75, -26],
-  [54.5, 4.75], [55.4, -2.5], [57.5, 16], [57.5, 26], [56.5, -22], [56.5, -29],
+  [54.5, 4.75], [55.4, -2.5], [57.5, 16], [57.5, 26], [56.5, -22], [56.5, -29], [25, 27.25],
 ];
 
 /** A site's mark on its floor: a square of painted bars with a bar across. */
