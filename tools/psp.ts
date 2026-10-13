@@ -493,6 +493,8 @@ async function start(boot: string, bare = false, standalone = false): Promise<an
   if (bare) for (const f of UI_FILES) rmSync(`${beside}/${f}`, { force: true });
   else stageInterface(beside);
   for (const dir of [share, app]) rmSync(`${dir}/changes.txt`, { force: true });
+  // (a standalone run on a new share: its words and its status still go to duty/)
+  mkdirSync(app, { recursive: true });
   writeFileSync(`${app}/build.json`, JSON.stringify({ prxSha256: sha(`${OUT}/pocket-duty.prx`), packSha256: id, interfaceSha256: Object.fromEntries(UI_FILES.map((f) => [f, sha(`${OUT}/${f}`)])) }, null, 1));
   writeFileSync(`${app}/boot.txt`, `${boot}\n`);
   rmSync(`${app}/status.json`, { force: true });
