@@ -513,6 +513,11 @@ impl App {
         self.world.is_some()
     }
 
+    /// The held map from above, or none: the interface is told with the rest of the state.
+    pub fn chart(&mut self, chart: Option<duty_interface::Chart>) {
+        self.session.chart = chart;
+    }
+
     /// Another screen from the next frame on.
     pub fn reshape(&mut self, shape: Shape) {
         if (self.screen.width, self.screen.height) != (shape.width, shape.height) {
