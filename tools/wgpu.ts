@@ -32,7 +32,7 @@ import { POCKET3D_ICON } from "../vendor/pocketjs/tools/pocket3d-icon.ts";
 import { CUT_SIZES, writePacks } from "../vendor/pocketjs/tools/pocket3d-packs.ts";
 import { stagePocket3dWeb } from "../vendor/pocketjs/tools/pocket3d-web.ts";
 import { FIRST, mapNamed, MAPS, packPath } from "./maps.ts";
-import { chartPacks, isChart } from "./packs.ts";
+import { chartName, chartPacks, isChart } from "./packs.ts";
 import { compileInterface, type Device } from "./ui.ts";
 
 export const ROOT = resolve(import.meta.dir, "..");
@@ -210,6 +210,12 @@ function serveDist(port: number) {
 /** The site and the packs. A pack is answered a range at a time, as a tab asks for it. */
 export function serve(port: number) {
   const served = new Map(packs().map((each) => [`/${each.name}`, each.file]));
+  // A map's picture from above stands beside its pack's file under the same name with `.chart`: what the
+  // deployed site has as the pack `<id>-map` of its manifest (tools/packs.ts), the page finds here by the name.
+  for (const chart of chartPacks("psp30", packs().map((each) => each.id))) {
+    const of = packs().find((each) => chartName(each.id) === chart.name)!;
+    served.set(`/${of.name.replace(/\.pack$/, ".chart")}`, chart.file);
+  }
   return Bun.serve({
     port,
     hostname: "127.0.0.1",

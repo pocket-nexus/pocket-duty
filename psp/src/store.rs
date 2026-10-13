@@ -6,12 +6,13 @@
 //! (Pocket3D's `pocket3d-packs`): a section two maps share is one file. A
 //! section is read through the pieces it lies in.
 //!
-//! Each section is read straight into memory of its exact size (`mem`), which
-//! keeps it for the rest of the run: the program holds one map's pack and
-//! cannot give it back. So another map is another run. `map.txt` beside the
-//! packs names the map a run reads (`locate`); when the interface asks for
-//! another, the name is written there and the program is started again
-//! (`change`, `serve`).
+//! Each section is read straight into memory of its exact size, in the two
+//! stretches `mem` cuts once for the largest map: the program holds one map's
+//! pack, and another map's sections take the same memory (`hold`, then
+//! `PackFile::open` again). `map.txt` beside the packs names the map a start
+//! of the program reads (`locate`); a map read since is written there
+//! (`chose`). A run that set memory aside for a smaller map than the one asked
+//! for writes the name and starts the program again (`change`, `serve`).
 //!
 //! The kernel keeps a working directory per thread, and only the thread the
 //! program started on has one (the EBOOT's directory): a path without a
@@ -37,8 +38,9 @@ use psp::sys::*;
 
 use crate::mem;
 
-/// Records in memory of exactly their size, which keeps them for the rest of the run (`mem::vec`).
-/// The allocator did not hand that memory out, so the vector is never dropped and never grows.
+/// Records in the held map's memory, at exactly their size (`mem::map_vec`). The allocator did not
+/// hand that memory out, so the vector is never dropped and never grows; it is good until another
+/// map is read (`mem::release_map`).
 pub type Kept<T> = ManuallyDrop<Vec<T>>;
 
 pub struct Section {
@@ -155,7 +157,29 @@ fn path(local: bool, name: &[u8]) -> [u8; 64] {
     out
 }
 
+/// The thread the program started on: the only one a path without a device works on from the XMB.
+static mut MAIN_THREAD: i32 = 0;
+/// Opens by a path without a device that another thread made. PSPLINK and an emulator give every
+/// thread a working directory, so such an open works there and fails from the XMB: it is counted
+/// here, and the count must stay 0 (`stray_opens`, in the status and in `changes.txt`).
+static STRAY: AtomicU32 = AtomicU32::new(0);
+
+/// Notes an open by a path without a device: on the main thread, or counted.
+unsafe fn beside() {
+    if sceKernelGetThreadId() != MAIN_THREAD {
+        STRAY.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// How many opens by a path without a device were made off the main thread.
+pub fn stray_opens() -> u32 {
+    STRAY.load(Ordering::Relaxed)
+}
+
 unsafe fn open(local: bool, name: &[u8]) -> SceUid {
+    if local {
+        beside();
+    }
     sceIoOpen(path(local, name).as_ptr(), IoOpenFlags::RD_ONLY, 0)
 }
 
@@ -164,6 +188,7 @@ unsafe fn open(local: bool, name: &[u8]) -> SceUid {
 /// else the first the list has. Call on the thread the program started on, before the frame thread
 /// exists. It allocates nothing.
 pub unsafe fn locate() {
+    MAIN_THREAD = sceKernelGetThreadId();
     // The list says where everything is: every copy of the game has it.
     let mut list = open(true, MANIFEST);
     LOCAL = list.0 >= 0;
@@ -207,6 +232,9 @@ pub unsafe fn locate() {
 
 /// Writes `map.txt`: a map's name, and what follows it.
 unsafe fn write_choice(id: &[u8], then: &[u8]) {
+    if LOCAL {
+        beside();
+    }
     let fd = sceIoOpen(path(LOCAL, CHOICE).as_ptr(), IoOpenFlags::WR_ONLY | IoOpenFlags::CREAT | IoOpenFlags::TRUNC, 0o644);
     if fd.0 >= 0 {
         sceIoWrite(fd, id.as_ptr() as *const c_void, id.len());
@@ -286,15 +314,20 @@ pub unsafe fn read_exact(fd: SceUid, dst: *mut u8, len: usize) -> bool {
 }
 
 impl PackFile {
-    /// The pack of the map `locate` chose: its pieces in the list, and its section table.
+    /// The pack of the held map (the one `locate` chose, or `hold` named since).
     pub unsafe fn open() -> Result<PackFile, &'static str> {
+        PackFile::of(map())
+    }
+
+    /// A map's pack: its pieces in the list, and its section table.
+    pub unsafe fn of(map: &'static Map) -> Result<PackFile, &'static str> {
         if MANIFEST_LEN == 0 {
             return Err("no pocket.packs beside the program or on host0:/duty");
         }
         let list = Manifest::parse(manifest()).map_err(|_| "pocket.packs is not a list of packs")?;
         let mut packs = list.packs;
-        let chart = packs.iter().position(|pack| pack.name.strip_suffix("-map") == Some(map().id)).map(|at| packs.swap_remove(at));
-        let pack = packs.into_iter().find(|pack| pack.name == map().id).ok_or("pocket.packs has no pack for the map")?;
+        let chart = packs.iter().position(|pack| pack.name.strip_suffix("-map") == Some(map.id)).map(|at| packs.swap_remove(at));
+        let pack = packs.into_iter().find(|pack| pack.name == map.id).ok_or("pocket.packs has no pack for the map")?;
         let bytes = pack.bytes;
         let mut file = PackFile { pack, chart, piece: Cell::new(([0; NAME_DIGITS], SceUid(-1))), sections: Vec::new(), bytes: bytes as u32, host: false };
         let mut head = [0u32; 4];
@@ -340,9 +373,17 @@ impl PackFile {
         Some(bytes)
     }
 
-    /// Bytes of the sections: all of them stay in memory.
-    pub fn resident_bytes(&self) -> usize {
-        self.sections.iter().map(|s| s.size as usize).sum()
+    /// The sizes of the sections a run keeps in memory, in the order it reads them (`RESIDENT`).
+    pub fn kept_sizes(&self) -> impl Iterator<Item = usize> + '_ {
+        RESIDENT.iter().filter_map(|tag| self.sections.iter().find(|s| s.tag == *tag)).map(|s| s.size as usize)
+    }
+
+    /// Closes the piece read last. The next read opens the piece it needs.
+    pub unsafe fn rest(&self) {
+        let (_, fd) = self.piece.replace(([0; NAME_DIGITS], SceUid(-1)));
+        if fd.0 >= 0 {
+            sceIoClose(fd);
+        }
     }
 
     pub fn section(&self, tag: u32) -> Result<&Section, &'static str> {
@@ -362,7 +403,7 @@ impl PackFile {
     pub unsafe fn resident<T: Copy>(&self, tag: u32) -> Result<Kept<T>, &'static str> {
         let s = self.section(tag)?;
         let n = s.size as usize / core::mem::size_of::<T>();
-        let mut v = ManuallyDrop::new(mem::vec::<T>(n).ok_or("no memory for the pack")?);
+        let mut v = ManuallyDrop::new(mem::map_vec::<T>(n).ok_or("no memory for the pack")?);
         self.read_into(tag, 0, v.as_mut_ptr().cast(), n * core::mem::size_of::<T>())?;
         v.set_len(n);
         Ok(v)
@@ -377,6 +418,33 @@ impl PackFile {
         self.read_into(tag, 0, v.as_mut_ptr().cast(), n * core::mem::size_of::<T>())?;
         v.set_len(n);
         Ok(v)
+    }
+}
+
+impl Drop for PackFile {
+    fn drop(&mut self) {
+        unsafe { self.rest() }
+    }
+}
+
+/// The sections a run keeps in memory, in the order the program reads them (`gfx::Gfx::load`,
+/// `Held::read` in main.rs, `figures`): what a map's memory is laid out by (`mem::tail_needed`).
+pub const RESIDENT: [u32; 18] = [
+    duty_pack::TEXT, duty_pack::TEXD, duty_pack::CHNK, duty_pack::CLUS, duty_pack::LTRI, duty_pack::LTRO, duty_pack::WVTX, duty_pack::WIDX, duty_pack::VCEL, duty_pack::VLST,
+    duty_pack::VBIT, duty_pack::COLV, duty_pack::COLT, duty_pack::COLN, duty_pack::NAVG, duty_pack::FIGS, duty_pack::SNDS, duty_pack::SNDD,
+];
+
+/// What a map's sections need of the arena's stretch when the kernel's is `first` long, read from its
+/// pack's section table. `None` for a map whose pack cannot be read.
+pub unsafe fn tail_for(map: &'static Map, first: usize) -> Option<usize> {
+    let file = PackFile::of(map).ok()?;
+    Some(mem::tail_needed(file.kept_sizes(), first))
+}
+
+/// From here the held map is `map`: `PackFile::open` reads its pack.
+pub unsafe fn hold(map: &'static Map) {
+    if let Some(i) = MAPS.iter().position(|m| m.id == map.id) {
+        HELD = i;
     }
 }
 
@@ -406,6 +474,19 @@ static KEPT_FLAG: AtomicU32 = AtomicU32::new(0);
 // kernel would not start the program again.
 static CHANGE_FLAG: AtomicU32 = AtomicU32::new(0);
 static mut CHANGE_TO: usize = 0;
+
+// A map read in the running program, whose name `serve` writes to `map.txt` so that the next start of
+// the program opens on it: 1 while it is to be written (`CHOSEN` of `MAPS`).
+static CHOSEN_FLAG: AtomicU32 = AtomicU32::new(0);
+static mut CHOSEN: usize = 0;
+
+/// Has `serve` write `map`'s name to `map.txt`: the next start of the program opens on it.
+pub unsafe fn chose(map: &'static Map) {
+    if let Some(i) = MAPS.iter().position(|m| m.id == map.id) {
+        CHOSEN = i;
+        CHOSEN_FLAG.store(1, Ordering::Release);
+    }
+}
 
 /// Asks for a run on another map: `serve` writes its name to `map.txt` and starts the program again.
 pub unsafe fn change(to: &'static Map) {
@@ -480,7 +561,22 @@ pub unsafe fn serve() -> ! {
             }
             sceKernelDelayThread(10_000);
         }
+        if REPORT_FLAG.load(Ordering::Acquire) == 1 {
+            let path: &[u8] = if LOCAL { b"changes.txt\0" } else { b"host0:/duty/changes.txt\0" };
+            if LOCAL {
+                beside();
+            }
+            let fd = sceIoOpen(path.as_ptr(), IoOpenFlags::WR_ONLY | IoOpenFlags::CREAT | IoOpenFlags::TRUNC, 0o644);
+            if fd.0 >= 0 {
+                sceIoWrite(fd, ptr::addr_of!(REPORT) as *const c_void, REPORT_LEN);
+                sceIoClose(fd);
+            }
+            REPORT_FLAG.store(0, Ordering::Release);
+        }
         if KEPT_FLAG.load(Ordering::Acquire) == 1 {
+            if LOCAL {
+                beside();
+            }
             let path: &[u8] = if LOCAL { b"interface.json\0" } else { b"host0:/duty/interface.json\0" };
             let fd = sceIoOpen(path.as_ptr(), IoOpenFlags::WR_ONLY | IoOpenFlags::CREAT | IoOpenFlags::TRUNC, 0o644);
             if fd.0 >= 0 {
@@ -488,6 +584,10 @@ pub unsafe fn serve() -> ! {
                 sceIoClose(fd);
             }
             KEPT_FLAG.store(0, Ordering::Release);
+        }
+        if CHOSEN_FLAG.load(Ordering::Acquire) == 1 {
+            write_choice(MAPS[CHOSEN].id.as_bytes(), b"");
+            CHOSEN_FLAG.store(0, Ordering::Release);
         }
         // (after what the interface asked to have kept: a run that ends here has written it)
         if CHANGE_FLAG.load(Ordering::Acquire) == 1 {
@@ -526,6 +626,30 @@ pub unsafe fn serve() -> ! {
             }
         }
     }
+}
+
+// The record of the changes of map, on its way to `changes.txt` where the packs are.
+const REPORT_MAX: usize = 8192;
+static mut REPORT: [u8; REPORT_MAX] = [0; REPORT_MAX];
+static mut REPORT_LEN: usize = 0;
+static REPORT_FLAG: AtomicU32 = AtomicU32::new(0);
+
+/// Hands the record of the changes of map to `serve`, which writes it as `changes.txt` where the
+/// packs are: beside the EBOOT, or on the computer's share. False while the last one is being written.
+pub unsafe fn report(text: &str) -> bool {
+    if REPORT_FLAG.load(Ordering::Acquire) != 0 {
+        return false;
+    }
+    let n = text.len().min(REPORT_MAX);
+    ptr::copy_nonoverlapping(text.as_ptr(), ptr::addr_of_mut!(REPORT) as *mut u8, n);
+    REPORT_LEN = n;
+    REPORT_FLAG.store(1, Ordering::Release);
+    true
+}
+
+/// Whether the last record handed to `report` is written.
+pub fn reported() -> bool {
+    REPORT_FLAG.load(Ordering::Acquire) == 0
 }
 
 /// Hands what the interface asked to have kept to `serve`, which writes it beside the pack.
