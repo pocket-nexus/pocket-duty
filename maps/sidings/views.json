@@ -1,0 +1,12 @@
+[
+  { "name": "above", "pos": [0, -6, 190], "look": [0, 0, 0], "fov": 40 },
+  { "name": "north-west-start", "pos": [-49.5, 29, 5.2], "look": [-30, 33, 5], "fov": 70 },
+  { "name": "connector", "pos": [-17.5, 33, 5.15], "look": [-18.5, 12, 5.4], "fov": 75 },
+  { "name": "yard-from-the-door", "pos": [-2.9, 10.6, 5.15], "look": [13, -8, 5.6], "fov": 75 },
+  { "name": "between-the-wagons", "pos": [-9, 5.2, 5.15], "look": [30, 5.2, 6], "fov": 70 },
+  { "name": "open-site", "pos": [47, -3.2, 5.15], "look": [30, -8, 5.2], "fov": 70 },
+  { "name": "east-lane", "pos": [33.2, 30, 5.15], "look": [33.2, 8, 6.5], "fov": 70 },
+  { "name": "hall-from-the-platform", "pos": [-12.5, -26.4, 2.6], "look": [12, -37, 1], "fov": 75 },
+  { "name": "hall-site-from-the-walk", "pos": [15, -46.1, 8.15], "look": [4, -36.8, 1], "fov": 75 },
+  { "name": "south-east-start", "pos": [37.6, -30.4, 2.55], "look": [50, -41, 2.6], "fov": 75 }
+]
