@@ -30,6 +30,7 @@ import { pocketRuntimeDeviceId } from "../vendor/pocketjs/contracts/spec/pocket-
 import { extractHostBuildInputs } from "../vendor/pocketjs/framework/src/manifest/index.ts";
 import { withDeviceLease } from "../vendor/pocketjs/tools/device-lease.ts";
 import { ensureQuickJs, runContainer, THREE_DS_CONTAINER_IMAGE } from "../vendor/pocketjs/tools/3ds-toolchain.ts";
+import { FIRST, MAPS, packPath } from "./maps.ts";
 import { compileInterface } from "./ui.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -48,7 +49,11 @@ const opt = (key: string, fallback: string) => {
   const at = argv.indexOf(key);
   return at < 0 ? fallback : (argv[at + 1] ?? fallback);
 };
-const PACK = join(ROOT, ".pocket-build/duty/n3ds30/duty.pack");
+const PACK = packPath(FIRST, "n3ds30");
+// The maps the package holds a pack for. The pack is in the `.3dsx` (its ROMFS), and the paired wire
+// installs a file of 32 MiB at most: one pack fits, so the package is the first map's and its interface
+// lists no other (maps/README.md says what a second map on this device needs).
+const HELD = MAPS.slice(0, 1);
 const host = opt("--host", process.env.POCKET_3DS_HOST ?? "192.168.8.159");
 
 // Loaded by path at run time: PocketJS's client module is checked by PocketJS's own compiler settings.
@@ -103,7 +108,7 @@ async function build() {
   if (!existsSync(PACK)) throw new Error(`no pack at ${PACK}: run \`bun tools/duty.ts cook --profile n3ds30\` first`);
   // The interface: its bundle and pak for this device, and the plan they were resolved against.
   const uiDirectory = join(ROOT, ".pocket-build/ui/3ds");
-  const ui = argv.includes("--no-ui") ? extractHostBuildInputs(JSON.parse(readFileSync(join(uiDirectory, "plan.json"), "utf8"))) : (await compileInterface("3ds")).inputs;
+  const ui = argv.includes("--no-ui") ? extractHostBuildInputs(JSON.parse(readFileSync(join(uiDirectory, "plan.json"), "utf8"))) : (await compileInterface("3ds", HELD)).inputs;
   const aux = ui.surfaces?.auxiliary.logical;
   if (ui.viewport.logical.join("x") !== "400x240" || aux?.join("x") !== "320x240") throw new Error("the interface's 3DS presentation is not 400x240 over 320x240");
   await $`rustup run ${TOOLCHAIN} cargo build --release`.cwd(join(ROOT, "n3ds/core"));

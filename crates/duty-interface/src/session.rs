@@ -12,6 +12,7 @@ use duty_sim::math::*;
 use duty_sim::player::{btn, Input};
 use duty_sim::tune::{mode, DT};
 
+use crate::maps::{self, MAPS};
 use crate::{channel, flag, t, Command, Kill, Mode, Outcome, Setting, State};
 
 /// The pad as a device hands it over: one bit a button, whatever the device calls it.
@@ -75,6 +76,13 @@ pub struct Session {
     /// Pixels a unit of the view's tangent takes at the widest field of view: what turns the
     /// weapon's cone into the crosshair's gap.
     pub focal: f32,
+    /// The id of the map the device holds, and the ids of the maps it has a pack for, in the list's
+    /// order: the device sets both when it has read a pack. Before that, the first map alone.
+    pub map_id: &'static str,
+    pub maps: Vec<&'static str>,
+    /// A map the interface asked for that the device does not hold: the device takes it, reads that
+    /// map's pack, sets `map_id` and calls [`Session::play`].
+    pub wanted: Option<&'static str>,
 }
 
 impl Default for Session {
@@ -85,7 +93,7 @@ impl Default for Session {
 
 impl Session {
     pub fn new() -> Session {
-        Session { mode: Mode::Title, idle: false, stats: false, look: 1, invert: false, assist: true, layout: 0, skill: 1, listed: None, seconds: 0.0, wakes: Vec::new(), feed: Vec::new(), lines: 0, banner: (0, "", ""), prev_held: u32::MAX, tapped: 0, frames: 0, map: (0.0, 0.0), focal: 213.0 }
+        Session { mode: Mode::Title, idle: false, stats: false, look: 1, invert: false, assist: true, layout: 0, skill: 1, listed: None, seconds: 0.0, wakes: Vec::new(), feed: Vec::new(), lines: 0, banner: (0, "", ""), prev_held: u32::MAX, tapped: 0, frames: 0, map: (0.0, 0.0), focal: 213.0, map_id: MAPS[0].id, maps: alloc::vec![MAPS[0].id], wanted: None }
     }
 
     /// Hands the settings to a match.
@@ -95,6 +103,12 @@ impl Session {
         game.player.analog_look = self.layout == 1;
         game.assist = self.assist;
         game.skill = SKILL[self.skill].1;
+    }
+
+    /// A match begins on the map the device now holds: what a device calls when it has read the pack
+    /// of the map that was asked for.
+    pub fn play(&mut self, game: &mut Game) {
+        self.fresh(game);
     }
 
     fn fresh(&mut self, game: &mut Game) {
@@ -153,6 +167,19 @@ impl Session {
             // A tap during play is one press of the pad's button for the same thing; anywhere else
             // it is nothing, so a match does not resume with a press waiting.
             Command::Tap(key) => self.tap(&key),
+            // A match on a map: at once on the one the device holds, and on another once the device
+            // has read it. A map the device has no pack for is not asked of it.
+            Command::Map(id) => {
+                if let Some(map) = maps::named(&id).filter(|m| self.maps.contains(&m.id)) {
+                    if matches!(self.mode, Mode::Title | Mode::Menu | Mode::Results) {
+                        if map.id == self.map_id {
+                            self.fresh(game);
+                        } else {
+                            self.wanted = Some(map.id);
+                        }
+                    }
+                }
+            }
             other => return Some(other),
         }
         None
@@ -242,6 +269,10 @@ impl Session {
     /// Writes what the interface is shown.
     pub fn publish(&mut self, game: &Game, state: &mut State) {
         state.mode = self.mode;
+        state.map = self.map_id;
+        if state.maps != self.maps {
+            state.maps.clone_from(&self.maps);
+        }
         let listed = (self.look, self.invert, self.assist, self.layout, self.skill, self.stats);
         if self.listed != Some(listed) {
             self.listed = Some(listed);

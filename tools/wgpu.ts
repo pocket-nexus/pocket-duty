@@ -4,22 +4,25 @@
 //
 //   bun tools/wgpu.ts build                        wasm32 + wasm-bindgen + the page + the interface as each
 //                                                  device loads it (tools/ui.ts) on PocketJS's UI core → .pocket-build/wgpu/site
-//   bun tools/wgpu.ts serve [--port 8802]          the site and the pack, with byte ranges
+//   bun tools/wgpu.ts serve [--port 8802]          the site and the packs, with byte ranges
 //   bun tools/wgpu.ts dist [--piece 2]             the directory a static host serves → .pocket-build/wgpu/dist:
-//                                                  the page, the module under its build's name, and the pack
-//                                                  cut into pieces of that many MiB with their manifest
+//                                                  the page, the module under its build's name, and every
+//                                                  map's pack cut into pieces of that many MiB with its manifest
 //   bun tools/wgpu.ts serve --dist                 that directory as such a host serves it: no byte ranges
-//   bun tools/wgpu.ts shot [--out f.png] [--size WxH] [--frames N] [--words "mode=play auto=1"] [--cue N:WORDS]
+//   bun tools/wgpu.ts shot [--map yards] [--out f.png] [--size WxH] [--frames N] [--words "mode=play auto=1"] [--cue N:WORDS]
 //                                                  one frame on this machine's GPU (Metal) → a PNG and the status
 //   bun tools/wgpu.ts check [--headed] [--seconds 5] [--dist]   the page in Chrome, driven by keys and pointer:
 //                                                  from the title into a match, the menu, the results, the same
 //                                                  as a Nintendo 3DS with its lower screen's keys, what a
-//                                                  frame costs, what the first frame needs on a slow line
-//                                                  → .pocket-build/validation/web/
+//                                                  frame costs, what the first frame needs on a slow line,
+//                                                  and, when a second map is cooked, a match on it chosen
+//                                                  from the map list → .pocket-build/validation/web/
 //
-// Every command takes [--pack PATH] (default: .pocket-build/duty/psp30/duty.pack, which `bun tools/duty.ts
-// cook` writes). `build` compiles the interface as tools/ui.ts does: it needs `bun install` in
-// vendor/pocketjs. The site and the captures stay under the ignored .pocket-build/.
+// The site has the pack of every map that is cooked for the PSP (maps/maps.json, tools/maps.ts): the first
+// map's is what the page opens on, and the map list offers the others. Every command takes [--pack PATH]
+// for the first map's pack (default: .pocket-build/duty/psp30/duty.pack, which `bun tools/duty.ts cook`
+// writes). `build` compiles the interface as tools/ui.ts does: it needs `bun install` in vendor/pocketjs.
+// The site and the captures stay under the ignored .pocket-build/.
 
 import { $ } from "bun";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -27,6 +30,7 @@ import { gzipSync } from "node:zlib";
 import { join, resolve } from "node:path";
 import { POCKET3D_ICON } from "../vendor/pocketjs/tools/pocket3d-icon.ts";
 import { cutPack, stagePocket3dWeb } from "../vendor/pocketjs/tools/pocket3d-web.ts";
+import { FIRST, mapNamed, MAPS, packPath } from "./maps.ts";
 import { compileInterface, type Device } from "./ui.ts";
 
 export const ROOT = resolve(import.meta.dir, "..");
@@ -34,7 +38,7 @@ const CRATE = join(ROOT, "wgpu");
 const BUILD = join(ROOT, ".pocket-build/wgpu");
 const SITE = join(BUILD, "site");
 const DIST = join(BUILD, "dist");
-export const PACK = join(ROOT, ".pocket-build/duty/psp30/duty.pack");
+export const PACK = packPath(FIRST, "psp30");
 // The handhelds the page shows (`DEVICES` in wgpu/page/main.js, `SHAPES` in wgpu/src/app.rs).
 export const SHOWN = ["psp", "3ds"] as const satisfies readonly Device[];
 // What the host a build is deployed to allows (Pocket Studio's site deployments): the size of a file, the
@@ -53,6 +57,21 @@ function needPack() {
   if (!existsSync(pack)) throw new Error(`${pack} is missing: bun tools/duty.ts export, then bun tools/duty.ts cook`);
 }
 
+/** The packs the site has: the first map's, and every other map's that is cooked. `name`: its file on the server here. */
+export function packs(first = pack): { id: string; file: string; name: string }[] {
+  return MAPS.flatMap((map) => {
+    const file = map.id === FIRST ? first : packPath(map.id, "psp30");
+    return map.id === FIRST || existsSync(file) ? [{ id: map.id, file, name: map.id === FIRST ? "duty.pack" : `${map.id}.pack` }] : [];
+  });
+}
+
+/** The page with the other maps' packs named (`<meta name="pocket-packs">`: `<map>=<pack>` with spaces between). */
+export function namePacks(page: string, named: { id: string; pack: string }[]): string {
+  const meta = /<meta name="pocket-packs" content="[^"]*">/;
+  if (!meta.test(page)) throw new Error(`wgpu/page/index.html has no <meta name="pocket-packs">`);
+  return page.replace(meta, `<meta name="pocket-packs" content="${named.map((each) => `${each.id}=${each.pack}`).join(" ")}">`);
+}
+
 /** The wasm module, its JavaScript side and the page, as one directory a static server can serve. */
 export async function build() {
   // The crate and the command line tool write two halves of one interface: their versions must be the same.
@@ -63,7 +82,9 @@ export async function build() {
   rmSync(SITE, { recursive: true, force: true });
   mkdirSync(join(SITE, "pkg"), { recursive: true });
   await $`wasm-bindgen --target web --no-typescript --out-dir ${join(SITE, "pkg")} ${join(CRATE, "target/wasm32-unknown-unknown/release/duty_wgpu.wasm")}`;
-  for (const file of ["index.html", "main.js"]) cpSync(join(CRATE, "page", file), join(SITE, file));
+  cpSync(join(CRATE, "page/main.js"), join(SITE, "main.js"));
+  // The page names the packs the server here answers: every cooked map's.
+  writeFileSync(join(SITE, "index.html"), namePacks(readFileSync(join(CRATE, "page/index.html"), "utf8"), packs().slice(1).map((each) => ({ id: each.id, pack: each.name }))));
   // What the page loads from PocketJS's browser kernel (vendor/pocketjs/devices/web/pocket-web-wgpu), as
   // PocketJS stages it: the page's modules, the Pocket3D title card, the realm of the interface's guest
   // with the UI core, and the host helpers of the framework. Then the icon of the tab.
@@ -109,12 +130,13 @@ async function dist(pieceBytes: number) {
     mkdirSync(join(DIST, "app", id, file, ".."), { recursive: true });
     writeFileSync(join(DIST, "app", id, file), bytes);
   }
-  // The pack in pieces of one size, each named by its hash, and the manifest that lists them
+  // Each map's pack in pieces of one size, each named by its hash, and the manifest that lists them
   // (pocket_web_wgpu::source::Manifest), named by the pack's.
-  const cut = cutPack(pack, join(DIST, "pack"), pieceBytes);
+  const cuts = packs().map((each) => ({ id: each.id, ...cutPack(each.file, join(DIST, "pack"), pieceBytes) }));
+  const cut = cuts[0]!;
   const manifest = `pack/${cut.manifest}`;
-  // The page names its build and its pack.
-  let page = readFileSync(join(SITE, "index.html"), "utf8");
+  // The page names its build and its packs.
+  let page = namePacks(readFileSync(join(SITE, "index.html"), "utf8"), cuts.slice(1).map((each) => ({ id: each.id, pack: `pack/${each.manifest}` })));
   for (const [from, to] of [[`<meta name="pocket-pack" content="duty.pack">`, `<meta name="pocket-pack" content="${manifest}">`], [`src="main.js"`, `src="app/${id}/main.js"`], [`href="pocket3d-stage.css"`, `href="app/${id}/pocket3d-stage.css"`], [`href="pocket3d-player.css"`, `href="app/${id}/pocket3d-player.css"`]] as const) {
     if (!page.includes(from)) throw new Error(`wgpu/page/index.html has no ${from}`);
     page = page.replace(from, to);
@@ -141,7 +163,7 @@ async function dist(pieceBytes: number) {
     ...readdirSync(DIST).filter((name) => HOST.reserved.includes(name)).map((name) => `${name}/ is the host's own`),
   ];
   if (refused.length) throw new Error(`the host would refuse the directory: ${refused.join("; ")}`);
-  const report = { directory: DIST, files: all.length, bytes: total, largest, build: id, studio: registered ? { app: registered.app, server: registered.server } : null, page: part("index.html"), app: part("app/"), pack: { ...part("pack/"), manifest, pieces: cut.pieces.length, piece: pieceBytes, sha256: cut.sha256 } };
+  const report = { directory: DIST, files: all.length, bytes: total, largest, build: id, studio: registered ? { app: registered.app, server: registered.server } : null, page: part("index.html"), app: part("app/"), pack: { ...part("pack/"), manifest, pieces: cut.pieces.length, piece: pieceBytes, sha256: cut.sha256 }, maps: Object.fromEntries(cuts.map((each) => [each.id, { manifest: `pack/${each.manifest}`, bytes: each.bytes, pieces: each.pieces.length, sha256: each.sha256 }])) };
   writeFileSync(join(BUILD, "dist.json"), JSON.stringify(report, null, 1));
   return report;
 }
@@ -181,9 +203,9 @@ function serveDist(port: number) {
   });
 }
 
-/** The site and the pack. The pack is answered a range at a time, as a tab asks for it. */
+/** The site and the packs. A pack is answered a range at a time, as a tab asks for it. */
 export function serve(port: number) {
-  const size = statSync(pack).size;
+  const served = new Map(packs().map((each) => [`/${each.name}`, each.file]));
   return Bun.serve({
     port,
     hostname: "127.0.0.1",
@@ -194,7 +216,9 @@ export function serve(port: number) {
         opens.push({ query: new URL(request.url).search, mode: request.headers.get("sec-fetch-mode") ?? "" });
         return new Response(null, { status: 204 });
       }
-      if (path === "/duty.pack") {
+      const pack = served.get(path);
+      if (pack) {
+        const size = statSync(pack).size;
         const head = { "Accept-Ranges": "bytes", "Content-Type": "application/octet-stream", "Cache-Control": "no-store" };
         const range = request.headers.get("range")?.match(/^bytes=(\d+)-(\d*)$/);
         if (!range) return new Response(Bun.file(pack), { headers: head });
@@ -246,9 +270,13 @@ if (command === "build") {
   console.log(`http://127.0.0.1:${server.port}/   (${pack})`);
 } else if (command === "shot") {
   needPack();
+  // (--map: a frame of another map's pack)
+  const map = mapNamed(option("--map", FIRST)).id;
+  const from = packs().find((each) => each.id === map)?.file;
+  if (!from) throw new Error(`${packPath(map, "psp30")} is missing: bun tools/duty.ts export --map ${map}, then bun tools/duty.ts cook --map ${map}`);
   const out = resolve(option("--out", join(validation(`shot-${stamp()}`), "frame.png")));
-  const passed = [...["--size", "--frames", "--words", "--status"].flatMap((flag) => (option(flag) ? [flag, option(flag)] : [])), ...options("--cue").flatMap((cue) => ["--cue", cue])];
-  console.log(JSON.stringify(await shot(out, passed), null, 1));
+  const passed = [...["--size", "--frames", "--words", "--status", "--shape"].flatMap((flag) => (option(flag) ? [flag, option(flag)] : [])), ...options("--cue").flatMap((cue) => ["--cue", cue]), "--map", map];
+  console.log(JSON.stringify(await shot(out, passed, from), null, 1));
   console.log(out);
 } else if (command === "check") {
   needPack();
@@ -308,6 +336,15 @@ if (command === "build") {
     };
   };
   const program = await shotProgram();
+  // With several maps the title's first row opens their list: its first row, the map behind the title,
+  // is chosen by the same key.
+  const offered = packs();
+  const several = offered.length > 1;
+  const onTheFirst = async (p: Awaited<ReturnType<typeof visit>>) => {
+    if (!several) return;
+    await p.page.waitForTimeout(350);
+    await p.key("KeyZ");
+  };
   const compare = async (a: string, b: string) => JSON.parse(await $`${program} --compare ${a} ${b}`.text());
   const far = (a: number[], b: number[]) => Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!);
 
@@ -355,6 +392,12 @@ if (command === "build") {
       await p.page.screenshot({ path: join(directory, "page-title.png") });
       // The title's first row starts the match (the face button at the right chooses: ○).
       await p.key("KeyZ");
+      if (several) {
+        await p.page.waitForTimeout(500);
+        await p.save("maps");
+        await p.page.screenshot({ path: join(directory, "page-maps.png") });
+      }
+      await onTheFirst(p);
       await p.mode("play");
       // (nothing hurts the player while the keys are tried)
       await p.say("god=1");
@@ -476,6 +519,64 @@ if (command === "build") {
       await p.page.close();
     }
 
+    // ---- another map, chosen from the list: its pack takes the place of the first map's, and the match
+    // starts on it when it is there; then the first map again, from the title
+    report.maps = {};
+    for (const other of offered.slice(1)) {
+      const p = await visit("");
+      await p.up();
+      await p.mode("title");
+      await p.page.waitForTimeout(400);
+      await p.key("KeyZ");
+      await p.page.waitForTimeout(400);
+      for (let row = 0; row < offered.indexOf(other); row++) await p.key("ArrowDown");
+      await p.key("KeyZ");
+      // The shell lets its world go and says what it reads.
+      await p.page.waitForFunction(`JSON.parse(pocketDuty.duty.status()).stage === "loading"`, undefined, { timeout: 5_000 }).catch(() => {});
+      const reading = await p.status();
+      await p.save(`${other.id}-reading`);
+      expect(`${other.id}: chosen from the list, its pack is read (${reading.stage}, ${reading.map})`, reading.stage === "loading" && reading.map === other.id);
+      const from = performance.now();
+      await p.page.waitForFunction(`JSON.parse(pocketDuty.duty.status()).stage === "running"`, undefined, { timeout: 90_000 });
+      await p.mode("play");
+      const there = await p.status();
+      expect(`${other.id}: the match is on its pack (${there.map}, ${there.pack.bytes} bytes)`, there.map === other.id && there.pack.bytes === statSync(other.file).size);
+      await p.page.waitForTimeout(700);
+      await p.save(`${other.id}-play`);
+      await p.page.screenshot({ path: join(directory, `page-${other.id}-play.png`) });
+      // A firefight on it: the bench's player in front of a soldier.
+      await p.say("god=1 near=0,7 auto=1");
+      await p.page.waitForFunction("JSON.parse(pocketDuty.duty.status()).match.kills > 0", undefined, { timeout: 30_000 }).catch(() => {});
+      const fought = await p.status();
+      expect(`${other.id}: the bench's player fells a soldier (${fought.match.kills} kills, ${fought.match.hits} hits of ${fought.match.shots})`, fought.match.kills > 0);
+      await p.save(`${other.id}-firefight`);
+      const read = `({ frames: pocketDuty.frames, at: performance.now() })`;
+      const a = (await p.page.evaluate(read)) as { frames: number; at: number };
+      await p.page.waitForTimeout(seconds * 1000);
+      const b = (await p.page.evaluate(read)) as typeof a;
+      const now = await p.status();
+      report.maps[other.id] = { readMs: Math.round(performance.now() - from - seconds * 1000), bytes: there.pack.bytes, fps: +((b.frames - a.frames) / ((b.at - a.at) / 1000)).toFixed(2), frameMs: +((await p.page.evaluate("pocketDuty.burst(300)")) as number).toFixed(3), draws: now.draws, tris: now.tris, late: now.late, match: fought.match };
+      // The menu's last row leaves for the title; its list's first row is the first map, read again.
+      await p.say("auto=0");
+      await p.key("Space");
+      await p.mode("menu");
+      await p.say("ui=title");
+      await p.mode("title");
+      await p.page.waitForTimeout(400);
+      await p.save(`${other.id}-title`);
+      await p.key("KeyZ");
+      await p.page.waitForTimeout(400);
+      await p.save(`${other.id}-maps`);
+      for (let row = 0; row < offered.indexOf(other); row++) await p.key("ArrowUp");
+      await p.key("KeyZ");
+      await p.page.waitForFunction(`(() => { const s = JSON.parse(pocketDuty.duty.status()); return s.stage === "running" && s.map === ${JSON.stringify(offered[0]!.id)}; })()`, undefined, { timeout: 90_000 });
+      await p.mode("play");
+      const back = await p.status();
+      expect(`${other.id}: and the first map again (${back.map}, ${back.pack.bytes} bytes)`, back.map === offered[0]!.id && back.pack.bytes === statSync(offered[0]!.file).size);
+      expect(`${other.id}: no error on the page (${p.problems.join("; ")})`, p.problems.length === 0);
+      await p.page.close();
+    }
+
     // ---- the same match as a Nintendo 3DS: its two screens in its shell, the lower screen's keys under
     // the pointer, and another device chosen from the bar while the match runs
     {
@@ -507,6 +608,13 @@ if (command === "build") {
         await p.page.waitForTimeout(400);
       };
       await tap(280, 217);
+      if (several) {
+        // The list of maps is up on the upper screen; the lower screen's key plays the map behind it.
+        await p.page.waitForTimeout(400);
+        await p.save("3ds-maps");
+        await lowerSaved("3ds-maps-lower");
+        await tap(280, 217);
+      }
       await p.mode("play");
       await p.say("god=1");
       // The interface drew the level from above on the lower screen: it is not one colour.
@@ -623,6 +731,7 @@ if (command === "build") {
         const down = (await p.page.evaluate(`document.querySelectorAll("[data-pocket-part][data-held]").length`)) as number;
         await p.page.mouse.up();
         expect(`${tag}: the shell's key goes down under the pointer (${down})`, down >= 1);
+        await onTheFirst(p);
         await p.mode("play");
       } else {
         // Under a finger: the shell's key at the right starts the match.
@@ -632,6 +741,7 @@ if (command === "build") {
         await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: key.x + key.width / 2, y: key.y + key.height / 2 }] });
         await p.page.waitForTimeout(120);
         await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await onTheFirst(p);
         await p.mode("play");
       }
       expect(`${tag}: no error on the page (${p.problems.join("; ")})`, p.problems.length === 0);
@@ -682,4 +792,4 @@ if (command === "build") {
   const { sizes: _, ...brief } = report;
   console.log(JSON.stringify({ ...brief, module: sizes["pkg/duty_wgpu_bg.wasm"], uiCore: sizes["pocketjs.wasm"] }, null, 1));
   console.log(directory);
-} else if (import.meta.main) throw new Error("usage: build | serve [--port N] [--dist] [--build] | dist [--piece MiB] | shot [--out PNG] [--size WxH] [--frames N] [--words WORDS] [--cue N:WORDS] | check [--headed] [--seconds N] [--dist]");
+} else if (import.meta.main) throw new Error("usage: build | serve [--port N] [--dist] [--build] | dist [--piece MiB] | shot [--map ID] [--out PNG] [--size WxH] [--frames N] [--words WORDS] [--cue N:WORDS] | check [--headed] [--seconds N] [--dist]");

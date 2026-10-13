@@ -58,9 +58,9 @@ test("the page says which devices it plays as where Pocket Studio reads it", () 
   expect(said?.split(" ")).toEqual(shown.map((id) => TARGET_OF[id] ?? id));
 });
 
-test("the page names what `dist` rewrites: its pack, its script and its two stylesheets", () => {
+test("the page names what `dist` rewrites: its packs, its script and its two stylesheets", () => {
   const page = read("wgpu/page/index.html");
-  for (const part of [`<meta name="pocket-pack" content="duty.pack">`, `src="main.js"`, `href="pocket3d-stage.css"`, `href="pocket3d-player.css"`]) expect(page).toContain(part);
+  for (const part of [`<meta name="pocket-pack" content="duty.pack">`, `<meta name="pocket-packs" content="">`, `src="main.js"`, `href="pocket3d-stage.css"`, `href="pocket3d-player.css"`]) expect(page).toContain(part);
   // The body is the kernel's player's to build.
   expect(page).toMatch(/<body>\s*<script type="module" src="main.js"><\/script>\s*<\/body>/);
 });

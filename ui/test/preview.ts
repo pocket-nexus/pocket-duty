@@ -90,6 +90,17 @@ await save("error");
 mock.loaded();
 rig.step(20);
 await save("title");
+// The maps a match can be played on, where the renderer has more than one: the first row opens their list.
+mock.state.maps = ["street", "yards"];
+rig.step(6);
+press(BTN.CIRCLE, 12);
+rig.press(BTN.DOWN);
+rig.step(10);
+await save("maps");
+press(BTN.CROSS);
+press(BTN.UP, 2);
+mock.state.maps = ["street"];
+rig.step(6);
 choose(2);
 await save("about");
 press(BTN.CROSS);

@@ -12,6 +12,7 @@
 //! [`App::enter`] the frames show the interface alone, which says how much of
 //! the pack has arrived.
 
+use duty_interface::maps::{self, Map, MAPS};
 use duty_interface::{channel, pad, parse_f32, Command, Mode, Pace, Pad, Session};
 use duty_pack::sound::{Id, Sound};
 use duty_pack::{self as pack, Chunk, Cluster, Scene, ViewCell};
@@ -35,7 +36,7 @@ use pocket_web_wgpu::wgpu::TextureFormat;
 use serde_json::{json, Value};
 
 use crate::figures::{Drawn, Figures};
-use crate::pack::{kept, records, section, Progress};
+use crate::pack::{kept, records, section, Keep, Progress};
 use crate::render::{Look, Renderer, View};
 
 /// Degrees the view takes top to bottom at its widest, and its near and far planes, as on the PSP.
@@ -172,6 +173,8 @@ pub struct World {
     samples: Vec<i16>,
     meta: String,
     bytes: usize,
+    /// The collision world and the walk grid the match borrows. Last: a world's fields go in this order.
+    _keep: Keep,
 }
 
 impl World {
@@ -185,9 +188,10 @@ impl World {
             return Err("the pack's chunks and clusters disagree: cook the pack again".into());
         }
         let by_cell = view::Cells::new(&scene, &chunks);
-        // The collision world and the walk grid live as long as the program: the match borrows them.
-        let solid = Bvh { nodes: kept::<Node>(bytes, pack::COLN)?, tris: kept::<Tri>(bytes, pack::COLT)?, verts: kept::<[f32; 3]>(bytes, pack::COLV)? };
-        let nav: &'static [u32] = kept::<u32>(bytes, pack::NAVG)?;
+        // The collision world and the walk grid live as long as the world: the match borrows them.
+        let mut keep = Keep::default();
+        let solid = Bvh { nodes: kept::<Node>(&mut keep, bytes, pack::COLN)?, tris: kept::<Tri>(&mut keep, bytes, pack::COLT)?, verts: kept::<[f32; 3]>(&mut keep, bytes, pack::COLV)? };
+        let nav: &'static [u32] = kept::<u32>(&mut keep, bytes, pack::NAVG)?;
         // SAFETY: the words are the pack's NAVG section, held for good and aligned as words.
         let level = unsafe { Level::parse_nav(solid, core::slice::from_raw_parts(nav.as_ptr() as *const u8, nav.len() * 4)) }.ok_or("the pack's walk grid")?;
         let weapons: Vec<WeaponDef> = records(bytes, pack::WEAP)?;
@@ -214,6 +218,7 @@ impl World {
             samples,
             meta,
             bytes: bytes.len(),
+            _keep: keep,
         })
     }
 
@@ -363,6 +368,10 @@ pub struct App {
     /// How much of the pack has arrived, for the loading screen.
     pub progress: Progress,
     world: Option<World>,
+    /// The map whose pack is being read, and whether a match starts on it once it is there.
+    reading: (&'static Map, bool),
+    /// A map the interface asked for whose pack the page has not been told to read yet.
+    asked: Option<&'static str>,
     pub session: Session,
     pub set: Settings,
     sounding: Sounding,
@@ -410,6 +419,8 @@ impl App {
             overlay,
             progress: Progress::default(),
             world: None,
+            reading: (maps::first(), false),
+            asked: None,
             session: Session::new(),
             set: Settings { look: Look::DEFAULT, nearer: 1.0, everything: false, view: None, auto: false, god: false, pad: (Pad::default(), 0) },
             sounding: Sounding { mixer: Mixer::new(), bed: None, played: 0 },
@@ -436,21 +447,65 @@ impl App {
             squares: vec![FxVertex::default(); fx::VERTICES],
             trouble: String::new(),
         };
-        app.stage(Mode::Loading, "Reading the street");
+        app.stage(Mode::Loading, &format!("Reading {}", maps::first().title));
         app.reshape(shape);
         app
     }
 
-    /// The world has been read: the street stands behind the title.
+    /// The maps the page has packs for, as ids with commas between: what the interface's list offers.
+    pub fn maps(&mut self, ids: &str) {
+        let known: Vec<&'static str> = MAPS.iter().filter(|m| ids.split(',').any(|id| id.trim() == m.id)).map(|m| m.id).collect();
+        if !known.is_empty() {
+            self.session.maps = known;
+        }
+    }
+
+    /// The map the page reads first, by its id: the loading screen names it.
+    pub fn reads(&mut self, map: &str) {
+        if let Some(map) = maps::named(map) {
+            self.reading = (map, false);
+        }
+    }
+
+    /// A map the interface asked for that the page is to read now (then [`App::enter`]). Once.
+    pub fn map_wanted(&mut self) -> Option<&'static str> {
+        self.asked.take()
+    }
+
+    /// The pack of the map being read has been read: the map stands behind the title, or, when the
+    /// interface asked for this map, a match starts on it.
     pub fn enter(&mut self, mut world: World) {
         let scene = world.scene;
+        let (map, play) = self.reading;
         // The map picture's corner, as the compiler laid it out about the level's origin.
         self.session.map = (scene.level_origin[0] - 80.0, scene.level_origin[2] - 80.0);
+        self.session.map_id = map.id;
+        if !self.session.maps.contains(&map.id) {
+            self.session.maps.push(map.id);
+        }
         self.session.apply(&mut world.game);
         self.sounding.ambience(&world.sounds, Id::Ambience, 70);
-        self.world = Some(world);
         unsafe { channel() }.state.message.clear();
         self.session.mode = Mode::Title;
+        if play {
+            self.session.play(&mut world.game);
+        }
+        self.reading.1 = false;
+        self.orbit = 0.0;
+        self.world = Some(world);
+    }
+
+    /// Another map was asked for: this one's world goes, and the loading screen stands until the page has
+    /// read the other's pack. One pack is held at a time.
+    fn leave(&mut self, to: &'static Map) {
+        self.world = None;
+        self.reading = (to, true);
+        self.asked = Some(to.id);
+        self.progress.clear();
+        self.sounding.silence();
+        self.was_playing = false;
+        self.session.mode = Mode::Loading;
+        self.stage(Mode::Loading, &format!("Reading {}", to.title));
     }
 
     /// Whether the world is there.
@@ -485,7 +540,7 @@ impl App {
 
     /// Words for the flow and the renderer, as a development host sends them to the PSP (`remote` in
     /// `psp/src/main.rs`): `mode=title|play|menu` sets the flow outright, `ui=start|menu|resume|restart|
-    /// title` asks what the interface's lists ask, `pad=<held>,<x>,<y>,<frames>` holds the player's pad
+    /// title` asks what the interface's lists ask, `map=<id>` asks for a match on a map, `pad=<held>,<x>,<y>,<frames>` holds the player's pad
     /// (the flow's own bits, the stick in hundredths), `at=<x>,<y>,<z>,<yaw>,<pitch>` puts the player
     /// somewhere (degrees), `near=<soldier>,<metres>` puts him in front of a soldier, `auto=1` hands his
     /// aim and trigger to the bench, `god=1` keeps him whole, `hurt=<points>` hits him from ahead,
@@ -526,6 +581,12 @@ impl App {
                     "title" => r#"{"type":"title"}"#,
                     _ => continue,
                 }),
+                // (what a row of the interface's map list asks)
+                "map" => {
+                    if let Some(map) = maps::named(value) {
+                        unsafe { channel() }.receive(&format!(r#"{{"type":"map","id":"{}"}}"#, map.id));
+                    }
+                }
                 _ => {}
             }
             let Some(w) = &mut self.world else { continue };
@@ -654,7 +715,8 @@ impl App {
         let Some(w) = &mut self.world else {
             let (read, of) = self.progress.get();
             if self.trouble.is_empty() {
-                let message = if of > 0 { format!("Reading the street · {:.1} of {:.1} MB", read as f32 / 1e6, of as f32 / 1e6) } else { "Reading the street".into() };
+                let title = self.reading.0.title;
+                let message = if of > 0 { format!("Reading {title} · {:.1} of {:.1} MB", read as f32 / 1e6, of as f32 / 1e6) } else { format!("Reading {title}") };
                 self.stage(Mode::Loading, &message);
             }
             return ticks;
@@ -663,6 +725,11 @@ impl App {
         // What the interface asked for on its last turn; what it wants kept comes back.
         if let Some(text) = self.session.obey(game) {
             self.prefs = Some(text);
+        }
+        // Another map: the page reads its pack, and the match starts when it is there.
+        if let Some(to) = self.session.wanted.take().and_then(maps::named) {
+            self.leave(to);
+            return ticks;
         }
         let mut pad = self.shape.pad(held);
         if self.set.pad.1 > 0 {
@@ -865,6 +932,8 @@ impl App {
             "target": "web",
             "stage": if self.world.is_some() { "running" } else if self.trouble.is_empty() { "loading" } else { "error" },
             "mode": self.session.mode.name(),
+            "map": if self.world.is_some() { self.session.map_id } else { self.reading.0.id },
+            "maps": self.session.maps,
             "shape": {"name": self.shape.name, "width": self.screen.width, "height": self.screen.height, "turns": self.shape.turns},
             "interface": {"open": unsafe { channel() }.is_open(), "turns": self.pace.taken},
             "frames": self.frames, "frameMs": average, "worstMs": worst, "late": self.late, "cpuMs": self.cpu_ms,

@@ -1,8 +1,11 @@
 //! The tab's side: what the page calls (`page/main.js`).
 //!
 //! The page plays the Pocket3D title card and opens the shell on a canvas
-//! ([`Duty::open`]); the pack is read beside the frames ([`Reader::read`]) and
-//! handed in when it is there ([`Duty::enter`]). A frame is `step`, the turn of
+//! ([`Duty::open`]); a map's pack is read beside the frames ([`Reader::read`]) and
+//! handed in when it is there ([`Duty::enter`]). When the interface asks for a
+//! match on another map the shell lets its world go and names the map
+//! ([`Duty::map_wanted`]): the page reads that map's pack and hands it in the
+//! same way. A frame is `step`, the turn of
 //! the interface's guest, which the page runs in a realm of its own and whose
 //! lines pass through `heard` and `say`, then `draw`. When what the guest
 //! shows has changed, the page hands its picture to `overlay`. Everything a
@@ -24,6 +27,13 @@ fn describe(s: &Shape) -> String {
 #[wasm_bindgen]
 pub fn shapes() -> String {
     format!("[{}]", SHAPES.iter().map(describe).collect::<Vec<_>>().join(","))
+}
+
+/// The maps, in the order of `maps/maps.json`, as a JSON array of `{"id", "title"}`. The first is the one
+/// every page has a pack for.
+#[wasm_bindgen]
+pub fn maps() -> String {
+    format!("[{}]", duty_interface::maps::MAPS.iter().map(|m| format!("{{\"id\":\"{}\",\"title\":\"{}\"}}", m.id, m.title)).collect::<Vec<_>>().join(","))
 }
 
 /// Frames a second the sound's blocks are made for.
@@ -86,7 +96,24 @@ impl Duty {
         Reader { gpu: self.app.gpu.clone(), format: self.app.screen.format, progress: self.app.progress.clone() }
     }
 
-    /// The pack has been read: the street stands behind the title.
+    /// The maps the page has packs for, as ids with commas between: what the interface's map list offers.
+    pub fn maps(&mut self, ids: &str) {
+        self.app.maps(ids);
+    }
+
+    /// The map the page reads first, by its id.
+    pub fn reads(&mut self, map: &str) {
+        self.app.reads(map);
+    }
+
+    /// A map the interface asked for a match on: the page reads that map's pack and calls `enter`. Once
+    /// for each asking; until `enter` the shell holds no world and shows the loading screen.
+    pub fn map_wanted(&mut self) -> Option<String> {
+        self.app.map_wanted().map(String::from)
+    }
+
+    /// The pack has been read: its map stands behind the title, or, when the interface asked for the map,
+    /// a match starts on it.
     pub fn enter(&mut self, world: World) {
         self.app.enter(world.world);
     }

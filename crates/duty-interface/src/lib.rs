@@ -21,6 +21,7 @@ use core::fmt::Write;
 
 #[cfg(feature = "guest")]
 pub mod guest;
+pub mod maps;
 pub mod session;
 
 pub use session::{pad, Pace, Pad, Session};
@@ -159,6 +160,9 @@ pub struct State {
     /// A line across the upper screen: its number (0 none), its title, what stands under it.
     pub banner: (u32, &'static str, &'static str),
     pub result: Option<Outcome>,
+    /// The map the renderer holds (its id), and the maps it has a pack for, in the list's order.
+    pub map: &'static str,
+    pub maps: Vec<&'static str>,
     pub t: [i32; t::COUNT],
 }
 
@@ -237,6 +241,17 @@ impl State {
                 let _ = write!(s, "{{\"won\":{},\"us\":{},\"them\":{},\"kills\":{},\"deaths\":{},\"headshots\":{},\"accuracy\":{},\"seconds\":{}}}", r.won, r.us, r.them, r.kills, r.deaths, r.headshots, r.accuracy, r.seconds);
             }
         });
+        member!(map, "map", |s: &mut String| escape(s, self.map));
+        member!(maps, "maps", |s: &mut String| {
+            s.push('[');
+            for (i, id) in self.maps.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                escape(s, id);
+            }
+            s.push(']');
+        });
         member!(t, "t", |s: &mut String| {
             s.push('[');
             for (i, v) in self.t.iter().enumerate() {
@@ -273,6 +288,8 @@ pub enum Command {
     /// A key of a touch screen was tapped: "weapon" (the next one), "mode" (the fire mode) or
     /// "reload". The match hears it as one press of the pad's button for the same thing.
     Tap(String),
+    /// A match on the map of this id: the renderer reads its pack first when it holds another's.
+    Map(String),
 }
 
 /// The value after `"key":` in a flat JSON object. Quoted text is skipped when looking for the
@@ -361,6 +378,7 @@ impl Command {
             "idle" => Command::Idle(flag(line, "on")),
             "wake" => Command::Wake { id: n("id").max(0.0) as u32, seconds: n("seconds") },
             "tap" => Command::Tap(text(line, "key")?),
+            "map" => Command::Map(text(line, "id")?),
             _ => return None,
         })
     }
@@ -413,8 +431,8 @@ impl Interface {
     /// line): text swapped in place, with nothing set moving.
     pub fn only_readouts(&self) -> bool {
         let Some(sent) = &self.sent else { return false };
-        let State { mode, message, options, prefs, woke, weapon, fire, feed, banner, result, stats: _, t: _ } = &self.state;
-        *mode == sent.mode && *message == sent.message && *options == sent.options && *prefs == sent.prefs && *woke == sent.woke && *weapon == sent.weapon && *fire == sent.fire && *feed == sent.feed && *banner == sent.banner && *result == sent.result
+        let State { mode, message, options, prefs, woke, weapon, fire, feed, banner, result, map, maps, stats: _, t: _ } = &self.state;
+        *map == sent.map && *maps == sent.maps && *mode == sent.mode && *message == sent.message && *options == sent.options && *prefs == sent.prefs && *woke == sent.woke && *weapon == sent.weapon && *fire == sent.fire && *feed == sent.feed && *banner == sent.banner && *result == sent.result
     }
 
     /// A line from the guest.
@@ -462,6 +480,8 @@ mod tests {
         assert_eq!(parse(r#"{"type":"idle","on":true}"#), Command::Idle(true));
         assert_eq!(parse(r#"{"type":"wake","id":4,"seconds":2.5}"#), Command::Wake { id: 4, seconds: 2.5 });
         assert_eq!(parse(r#"{"type":"tap","key":"weapon"}"#), Command::Tap("weapon".into()));
+        assert_eq!(parse(r#"{"type":"map","id":"yards"}"#), Command::Map("yards".into()));
+        assert_eq!(Command::parse(r#"{"type":"map"}"#), None);
         assert_eq!(Command::parse(r#"{"type":"tap"}"#), None);
         assert_eq!(Command::parse(r#"{"type":"pocket.overlay.control","name":"x","node":3}"#), None);
     }

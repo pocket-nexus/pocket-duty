@@ -94,7 +94,8 @@ function Lower(props: { match: Match }) {
       </View>
       {/* The one key of a list: what leaves it for the match. The results' rows are the upper screen's. */}
       <View class="absolute" style={{ insetL: MAP, insetT: 0, width: SIDE, height: LOW.h, display: mode() === "title" || mode() === "menu" ? 0 : 1, hitPass: 1 }}>
-        <Key top={201} label={mode() === "menu" ? "RESUME" : "START"} onTap={() => (mode() === "menu" ? host.send({ type: "menu", on: false }) : match.lists.title[0].press?.())} />
+        {/* (with the list of maps up, the key plays the map behind it) */}
+        <Key top={201} label={mode() === "menu" ? "RESUME" : match.sheet() === "maps" ? "PLAY" : "START"} onTap={() => (mode() === "menu" ? host.send({ type: "menu", on: false }) : match.sheet() === "maps" ? match.start() : match.lists.title[0].press?.())} />
       </View>
 
       <View class="absolute" style={{ insetL: (MAP - CARD.w) / 2, insetT: 20, width: CARD.w, height: 24 + CONTROLS.length * CARD.row + 8, display: playing() || waiting() ? 1 : 0, bgColor: GLASS, borderWidth: 1, borderColor: HAIRLINE }}>

@@ -16,7 +16,7 @@ import { BTN } from "@pocketjs/framework/input";
 import { onFrame } from "@pocketjs/framework/lifecycle";
 import { modality } from "@pocketjs/framework/modality";
 import type { NodeMirror } from "@pocketjs/framework/renderer";
-import { MAP } from "./generated/level.ts";
+import { MAPS } from "./generated/level.ts";
 import type { Host } from "./host.ts";
 import { clock, CREDITS, HURT_SECONDS, read, SETTLE, type Match, type Row } from "./match.ts";
 import { BLIPS, FLAG, T } from "./protocol.ts";
@@ -502,6 +502,9 @@ export function Board(props: { host: Host; width: number }) {
  * player as a dot with a tick toward where they face, and the enemies the
  * renderer lists. Positions arrive in decimetres from the picture's top left
  * corner. Nothing turns: the tick has sixteen places around the dot.
+ *
+ * Every map's picture stays built, and the one of the map the renderer holds
+ * is shown: another map is a display flag, not a picture decoded during play.
  */
 export function LevelMap(props: { host: Host; size: number }) {
   let me: Node, tick: Node;
@@ -509,8 +512,16 @@ export function LevelMap(props: { host: Host; size: number }) {
   // What arrived last, as it arrived: a turn in which the player and the enemies stood still writes nothing.
   let x = NaN, z = NaN, heading = NaN, faced = -1, count = -1;
   const seen = new Array<number>(BLIPS * 2).fill(NaN);
+  // The map the renderer holds: its picture's scale. Before the renderer has said, the first.
+  let held = MAPS[0];
+  createEffect(on(props.host.map, (id) => {
+    held = MAPS.find((map) => map.id === id) ?? MAPS[0];
+    // What was drawn was drawn at the other map's scale.
+    x = z = NaN;
+    seen.fill(NaN);
+  }));
   /** A pixel of the map as drawn, from decimetres. */
-  const at = (decimetres: number) => Math.round(clamp(((decimetres || 0) * props.size) / (MAP.side * MAP.metres * 10), 0, props.size));
+  const at = (decimetres: number) => Math.round(clamp(((decimetres || 0) * props.size) / (held.side * held.metres * 10), 0, props.size));
   watch(props.host, (t) => {
     if (t[T.x] !== x) hotProp(me, "translateX", at((x = t[T.x])));
     if (t[T.z] !== z) hotProp(me, "translateY", at((z = t[T.z])));
@@ -538,7 +549,9 @@ export function LevelMap(props: { host: Host; size: number }) {
   });
   return (
     <View class="relative" style={{ width: props.size, height: props.size, bgColor: "#10161c" }}>
-      <Image src={MAP.image} class="absolute" style={{ insetL: 0, insetT: 0, width: (props.size * MAP.texture) / MAP.side, height: (props.size * MAP.texture) / MAP.side }} />
+      <For each={MAPS}>
+        {(map, index) => <Image src={map.image} class="absolute" style={{ insetL: 0, insetT: 0, width: (props.size * map.texture) / map.side, height: (props.size * map.texture) / map.side, display: (props.host.map() ? props.host.map() === map.id : index() === 0) ? 0 : 1 }} />}
+      </For>
       <View class="absolute" style={{ insetL: 0, insetT: 0, width: props.size, height: props.size, borderWidth: 1, borderColor: HAIRLINE }} />
       <For each={blips}>
         {(blip) => <View ref={blip.node} class="absolute rounded-full w-[5] h-[5]" style={{ insetL: -2, insetT: -2, opacity: 0, bgColor: RED, borderWidth: 1, borderColor: OUTLINE }} />}
@@ -692,7 +705,7 @@ export function createMenu(match: Match): Menu {
   const focused = () => match.rows()[focus()];
   // The bindings are read every turn: built again only when the mode, the list or the focus changes.
   const actions = useActions(createMemo(() => ({
-    confirm: { label: focused()?.on || focused()?.value !== undefined ? "change" : "select", run: () => press(focus()), when: () => match.listing() && pressable(focused()) },
+    confirm: { label: match.sheet() === "maps" ? "play" : focused()?.on || focused()?.value !== undefined ? "change" : "select", run: () => press(focus()), when: () => match.listing() && pressable(focused()) },
     back: { label: match.backLabel(), run: match.back, when: () => match.listing() && !!match.backLabel() },
     // START opens the menu over a match, and closes it. A player who is down has no button here.
     media: { label: match.mode() === "play" ? "menu" : undefined, run: () => (match.mode() === "menu" ? match.back() : match.menu()), when: () => match.mode() === "play" || (match.mode() === "menu" && match.sheet() === "menu") },
