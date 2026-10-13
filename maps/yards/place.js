@@ -27,7 +27,7 @@ export const PLACE = {
   id: 'yards',
   title: 'Twin Yards',
   turn: 0.5877,
-  wall: 5,
+  wall: 6.5,
   // [east, north, facing in degrees from north toward east, tag]. The first is the player's.
   starts: [
     [-9, -54, 60, 'high start'],
@@ -56,7 +56,7 @@ export const LOOK = {
     yd_roof: { of: 'plaster', tint: 0xc9b089, scale: 3.2 },
     yd_cobble: { of: 'cobbles', tint: 0xf2e8d8 },
     yd_slab: { of: 'concrete_floor', tint: 0xe9cfa2, surface: 'concrete' },
-    yd_sand: { of: 'sand', tint: 0xf3d2a4, surface: 'sand' },
+    yd_sand: { of: 'grit', tint: 0xf6dfbc },
     yd_wood: { of: 'boards', tint: 0xeadcc4 },
     yd_wood_dark: { of: 'boards', tint: 0xa58c6c },
   },
@@ -64,6 +64,8 @@ export const LOOK = {
   // A window to so many metres of a house's wall.
   windows: { every: 7.5 },
   sky: { hour: 14.2, weather: { coverage: 0.1, turbidity: 2.2 } },
+  // The cook's light for this place: the sky's fill warmed, what the sunlit sand sends back, its lamps.
+  light: { sky: [1.55, 1.2, 0.85], bounce: [0.62, 0.46, 0.28], lamp: [9, 5.5, 2.4], reach: 11 },
 };
 
 const SLAB = 'yd_slab', SAND = 'yd_sand';
@@ -79,6 +81,7 @@ export const GROUND = [
   { at: [[-34, 29], [-27, 29], [-27, 40], [-34, 40]], y: L, key: SLAB },
   { at: [[-27, 28], [-23, 28], [-23, 30], [-24, 30], [-24, 39], [-27, 39]], y: 3.6, key: SLAB },
   { at: [[-44, 26], [-41, 26], [-41, 29], [-44, 29]], y: L },
+  { at: [[-37, 26], [-35, 26], [-35, 29], [-37, 29]], y: L },
   { at: [[-41, 26], [-37, 26], [-37, 29], [-41, 29]], y: { from: [-39, 29, U], to: [-39, 26.5, L] } },
   { at: [[-44, 14], [-24, 14], [-24, 19], [-22, 19], [-22, 20], [-20, 20], [-20, 21], [-18, 21], [-18, 25], [-24, 25], [-24, 28], [-27, 28], [-27, 29], [-35, 29], [-35, 26], [-44, 26], [-44, 25], [-45, 25], [-45, 19], [-44, 19]], y: L },
   // its doors' way down to the low start, and the ramp north of it
@@ -117,7 +120,7 @@ export const GROUND = [
   { at: [[42, -5], [50, -5], [50, 19], [42, 19]], y: L, key: SAND },
   { at: [[49, 20], [54, 20], [54, 25], [49, 25]], y: 3.66, key: SAND },
   { at: [[50, 12], [55, 12], [55, 20], [50, 20]], y: { from: [52, 20, 3.66], to: [52, 13, 4.8] }, key: SAND },
-  { at: [[22, -14], [50, -14], [50, -5], [48, -5], [48, -3], [34, -3], [34, -5], [29, -5], [29, -2], [25, -2], [25, -4], [23, -4], [23, -5], [22, -5]], y: L, key: SAND },
+  { at: [[22, -14], [50, -14], [50, -5], [48, -5], [48, -3], [29, -3], [29, -2], [25, -2], [25, -4], [23, -4], [23, -5], [22, -5]], y: L, key: SAND },
   { at: [[46, -13], [51, -13], [51, -10], [46, -10]], y: { from: [46, -11.5, L], to: [51, -11.5, 4.88] }, key: SAND },
   { at: [[50, -25], [55, -25], [55, -6], [50, -6]], y: 4.88, key: SAND },
   { at: [[42, -21], [48, -21], [48, -14], [42, -14]], y: 1.12, key: SAND },
@@ -126,7 +129,7 @@ export const GROUND = [
   { at: [[42, -35], [50, -35], [50, -27], [42, -27]], y: -1.63, key: SAND },
   // the doors' covered way from the south, and the side yard beside it
   { at: [[22, -28], [29, -28], [29, -14], [22, -14]], y: L, roof: COVER },
-  { at: [[34, -28], [41, -28], [41, -14], [34, -14]], y: L, key: SAND },
+  { at: [[34, -28], [42, -28], [42, -14], [34, -14]], y: L, key: SAND },
   { at: [[37, -30], [39, -30], [39, -28], [37, -28]], y: L, key: SAND },
   // ------------------------------------------------------------------ the south: outside, the crossing, the high start
   { at: [[-10, -27], [-10, -21], [13, -21], [13, -22], [20, -22], [20, -28], [11, -28], [11, -27], [1, -27], [1, -28], [0, -28], [0, -29], [-6, -29], [-6, -28], [-7, -28], [-7, -27]], y: L },
@@ -174,7 +177,13 @@ export const WALLS = [
   // the doors of the long lane, at both ends of their covered way
   { line: [[22, -14.2], [29, -14.2]], h: 4.6, holes: [{ at: 3.5, w: 3.6, h: 3.1, arch: 0.4 }] },
   { line: [[22, -25], [29, -25]], h: 4.6, holes: [{ at: 3.5, w: 3.6, h: 3.1, arch: 0.4 }] },
+  // the raised walk's parapet over the middle lane, and the rail over the pit
+  { line: [[3.3, -13], [3.3, 7]], y: L, h: 0.8, t: 0.4, crown: false },
+  { line: [[41.7, -27], [41.7, -14.5]], y: L, h: 0.8, t: 0.4, crown: false },
+  // the wall that parts the high start from the yard west of it
+  { line: [[-14, -60], [-14, -50]], h: 5.5, t: 1.4 },
 ];
+
 
 /** Doors of boards standing open: `facing` is the way the leaves swing, in degrees from north toward east. */
 export const DOORS = [
@@ -186,16 +195,45 @@ export const DOORS = [
 
 /** Crates: [east, north, side, turn in degrees, up]. Without `up` a crate stands on the floor. */
 export const CRATES = [
-  // the west site
-  [-34.5, 38.3, 1.7, 30], [-27.6, 34.6, 1.6, 0], [-29.2, 33.2, 1.5, 8], [-29.2, 33.2, 1.2, 20, L + 1.5], [-33, 31.6, 1.5, 0], [-42.6, 29.8, 1.6, 0],
-  // the east site
-  [39.4, 30.6, 1.6, 12], [36.2, 29.4, 1.5, 0], [36.2, 29.4, 1.2, 25, E + 1.5], [37.8, 28.9, 1.4, 5], [32, 34.5, 1.5, 40],
-  // the middle, the low start, the walk
-  [0.6, 5.5, 1.5, 0], [-8, 22, 1.6, 20], [13, 28.5, 1.5, 0], [5, -18.5, 1.4, 15],
-  // the long lane and outside its doors
-  [36, -9, 1.7, 0], [37.8, -9.4, 1.4, 10], [36.6, -9.2, 1.2, 30, L + 1.7], [46.5, 6, 1.5, 0], [16, -36, 1.7, 10], [27, -40.5, 1.5, 0],
-  // the high start, the west lane, the covered ways
-  [-20, -46, 1.6, 20], [-30, -57, 1.5, 0], [-40.5, -27, 1.6, 0], [-28, -18, 1.4, 0], [-44, -2.6, 1.3, 0],
+  // the west site: on its platform, on its floor, the stack by the yard
+  [-43, 39, 2, 0], [-33, 39, 1.75, 0], [-32, 31, 2.2, 0], [-43, 30, 2, 0], [-42.4, 28, 1.7, 10],
+  [-36.4, 27.5, 2.7, 0], [-27, 33, 1.75, 5], [-25.2, 34.6, 1.8, 0], [-25.2, 34.6, 1.3, 15, 3.6 + 1.8],
+  // the low start: the tall stack, the two by it
+  [5, 24, 2, 0], [5, 24, 2, 12, 2], [6.9, 23.6, 1.6, 0], [10.5, 24.5, 2, 0], [7, 18.2, 2.3, 0],
+  // the middle lane's crate, the lower way's
+  [1.5, 2.6, 2.1, 0], [-20, 5, 1.6, 0],
+  // the east site and its ramp
+  [37, 28.8, 1.4, 0], [41, 31, 1.4, 0], [41, 29.5, 1.3, 8], [39.3, 30.4, 1.5, 12], [39.3, 30.4, 1.2, 30, E + 1.5], [43, 27, 1.8, 0],
+  // the long lane: the big stack by the doors, the doors' way, the side yard
+  [30.6, -4.4, 2.75, 0], [33, -4.3, 2, 8], [27.6, -17.5, 2.6, 0], [35.5, -26.5, 2.7, 0],
+  // outside the doors: the tall stack; the crossing; the west lane
+  [19.5, -43.5, 2.4, 0], [19.5, -43.5, 2.3, 15, L + 2.4], [2, -26, 1.75, 0], [-3, -29.4, 1.9, 0], [-3, -36.6, 2, 0], [-3, -38.4, 1.7, 6],
+];
+
+/** The tops of the blocks of houses, where they are not `PLACE.wall` over the floor beside them. A wall rises to its block. */
+export const BLOCKS = [
+  // the tall houses along the west and the north-west
+  { at: [[-58, 30], [-45, 30], [-45, 64], [-58, 64]], top: 10 },
+  { at: [[-56, 6], [-45, 6], [-45, 30], [-56, 30]], top: 12 },
+  { at: [[-37, 40], [-25, 40], [-25, 52], [-37, 52]], top: 10.5 },
+  // the long wall of houses north of the west site's ramp and the low start
+  { at: [[-27, 35], [11, 35], [11, 43], [-27, 43]], top: 12 },
+  { at: [[-25, 31], [-13, 35], [-25, 36]], top: 11 },
+  { at: [[3, 31], [11, 31], [11, 36], [3, 36]], top: 9 },
+  // the houses east of the middle lane
+  { at: [[3, 8], [16, 8], [16, 17], [3, 17]], top: 9.5 },
+  // the low wall between the east site and the yard under it, and the one along the ramp
+  { at: [[23, 25], [36, 25], [36, 28], [23, 28]], top: 6.5 },
+  { at: [[41, 25], [42, 25], [42, 37], [41, 37]], top: 6.6 },
+  // the high start: the tower by the ramp, the tall houses south and east of it
+  { at: [[-36, -41], [-33, -41], [-33, -37], [-36, -37]], top: 10 },
+  { at: [[-18, -50], [-13, -50], [-13, -40], [-18, -40]], top: 12 },
+  { at: [[-50, -66], [0, -66], [0, -60], [-50, -60]], top: 12 },
+];
+
+/** Lamps under the covered ways: [east, north]. */
+export const LAMPS = [
+  [-34, -18], [-33, -12.5], [-30, -6], [-38, -2.5], [-41, 1], [-41, 8], [-19.5, -5.5], [-12, 2.5], [-7, 2.5], [25.5, -17.5], [25.5, -22],
 ];
 
 /** The reference's props: ['palm', east, north, scale] or [id, east, north, turn, scale]. */

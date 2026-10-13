@@ -281,7 +281,9 @@ fn light_piece(piece: &Piece, material: &Material, scene: &Scene, lighting: &Lig
                 let albedo = c.col.map(|v| v.powf(2.2));
                 // A surface the reference's program could not be asked takes the fill open ground has.
                 let ambient = if c.amb[0] < 0.0 { [albedo[0] * 0.13, albedo[1] * 0.21, albedo[2] * 0.41] } else { c.amb };
-                let linear: [f32; 3] = core::array::from_fn(|i| ambient[i] * fill + albedo[i] * lighting.sky.sun_colour[i] * facing * seen * core::f32::consts::FRAC_1_PI);
+                // (a place's own light: a warmer sky, the ground's bounce, lamps; nothing for the street)
+                let (gain, added) = (lighting.sky_gain(), lighting.added(v3(at[0], at[1], at[2]), n, sky));
+                let linear: [f32; 3] = core::array::from_fn(|i| ambient[i] * gain[i] * fill + albedo[i] * (added[i] + lighting.sky.sun_colour[i] * facing * seen * core::f32::consts::FRAC_1_PI));
                 let uv = coords[l][t][k];
                 let v = WorldVertex {
                     uv: [(((uv[0] - uv_offset[0]) / uv_scale[0]) * 32768.0).round().clamp(0.0, 32767.0) as i16, (((uv[1] - uv_offset[1]) / uv_scale[1]) * 32768.0).round().clamp(0.0, 32767.0) as i16],
