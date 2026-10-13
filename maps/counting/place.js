@@ -39,13 +39,14 @@ export const PLACE = {
   wall: 8,
   // [east, north, facing in degrees from north toward east, tag]. The first is the player's.
   starts: [
+    // (the title shows this one's view: the side yard, the crates' climb to the ledge ahead, the garage to the right)
+    [-33.5, -6.5, 85, 'side yard'],
     [-30, -40, 20, 'the lot'],
     [-32, -34, 10, 'the lot'],
     [-28, -31, 0, 'the lot'],
     [-30, -27, 0, 'the lot'],
     [-18, -40, 90, 'the street'],
     [0, -40, 90, 'the street'],
-    [-30, -5, 0, 'side yard'],
     [26, -28, 300, 'front yard'],
     [33, 12, 250, 'long room'],
     [38, 11, 250, 'long room'],
