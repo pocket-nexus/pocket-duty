@@ -69,7 +69,7 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     println!("levels: {} pieces of {} × {} cells, triangles {:?} ({:.1} s)", pieces.len(), nx, nz, per_level, t1.elapsed().as_secs_f32());
 
     // ---- the pictures
-    let mut texels = tex::Texels { pica: profile["textures"]["format"].as_str() == Some("pica"), ..Default::default() };
+    let mut texels = tex::Texels { pica: profile["textures"]["format"].as_str() == Some("pica"), rgba: profile["textures"]["format"].as_str() == Some("rgba"), ..Default::default() };
     let side_default = profile["textures"]["side"].as_u64().unwrap_or(128) as usize;
     let levels = profile["textures"]["levels"].as_u64().unwrap_or(4) as usize;
     let mut family_texture: Vec<(String, u16)> = Vec::new();

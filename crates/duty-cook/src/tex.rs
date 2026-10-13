@@ -151,6 +151,9 @@ pub struct Texels {
     pub bytes: Vec<u8>,
     /// The PICA200's layouts (`texture::RGB565` and the others) instead of the GE's palettes.
     pub pica: bool,
+    /// True colour, four bytes a texel in rows, every level down to one texel (`texture::RGBA8`):
+    /// a device with room for it (the PS Vita). No palette, so nothing is rounded to 256 colours.
+    pub rgba: bool,
 }
 
 /// `values` (one for each texel, rows from the top) in the PICA200's order: tiles of 8 × 8, the
@@ -179,6 +182,11 @@ impl Texels {
     pub fn add_ramp(&mut self, image: &Image, flags: u16) -> u32 {
         self.bytes.resize((self.bytes.len() + 15) & !15, 0);
         let offset = self.bytes.len() as u32;
+        if self.rgba {
+            self.bytes.extend(image.data.iter().flat_map(|p| [255, 255, 255, (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8]));
+            self.records.push(Texture { offset, width: image.width as u16, height: image.height as u16, levels: 1, format: texture::RGBA8, flags });
+            return self.records.len() as u32 - 1;
+        }
         if self.pica {
             let alpha: Vec<u8> = image.data.iter().map(|p| (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect();
             self.bytes.extend(tiled(&alpha, image.width, image.height));
@@ -196,6 +204,9 @@ impl Texels {
 
     /// Adds a picture and returns its number. Its sides are powers of two.
     pub fn add(&mut self, image: &Image, options: &Options) -> u32 {
+        if self.rgba {
+            return self.add_rgba(image, options);
+        }
         assert!(image.width.is_power_of_two() && image.height.is_power_of_two() && image.width >= 16 && image.height >= 16 && image.width <= 512 && image.height <= 512, "a texture of {} × {}", image.width, image.height);
         let cutout = options.flags & texture::CUTOUT != 0;
         let mut levels = vec![image.clone()];
@@ -271,6 +282,49 @@ impl Texels {
 }
 
 impl Texels {
+    /// The picture as it is, four bytes a texel, and every smaller level down to one texel: each a
+    /// mean of the four texels above it. A picture with holes keeps its alpha; the device tests it
+    /// against one half.
+    fn add_rgba(&mut self, image: &Image, options: &Options) -> u32 {
+        assert!(image.width.is_power_of_two() && image.height.is_power_of_two() && image.width <= 4096 && image.height <= 4096, "a texture of {} × {}", image.width, image.height);
+        let cutout = options.flags & texture::CUTOUT != 0;
+        let mut levels = vec![image.clone()];
+        while levels.len() < options.levels && (levels.last().unwrap().width > 1 || levels.last().unwrap().height > 1) {
+            let last = levels.last().unwrap();
+            levels.push(last.reduced((last.width / 2).max(1), (last.height / 2).max(1)));
+        }
+        if cutout {
+            // A smaller level is a mean of texels, and the mean of a thin shape (a leaf, a wire) is under one
+            // half everywhere: the shape would go at a distance. Each level's alpha is raised until as much
+            // of the picture passes the device's test as passes it in the first.
+            let passing = |level: &Image, gain: f32| level.data.iter().filter(|p| p[3] * gain >= 0.5).count() as f32 / level.data.len() as f32;
+            let want = passing(&levels[0], 1.0);
+            for level in levels.iter_mut().skip(1) {
+                let (mut low, mut high) = (1.0f32, 16.0f32);
+                for _ in 0..12 {
+                    let gain = (low + high) * 0.5;
+                    if passing(level, gain) < want {
+                        low = gain;
+                    } else {
+                        high = gain;
+                    }
+                }
+                for p in &mut level.data {
+                    p[3] = (p[3] * high).min(1.0);
+                }
+            }
+        }
+        self.bytes.resize((self.bytes.len() + 15) & !15, 0);
+        let offset = self.bytes.len() as u32;
+        for level in &levels {
+            self.bytes.resize((self.bytes.len() + 15) & !15, 0);
+            let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+            self.bytes.extend(level.data.iter().flat_map(|p| [byte(p[0]), byte(p[1]), byte(p[2]), if cutout { byte(p[3]) } else { 255 }]));
+        }
+        self.records.push(Texture { offset, width: image.width as u16, height: image.height as u16, levels: levels.len() as u8, format: texture::RGBA8, flags: options.flags });
+        self.records.len() as u32 - 1
+    }
+
     /// The levels as 16-bit texels: five bits each and one of alpha where the picture has holes,
     /// five, six and five where it has none.
     fn add_pica(&mut self, levels: &[Image], options: &Options) -> u32 {
@@ -319,4 +373,49 @@ impl Texels {
 pub fn fetch(record: &Texture, texels: &[u8], level: u32, x: i32, y: i32) -> [f32; 4] {
     let (w, h) = ((record.width as i32 >> level).max(1), (record.height as i32 >> level).max(1));
     record.texel(texels, level, x.rem_euclid(w) as usize, y.rem_euclid(h) as usize).map(|c| c as f32 / 255.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A true-colour picture is its rows, every level down to one texel, and reads back texel by texel.
+    #[test]
+    fn a_true_colour_picture_keeps_its_texels_and_every_level() {
+        let mut image = Image::new(8, 4);
+        for (i, p) in image.data.iter_mut().enumerate() {
+            *p = [i as f32 / 31.0, 0.25, 1.0 - i as f32 / 31.0, 1.0];
+        }
+        let mut texels = Texels { rgba: true, ..Default::default() };
+        let at = texels.add(&image, &Options { levels: 10, flags: 0, dither: false }) as usize;
+        let record = texels.records[at];
+        assert_eq!((record.format, record.width, record.height, record.levels), (texture::RGBA8, 8, 4, 4));
+        assert_eq!(record.texel(&texels.bytes, 0, 5, 2), [((21.0f32 / 31.0) * 255.0 + 0.5) as u8, 64, ((10.0f32 / 31.0) * 255.0 + 0.5) as u8, 255]);
+        // (the last level is one texel: the mean of them all)
+        let (start, bytes) = record.level(3);
+        assert_eq!((bytes, start + bytes <= texels.bytes.len() - record.offset as usize), (4, true));
+        assert_eq!(record.texel(&texels.bytes, 3, 0, 0)[1], 64);
+    }
+
+    /// A thin shape passes the device's test in as much of a smaller level as of the first.
+    #[test]
+    fn a_picture_with_holes_keeps_its_cover_in_the_smaller_levels() {
+        let mut image = Image::new(32, 32);
+        for (i, p) in image.data.iter_mut().enumerate() {
+            // One column in four is there.
+            *p = [1.0, 1.0, 1.0, if i % 4 == 0 { 1.0 } else { 0.0 }];
+        }
+        let mut texels = Texels { rgba: true, ..Default::default() };
+        let at = texels.add(&image, &Options { levels: 10, flags: texture::CUTOUT, dither: false }) as usize;
+        let record = texels.records[at];
+        let passing = |l: u32| {
+            let side = 32usize >> l;
+            (0..side * side).filter(|i| record.texel(&texels.bytes, l, i % side, i / side)[3] >= 128).count() as f32 / (side * side) as f32
+        };
+        assert_eq!(passing(0), 0.25);
+        // (the plain mean of a level's four texels is a quarter: nothing would pass)
+        for l in 1..3 {
+            assert!(passing(l) >= 0.25, "level {l} keeps {}", passing(l));
+        }
+    }
 }
