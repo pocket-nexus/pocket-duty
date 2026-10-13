@@ -31,6 +31,16 @@ bun tools/psp.ts emu               # the same EBOOT in PPSSPPHeadless: a frame a
 bun tools/psp.ts package           # dist/psp/PSP/GAME/PocketDuty for a Memory Stick
 ```
 
+Those are the first map's commands, the reference's street. Another map is the same with `--map <id>` (`maps/maps.json` lists them):
+
+```
+bun tools/duty.ts export --map yards   # maps/yards/layout.js through the reference → .pocket-build/duty/maps/yards/ir
+bun tools/duty.ts walk --map yards     # where the soldiers can walk, read from the export
+bun tools/duty.ts cook --map yards     # → .pocket-build/duty/maps/yards/psp30/duty.pack (7 minutes)
+bun tools/psp.ts emu --map yards       # the PSP program started on it
+bun tools/duty.ts maps                 # which maps are exported and cooked
+```
+
 For the 3DS, with Docker (the build runs in PocketJS's pinned devkitARM container) and Azahar for `emu`:
 
 ```
@@ -102,11 +112,23 @@ Taken from the reference as they are: the weapons' tables and recoil patterns, t
 
 Left out: leaning, lying down, and the reference's ragdolls (a soldier who falls plays a fall and lies).
 
+## Maps
+
+A map is a plan written by hand in the terms of the reference's kit (`maps/<id>/layout.js`), built by the reference in Chrome, exported and cooked like the street. **`maps/maps.json` lists the maps**: the reference's street first, then Twin Yards (`maps/yards/`): two walled yards, a long lane, a covered way and the street between.
+
+- The export's server hands the reference's world a layout of ours in place of its own (`web/src/pocket/vite.config.js`); the reference's files are unchanged. `web/src/pocket/mapkit.js` builds what a layout adds to the reference's terms (open ground, walls, covered ways, raised ground, cover) from the kit's own boxes, materials and props, and `mapnav.js` finds the walk grid under roofs and closes it at thin walls.
+- The cook, the pack, the match and the devices hold no code for a particular map: starts, walk grid, collision and sight lists are sections of each map's pack.
+- **A device holds one map's pack at a time.** The interface lists the maps a device has a pack for. A browser tab reads the other pack in place of the first; a PSP, which cannot give a pack's memory back, writes the map's name beside its packs and starts itself again; a 3DS's package holds the first map.
+- **A map may resemble a place a player knows in its structure, and takes nothing else**: no file of another game is read, and no vertex, texture, sound, entity list, file name or map name of one enters the repository, a pack, a package or a page.
+
+`maps/README.md` is how a map is made, what a layout states, how to add one and how it is checked.
+
 ## How it is built
 
 ```
+maps/                the maps: maps.json, and a plan a map (maps/<id>/layout.js)
 web/                 the reference, unmodified, plus the export page (web/src/pocket, web/export.html)
-tools/               duty.ts (export, cook, shot), ui.ts (the interface), psp.ts and n3ds.ts (build, emu, run, bench), wgpu.ts (the browser), release.ts
+tools/               duty.ts (export, cook, shot, look, walk), maps.ts (where each map's files lie), ui.ts (the interface), psp.ts and n3ds.ts (build, emu, run, bench), wgpu.ts (the browser), release.ts
 profiles/            psp30.json, n3ds30.json: what a console's pack is (cell size, levels of detail, texture format, budgets)
 crates/duty-pack     the pack's records
 crates/duty-cook     DutyIR → pack
@@ -241,10 +263,10 @@ bun tools/release.ts [--targets psp,3ds] [--out dist/release] [--no-build] [--no
 
 | Target | File | Holds |
 | --- | --- | --- |
-| `psp` | `pocket-duty-<version>-psp.zip` | `PSP/GAME/PocketDuty/` for the root of a Memory Stick: `EBOOT.PBP`, `duty.pack`, and the interface's `duty.js` and `duty.pak` |
+| `psp` | `pocket-duty-<version>-psp.zip` | `PSP/GAME/PocketDuty/` for the root of a Memory Stick: `EBOOT.PBP`, a pack a map (`duty.pack`, `yards.pack`), and the interface's `duty.js` and `duty.pak` |
 | `3ds` | `pocket-duty-<version>.3dsx` | The program for `sdmc:/3ds/`, with `duty.pack` and the interface in its ROMFS. **31.1 MB**; the paired wire installs at most 32 MiB |
 
-- It cooks the profile's pack from the export with this commit's compiler (`--no-cook` takes the pack under `.pocket-build/duty/psp30` as it is), builds the program and writes the zip. **The zip's bytes follow from its entries alone**: fixed dates, fixed modes, entries in the order of their names.
+- It cooks the profile's pack of every map the package holds (every map for a PSP, the first for a 3DS) from that map's export with this commit's compiler (`--no-cook` takes the cooked packs as they are), builds the program and writes the zip. **The zip's bytes follow from its entries alone**: fixed dates, fixed modes, entries in the order of their names.
 - `release.json` beside it records the commit, the version (`ui/pocket.json`), the file's size and SHA-256, the export and the pack it was built from, and the toolchains.
 
 **Packages go to Pocket Studio and to no page on GitHub.** `--upload` runs `pocket-studio package <file> --target <id> --version <version>` for each package from the repository's root, where `pocket-studio register --title "Pocket Duty"` wrote `.pocket-studio.json` (ignored by Git). `POCKET_STUDIO_CLI` names the command when it is not on `PATH`.

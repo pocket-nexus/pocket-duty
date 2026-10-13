@@ -85,6 +85,15 @@ pub struct Session {
     pub wanted: Option<&'static str>,
 }
 
+/// What asking for a match on a map comes to: nothing, a new match on the map that is held, or
+/// another map's pack to read first.
+#[derive(Debug, PartialEq)]
+enum Asked {
+    Nothing,
+    Again,
+    Another(&'static str),
+}
+
 impl Default for Session {
     fn default() -> Self {
         Self::new()
@@ -94,6 +103,21 @@ impl Default for Session {
 impl Session {
     pub fn new() -> Session {
         Session { mode: Mode::Title, idle: false, stats: false, look: 1, invert: false, assist: true, layout: 0, skill: 1, listed: None, seconds: 0.0, wakes: Vec::new(), feed: Vec::new(), lines: 0, banner: (0, "", ""), prev_held: u32::MAX, tapped: 0, frames: 0, map: (0.0, 0.0), focal: 213.0, map_id: MAPS[0].id, maps: alloc::vec![MAPS[0].id], wanted: None }
+    }
+
+    /// What a row of the map list comes to. A list is up (no match runs under a map that goes), and
+    /// the device has the map's pack.
+    fn asked(&self, id: &str) -> Asked {
+        match maps::named(id).filter(|map| self.maps.contains(&map.id)) {
+            Some(map) if matches!(self.mode, Mode::Title | Mode::Menu | Mode::Results) => {
+                if map.id == self.map_id {
+                    Asked::Again
+                } else {
+                    Asked::Another(map.id)
+                }
+            }
+            _ => Asked::Nothing,
+        }
     }
 
     /// Hands the settings to a match.
@@ -169,17 +193,11 @@ impl Session {
             Command::Tap(key) => self.tap(&key),
             // A match on a map: at once on the one the device holds, and on another once the device
             // has read it. A map the device has no pack for is not asked of it.
-            Command::Map(id) => {
-                if let Some(map) = maps::named(&id).filter(|m| self.maps.contains(&m.id)) {
-                    if matches!(self.mode, Mode::Title | Mode::Menu | Mode::Results) {
-                        if map.id == self.map_id {
-                            self.fresh(game);
-                        } else {
-                            self.wanted = Some(map.id);
-                        }
-                    }
-                }
-            }
+            Command::Map(id) => match self.asked(&id) {
+                Asked::Again => self.fresh(game),
+                Asked::Another(map) => self.wanted = Some(map),
+                Asked::Nothing => {}
+            },
             other => return Some(other),
         }
         None
@@ -441,5 +459,32 @@ mod tests {
         session.tap("mode");
         assert_eq!(core::mem::take(&mut session.tapped), btn::MODE);
         assert_eq!(session.tapped, 0);
+    }
+
+    #[test]
+    fn a_map_is_asked_for_from_a_list_and_only_when_the_device_has_its_pack() {
+        let (first, other) = (MAPS[0].id, MAPS[1].id);
+        let mut session = Session::new();
+        assert_eq!((session.map_id, session.maps.as_slice()), (first, &[first][..]));
+        // The device has one pack: the other map is not offered, and asking for it is nothing.
+        assert_eq!(session.asked(other), Asked::Nothing);
+        assert_eq!(session.asked(first), Asked::Again);
+        session.maps.push(other);
+        assert_eq!(session.asked(other), Asked::Another(other));
+        assert_eq!(session.asked("no-such-map"), Asked::Nothing);
+        // The map that is held needs no reading, from the menu and the results as from the title.
+        for mode in [Mode::Menu, Mode::Results] {
+            session.mode = mode;
+            assert_eq!((session.asked(first), session.asked(other)), (Asked::Again, Asked::Another(other)));
+        }
+        // No list is up: nothing takes the map from under a match, or from under a read.
+        for mode in [Mode::Play, Mode::Down, Mode::Loading, Mode::Error] {
+            session.mode = mode;
+            assert_eq!((session.asked(first), session.asked(other)), (Asked::Nothing, Asked::Nothing));
+        }
+        // On the other map, the first is the one to read.
+        session.mode = Mode::Title;
+        session.map_id = other;
+        assert_eq!((session.asked(first), session.asked(other)), (Asked::Another(first), Asked::Again));
     }
 }

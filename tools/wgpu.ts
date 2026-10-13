@@ -530,15 +530,19 @@ if (command === "build") {
       await p.key("KeyZ");
       await p.page.waitForTimeout(400);
       for (let row = 0; row < offered.indexOf(other); row++) await p.key("ArrowDown");
-      await p.key("KeyZ");
-      // The shell lets its world go and says what it reads.
-      await p.page.waitForFunction(`JSON.parse(pocketDuty.duty.status()).stage === "loading"`, undefined, { timeout: 5_000 }).catch(() => {});
-      const reading = await p.status();
-      await p.save(`${other.id}-reading`);
-      expect(`${other.id}: chosen from the list, its pack is read (${reading.stage}, ${reading.map})`, reading.stage === "loading" && reading.map === other.id);
+      // The shell lets its world go and says what it reads. (From this computer's own disk the read is
+      // a few frames long: whether the loading screen was caught is recorded, and not required.)
       const from = performance.now();
+      await p.page.keyboard.down("KeyZ");
+      const caught = await p.page.waitForFunction(`JSON.parse(pocketDuty.duty.status()).stage === "loading"`, undefined, { timeout: 3_000, polling: 8 }).then(() => true, () => false);
+      if (caught) await p.save(`${other.id}-reading`);
+      await p.page.keyboard.up("KeyZ");
+      const reading = await p.status();
+      expect(`${other.id}: chosen from the list, its pack is the one read (${reading.stage}, ${reading.map})`, reading.map === other.id);
       await p.page.waitForFunction(`JSON.parse(pocketDuty.duty.status()).stage === "running"`, undefined, { timeout: 90_000 });
       await p.mode("play");
+      // (from the key to the match on the other map: the read, the upload to the GPU, the first frame)
+      const playingAfter = Math.round(performance.now() - from);
       const there = await p.status();
       expect(`${other.id}: the match is on its pack (${there.map}, ${there.pack.bytes} bytes)`, there.map === other.id && there.pack.bytes === statSync(other.file).size);
       await p.page.waitForTimeout(700);
@@ -555,7 +559,7 @@ if (command === "build") {
       await p.page.waitForTimeout(seconds * 1000);
       const b = (await p.page.evaluate(read)) as typeof a;
       const now = await p.status();
-      report.maps[other.id] = { readMs: Math.round(performance.now() - from - seconds * 1000), bytes: there.pack.bytes, fps: +((b.frames - a.frames) / ((b.at - a.at) / 1000)).toFixed(2), frameMs: +((await p.page.evaluate("pocketDuty.burst(300)")) as number).toFixed(3), draws: now.draws, tris: now.tris, late: now.late, match: fought.match };
+      report.maps[other.id] = { loadingCaught: caught, playingAfterMs: playingAfter, bytes: there.pack.bytes, fps: +((b.frames - a.frames) / ((b.at - a.at) / 1000)).toFixed(2), frameMs: +((await p.page.evaluate("pocketDuty.burst(300)")) as number).toFixed(3), draws: now.draws, tris: now.tris, late: now.late, match: fought.match };
       // The menu's last row leaves for the title; its list's first row is the first map, read again.
       await p.say("auto=0");
       await p.key("Space");
@@ -567,7 +571,6 @@ if (command === "build") {
       await p.key("KeyZ");
       await p.page.waitForTimeout(400);
       await p.save(`${other.id}-maps`);
-      for (let row = 0; row < offered.indexOf(other); row++) await p.key("ArrowUp");
       await p.key("KeyZ");
       await p.page.waitForFunction(`(() => { const s = JSON.parse(pocketDuty.duty.status()); return s.stage === "running" && s.map === ${JSON.stringify(offered[0]!.id)}; })()`, undefined, { timeout: 90_000 });
       await p.mode("play");
@@ -738,10 +741,17 @@ if (command === "build") {
         // (held for a tenth of a second, as a thumb holds it: a frame reads what is down when it is made)
         const key = (await p.page.locator("[data-pocket-control=circle]").first().boundingBox())!;
         const touch = await p.page.context().newCDPSession(p.page);
-        await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: key.x + key.width / 2, y: key.y + key.height / 2 }] });
-        await p.page.waitForTimeout(120);
-        await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-        await onTheFirst(p);
+        const thumb = async () => {
+          await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: key.x + key.width / 2, y: key.y + key.height / 2 }] });
+          await p.page.waitForTimeout(120);
+          await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        };
+        await thumb();
+        if (several) {
+          // (the list of maps is up: the same key plays its first row, the map behind the title)
+          await p.page.waitForTimeout(450);
+          await thumb();
+        }
         await p.mode("play");
       }
       expect(`${tag}: no error on the page (${p.problems.join("; ")})`, p.problems.length === 0);

@@ -330,15 +330,20 @@ pub fn change_waits() -> bool {
 
 /// Writes the map's name where the next run reads it, and starts the program again. Returns only when
 /// the kernel would not. On the thread the program started on: the only one with a working directory.
+///
+/// The program's file is named with its whole path: the kernel hands the path to the next run as its
+/// first argument, and that run's working directory comes from it. The path is not ours to ask for, so
+/// the places a copy stands are tried: where a package puts it on a Memory Stick or in a PSP Go's
+/// storage (tools/psp.ts `package`), and where PPSSPP mounts the directory it was started from. Anywhere
+/// else nothing is started.
 unsafe fn start_again(to: &'static Map) {
     write_choice(to.id.as_bytes(), PLAY.as_bytes());
-    if LOCAL {
-        // Where a package puts the program (tools/psp.ts `package`), with its whole path: the path is the
-        // next run's first argument, and that run's working directory comes from it. A directory is this
-        // program's when the name just written is read back from it.
-        for directory in [&b"ms0:/PSP/GAME/PocketDuty/"[..], b"ef0:/PSP/GAME/PocketDuty/"] {
-            let mut name = [0u8; 64];
-            name[..directory.len()].copy_from_slice(directory);
+    for directory in [&b"ms0:/PSP/GAME/PocketDuty/"[..], b"ef0:/PSP/GAME/PocketDuty/", b"umd0:/"] {
+        let mut name = [0u8; 64];
+        name[..directory.len()].copy_from_slice(directory);
+        if LOCAL {
+            // The files are beside the program: a directory is this program's when the name just
+            // written is read back from it.
             name[directory.len()..directory.len() + CHOICE.len()].copy_from_slice(CHOICE);
             let fd = sceIoOpen(name.as_ptr(), IoOpenFlags::RD_ONLY, 0);
             if fd.0 < 0 {
@@ -347,15 +352,19 @@ unsafe fn start_again(to: &'static Map) {
             let mut text = [0u8; 32];
             let n = sceIoRead(fd, text.as_mut_ptr() as *mut c_void, text.len() as u32).max(0) as usize;
             sceIoClose(fd);
-            if text[..n].strip_suffix(PLAY.as_bytes()) == Some(to.id.as_bytes()) {
-                name[directory.len()..directory.len() + 10].copy_from_slice(b"EBOOT.PBP\0");
-                LAST_CODE = sceKernelLoadExec(name.as_ptr(), ptr::null_mut());
+            if text[..n].strip_suffix(PLAY.as_bytes()) != Some(to.id.as_bytes()) {
+                continue;
             }
+        } else if directory != b"umd0:/" {
+            // The files are on the computer's share: the program is PSPLINK's to start, or an emulator's.
+            continue;
         }
+        name[directory.len()..directory.len() + 10].copy_from_slice(b"EBOOT.PBP\0");
+        LAST_CODE = sceKernelLoadExec(name.as_ptr(), ptr::null_mut());
     }
-    // Anywhere else (a directory with another name, an emulator's root): the program's file by this
-    // thread's working directory.
-    LAST_CODE = sceKernelLoadExec(b"EBOOT.PBP\0".as_ptr(), ptr::null_mut());
+    // In a directory with another name the program is not started again: a run started by a path
+    // without its directory has no working directory, and finds none of its files. The name is
+    // written down, and the screen says to start the program again (`change_waits`).
 }
 
 /// Tells `serve` whether the computer's share is there.
