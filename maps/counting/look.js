@@ -101,6 +101,19 @@ export const SURFACES = {
     h = 0.15 + 0.45 * grid - 0.05 * (1.0 - prick);
     rough = 0.93; metal = 0.0; ao = 0.8 + 0.2 * grid;
   `, { metres: 2.4, relief: 0.01, seed: 43, surface: 'plaster', like: 'ground' }), { weather: [0, 0, 0, 0.04], wearColor: 0xcfcfca, dustColor: 0xc4c4be, grimeColor: 0x55534d }),
+  // A van's paint: steel blue in panels with a seam every 0.4 m, rusting through in patches. (A tint is
+  // lost in sunlight in the game's renderer, so the paint is a tile of its own.)
+  paint: cold(surface(`
+    vec2 p = uv * P + uSeed * 8.1;
+    float seam = smoothstep(0.06, 0.0, abs(fract(uv.x * 6.0) - 0.5) - 0.42);
+    float grain = owFbm01(p * 20.0, P * 20.0, 3, 0.55);
+    float rust = smoothstep(0.6, 0.8, owFbm01(p * 3.0, P * 3.0, 4, 0.55));
+    vec3 c = owSRGB(vec3(0.34, 0.43, 0.55)) * (0.92 + 0.16 * grain);
+    c = mix(c, owSRGB(vec3(0.38, 0.23, 0.16)), rust * 0.65);
+    alb = c * (1.0 - 0.3 * seam);
+    h = 0.5 - 0.2 * seam + (grain - 0.5) * 0.03;
+    rough = 0.6; metal = 0.0; ao = 1.0 - 0.2 * seam;
+  `, { metres: 2.4, relief: 0.01, seed: 61, surface: 'metal' }), { weather: [0.1, 0.1, 0.1, 0.1] }),
 };
 
 // The roofs take the road's surface under a name of their own: a floor's surface is lit as open ground
@@ -126,7 +139,7 @@ export const LOOK = {
     ch_wood: { of: 'boards', tint: 0xdcd6ca },
     ch_wood_dark: { of: 'boards', tint: 0x8e8478 },
     ch_desk: { of: 'wood', tint: 0xd8b48a },
-    ch_van: { of: 'metal_painted', tint: 0x5f7fa8 },
+    ch_van: { of: 'paint', tint: 0xffffff },
     ch_van_box: { of: 'corrugated', tint: 0xb4c2d0 },
     ch_tin: { of: 'corrugated', tint: 0x8d5b4a },
   },
@@ -134,7 +147,7 @@ export const LOOK = {
   sky: { hour: 11, weather: { coverage: 0.55, turbidity: 3 } },
   // The cook's light for this place: the sky's fill brought from blue toward grey (the rooms take a
   // share of it), what the sunlit snow sends back, the rooms' lamps. The exposure is the reference's
-  // at the player's first start, in the open yard on sunlit snow (0.83): the fill, the bounce and the
+  // at the player's first start, in the open yard on sunlit snow (0.76): the fill, the bounce and the
   // lamps are large so that snow in shade and the rooms still show at it.
-  light: { sky: [2.94, 2.15, 1.56], bounce: [1.47, 1.51, 1.6], lamp: [29.4, 27.8, 24.8], reach: 14 },
+  light: { sky: [3.21, 2.35, 1.7], bounce: [1.61, 1.65, 1.75], lamp: [32.1, 30.4, 27.1], reach: 14 },
 };
