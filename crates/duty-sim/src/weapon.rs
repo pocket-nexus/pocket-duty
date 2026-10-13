@@ -61,6 +61,8 @@ pub struct Arms {
     since_shot: f32,
     /// How far the sights are up, 0…1, linear in time.
     pub ads: f32,
+    /// How far the weapon is down and aside for a sprint, 0…1, eased as the reference eases it.
+    pub sprint: f32,
     /// The held weapon's own motion from a shot: how far back it is, how far up, and its roll;
     /// how far back the bolt is (1 on firing, falling to 0; held at 1 on an empty magazine).
     pub back: f32,
@@ -89,6 +91,7 @@ impl Arms {
             shot: 0,
             since_shot: 10.0,
             ads: 0.0,
+            sprint: 0.0,
             back: 0.0,
             back_speed: 0.0,
             roll: 0.0,
@@ -222,6 +225,9 @@ impl Arms {
             1.0,
         );
         player.ads = self.ads;
+        // ---- the carry of a sprint: not for 0.3 s after a shot, and not while a clip plays
+        let carried = player.sprinting && self.since_shot > 0.3 && matches!(self.action, Action::None);
+        self.sprint = ease(self.sprint, if carried { 1.0 } else { 0.0 }, 9.0, DT);
         // ---- the cone
         let speed = player.speed();
         let mut rest = lerp(d.spread_hip, d.spread_ads, self.ads);

@@ -1169,7 +1169,7 @@ fn all(ir: &Path, profile: &Value) -> Result<Option<Cooked>, String> {
     for h in meta["held"].as_array().into_iter().flatten() {
         let id = h["model"].as_u64().unwrap_or(0) as u32;
         let motions: Vec<Motion> = h["clips"].as_array().into_iter().flatten().map(|c| Motion::read(&dir, c, id, part::WEAPON)).collect();
-        let info = Info { model: id, muzzle: list3(&h["muzzle"]), eject: list3(&h["eject"]), eject_dir: list3(&h["ejectDir"]), bolt_travel: h["boltTravel"].as_f64().unwrap_or(0.0) as f32, ads_offset: list3(&h["adsOffset"]), ads_turn: list3(&h["adsTurn"]), ..Default::default() };
+        let info = Info { model: id, muzzle: list3(&h["muzzle"]), eject: list3(&h["eject"]), eject_dir: list3(&h["ejectDir"]), bolt_travel: h["boltTravel"].as_f64().unwrap_or(0.0) as f32, ads_offset: list3(&h["adsOffset"]), ads_turn: list3(&h["adsTurn"]), sprint_offset: list3(&h["sprint"]["offset"]), sprint_turn: list3(&h["sprint"]["turn"]), ..Default::default() };
         let (made, line) = held(&dir, h, &motions, &info, [budget(profile, "weapon", 1600), budget(profile, "arm", 350), budget(profile, "arm", 350)]);
         cooked.models.push(made);
         cooked.lines.push(line);

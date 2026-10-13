@@ -298,10 +298,13 @@ impl Figures {
         let aim = smoothstep(0.0, 1.0, arms.ads);
         let player = &game.player;
         let stride = sin(game.time * 9.0) * min(player.speed() / 4.57, 1.4) * lerp(1.0, 0.25, aim);
-        let sprint = if player.sprinting { 1.0 } else { 0.0 };
+        // The sprint's turn and place are the weapon's own, from the pack, as the sights' are
+        // (`duty_sim::pose::Posed::held`, which the consoles draw from, reads the same).
+        let sprint = arms.sprint;
+        let (st, so) = (info.sprint_turn, info.sprint_offset);
         let carry = euler(
-            [info.ads_turn[0] * aim - 0.35 * sprint - arms.back * 1.6, info.ads_turn[1] * aim + 0.52 * sprint, info.ads_turn[2] * aim + 0.33 * sprint + arms.roll],
-            [info.ads_offset[0] * aim - 0.03 * sprint + stride * 0.006, info.ads_offset[1] * aim - 0.075 * sprint - abs(stride) * 0.005, info.ads_offset[2] * aim + 0.025 * sprint + arms.back],
+            [info.ads_turn[0] * aim + st[0] * sprint - arms.back * 1.6, info.ads_turn[1] * aim + st[1] * sprint, info.ads_turn[2] * aim + st[2] * sprint + arms.roll],
+            [info.ads_offset[0] * aim + so[0] * sprint + stride * 0.006, info.ads_offset[1] * aim + so[1] * sprint - abs(stride) * 0.005, info.ads_offset[2] * aim + so[2] * sprint + arms.back],
         );
         let mut poses = [IDENTITY; part::WEAPON];
         for (b, pose) in poses.iter_mut().enumerate() {
