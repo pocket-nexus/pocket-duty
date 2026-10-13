@@ -41,7 +41,9 @@ export const PLACE = {
   turn: 0,
   wall: 9.75,
   // [east, north, facing in degrees from north toward east, tag]. The first is the player's.
+  // It looks down the yard between its first two tracks: the wagons, the gantry, the open site beyond.
   starts: [
+    [-10.5, 5.2, 88, 'yard, west end'],
     [-44, 33, 110, 'north-west start'],
     [-38.6, 32.7, 100, 'north-west start'],
     [-34.5, 29.4, 95, 'north-west start'],
@@ -50,8 +52,6 @@ export const PLACE = {
     [0, 36.5, 90, 'north street'],
     [33.2, 22, 180, 'east lane'],
     [20, 5.2, 270, 'yard'],
-    [-6, -3.5, 90, 'yard, west end'],
-    [-16.2, 2, 180, 'upper hall'],
     [12.5, -19.8, 0, 'court'],
     [0, -26.4, 90, 'platform'],
     [-25.7, -36, 0, 'west walk'],

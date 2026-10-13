@@ -248,7 +248,7 @@ export const LOOK = {
     sd_ballast: { of: 'ballast', tint: 0xffffff },
     sd_track: { of: 'track', tint: 0xffffff },
     sd_dirt: { of: 'earth', tint: 0xffffff },
-    sd_tar: { of: 'asphalt', tint: 0xb9b4c6, weather: [0.03, 0, 0, 0.15] },
+    sd_tar: { of: 'asphalt', tint: 0xd2cedb, weather: [0.03, 0, 0, 0.15] },
     sd_slab: { of: 'concrete_floor', tint: 0xb4b6ae, surface: 'concrete', weather: [0.03, 0, 0, 0.2] },
     sd_plank: { of: 'boards', tint: 0x8d857a, weather: [0.03, 0.1, 0.1, 0.3] },
     // metal: the hall's roof, the rails, the wagons in their four paints, a flat wagon's deck
@@ -269,5 +269,5 @@ export const LOOK = {
   keys: { ground: 'sd_ballast', side: 'sd_cast', wall: 'sd_brick', band: 'sd_band', cap: 'sd_cast', lid: 'sd_roofing', wood: 'sd_wood', woodDark: 'sd_wood_dark', iron: 'sd_iron', mark: 'sd_mark', apron: 'sd_ballast' },
   sky: { hour: 15.4, weather: { coverage: 0.42, turbidity: 1.7 } },
   // The cook's light for this place: the sky's fill taken toward grey, what the stone sends back, its lamps.
-  light: { sky: [1.62, 1.47, 1.28], bounce: [0.42, 0.42, 0.43], lamp: [9, 6.6, 3.6], reach: 13 },
+  light: { sky: [1.9, 1.72, 1.5], bounce: [0.46, 0.46, 0.47], lamp: [9, 6.6, 3.6], reach: 13 },
 };
