@@ -915,8 +915,10 @@ if (command === "build") {
       await context.close();
     }
 
-    // ---- what the first frame of the street needs: the page on a line of 16 Mbit/s
-    {
+    // ---- what the first frame of the street needs: the page on a line of 16 Mbit/s, as a PSP and, where
+    // the page has that device's own packs, as a PS Vita (whose pack is the larger)
+    report.firstFrame = {};
+    for (const device of ownPacks("vita").length > 0 ? ["psp", "vita"] : ["psp"]) {
       const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
       const cdp = await page.context().newCDPSession(page);
       await cdp.send("Network.enable");
@@ -926,15 +928,16 @@ if (command === "build") {
       cdp.on("Network.dataReceived", (event: { encodedDataLength: number; dataLength: number }) => {
         if (counting) received += event.encodedDataLength || event.dataLength;
       });
-      await page.goto(`${origin}/`);
+      await page.goto(`${origin}/?device=${device}`);
       await page.waitForFunction("window.pocketDuty?.firstFrame > 0", undefined, { timeout: 60_000 });
       await page.waitForTimeout(3500);
-      await page.screenshot({ path: join(directory, "reading-the-street.png") });
-      await page.waitForFunction("window.pocketDuty && (pocketDuty.firstWorld || pocketDuty.failure)", undefined, { timeout: 180_000 });
+      await page.screenshot({ path: join(directory, `reading-the-street-${device}.png`) });
+      await page.waitForFunction("window.pocketDuty && (pocketDuty.firstWorld || pocketDuty.failure)", undefined, { timeout: 300_000 });
       counting = false;
       const first = (await page.evaluate("({ ready: pocketDuty.ready, interfaceReady: pocketDuty.interfaceReady, firstFrame: pocketDuty.firstFrame, firstWorld: pocketDuty.firstWorld, failure: pocketDuty.failure })")) as Record<string, any>;
-      await page.screenshot({ path: join(directory, "first-street-frame.png") });
-      report.firstFrame = { bytesPerSecond: 2_000_000, bytesReceived: received, interfaceMs: Math.round(first.interfaceReady), firstFrameMs: Math.round(first.firstFrame), firstWorldFrameMs: Math.round(first.firstWorld), failure: first.failure };
+      await page.screenshot({ path: join(directory, `first-street-frame-${device}.png`) });
+      report.firstFrame[device] = { bytesPerSecond: 2_000_000, bytesReceived: received, interfaceMs: Math.round(first.interfaceReady), firstFrameMs: Math.round(first.firstFrame), firstWorldFrameMs: Math.round(first.firstWorld), failure: first.failure };
+      expect(`${device}: the street comes on a slow line (${first.failure})`, !first.failure);
       await page.close();
     }
 
