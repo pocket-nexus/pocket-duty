@@ -9,7 +9,7 @@
  *  +34                                                                  +---+ arm    | landing  |
  *  +31        +--------+--------+                                       |   | (0.6)  +--+----+--+
  *             | north  | WEST   |      +---------+--THE HALL--+------+  |   |   ramp |  | ramp|
- *  +21        | part   | SITE   +------+ west    |  rope      | east |  +---+--------+  +--+--+
+ *  +21        | part   | SITE   +------+ west    |  plank     | east |  +---+--------+  +--+--+
  *             | (5.5)  | (8.1)   pass. | room    |  bridge    | room |  water court B (0.8)|  | corridor
  *  +13  +-----+        |        +--+---+ (8.9)   |  over the  | (8.9)+--+   channel (0)    |  | (6.5)
  *       |annex+--------+---++---+  |   +--+      |  pool (0)  | link |  water court A      +--+-----+
@@ -81,7 +81,7 @@ export const GROUND = [
   { at: box(-18.9, 2.5, -14, 18.7), y: CAP, over: true, thick: 1, rail: 0, walls: 0, soldiers: false },
   { at: box(-4, 2.5, 3.9, 18.7), y: CAP, over: true, thick: 1, rail: 0, walls: 0, soldiers: false },
   { at: box(-18.9, 18.7, 3.9, 24), y: CAP, over: true, thick: 1, rail: 0, walls: 0, soldiers: false },
-  // ------------------------------------------------------------------ the rope bridge, sagging to its middle; the east room over the channel
+  // ------------------------------------------------------------------ the plank bridge, sagging to its middle; the east room over the channel
   { at: box(-16.5, 15, -6.75, 18), y: { from: [-16, 16.5, GA], to: [-6.75, 16.5, 8.5] }, over: true, thick: 0.12, key: 'cw_wood', side: 'cw_wood_dark', railKey: 'cw_wood_dark' },
   { at: box(-6.75, 15, 3, 18), y: { from: [-6.75, 16.5, 8.5], to: [2.5, 16.5, GA] }, over: true, thick: 0.12, key: 'cw_wood', side: 'cw_wood_dark', railKey: 'cw_wood_dark' },
   // (its slab reaches 0.7 m past its east wall: a wall closes the walk grid half a cell to each side, and the
