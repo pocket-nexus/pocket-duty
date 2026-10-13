@@ -62,7 +62,7 @@ const G = 9, P = 9.75, E = 10.5, C = 3.25, D = 4.25, B = 0, N = 7.25;
 // The ground over what lies under it is a slab this thick: its underside is the tunnels' ceiling.
 const THICK = 1.5, UNDER = G - THICK;
 // The roofs: the sheds' and the east room's, the sheds' taller block, the hall's catwalk, the hall's.
-const R15 = 15, R17 = 17, CAT = 17.2, RH = 21.5;
+const R15 = 15, R17 = 17, CAT = 17.2, RH = 23;
 
 /** A rectangle's corners from its west, south, east and north sides. */
 const box = (w, s, e, n) => [[w, s], [e, s], [e, n], [w, n]];
@@ -227,6 +227,9 @@ export const GROUND = [
 /** A wall of blocks on the ground. */
 const wall = (line, h, more = {}) => ({ line, y: G, h, t: 0.5, key: BLOCK, crown: false, ...more });
 
+/** The cheek of a tunnel's mouth under a catwalk: a wall from the deep floor up to the catwalk's bridge. */
+const cheek = (line) => ({ line, y: B, h: C - 0.25, t: 0.5, low: 0, key: BLOCK, crown: false });
+
 /** Walls along a line, with what is cut in them: `holes` of `{ at, w, h, sill }`, `at` in metres from the first point. */
 export const WALLS = [
   // ------------------------------------------------------------------ the hall: west (the way from the sheds, the door on the platform), east (its door, the catwalk's way out), north and south (the big doorways)
@@ -234,6 +237,9 @@ export const WALLS = [
   wall([[19.75, -15.5], [19.75, 17.5]], RH - G - 0.5, { t: 1.5, key: SHEET, holes: [{ at: 15, w: 3, h: 2.8 }, { at: 29.5, w: 1.4, h: 2.4, sill: CAT - G }] }),
   wall([[2.5, 16.5], [19, 16.5]], RH - G - 0.5, { t: 2, key: SHEET, holes: [{ at: 8.5, w: 5, h: 3.8 }] }),
   wall([[2.5, -14.75], [19, -14.75]], RH - G - 0.5, { t: 1.5, key: SHEET, holes: [{ at: 8.5, w: 5, h: 3.8 }] }),
+  // the cheeks of the eight tunnel mouths under the catwalks of the two deep rooms
+  cheek([[2.5, 0.75], [5, 0.75]]), cheek([[2.5, -3.75], [5, -3.75]]), cheek([[17, 0.75], [19, 0.75]]), cheek([[17, -3.75], [19, -3.75]]),
+  cheek([[2.5, -27.25], [5, -27.25]]), cheek([[2.5, -31.75], [5, -31.75]]), cheek([[17, -27.25], [19, -27.25]]), cheek([[17, -31.75], [19, -31.75]]),
   // the rail along the platform's edge
   wall([[6.6, -6.5], [6.6, 0.8]], 1.75, { t: 0.2, key: STEEL }),
   // ------------------------------------------------------------------ the lobby: its outer walls, the two walls inside it
@@ -283,6 +289,9 @@ export const MASSES = [
   ...stack(box(-20.2, -11, -18.6, -7.2), G, 2, CAN_RED),
   ...stack(box(7.3, -35, 13.7, -31.6), G, 3, CAN_RED),
   ...stack(box(28, -19, 30.5, -11.2), G, 3, CAN_GREEN),
+  // the posts of the porch south of the hall
+  { at: box(6.2, -21.3, 6.7, -20.8), y: G, top: 13.5, key: STEEL },
+  { at: box(15.8, -21.3, 16.3, -20.8), y: G, top: 13.5, key: STEEL },
   // the block of wall east of the hall, south of its door
   { at: box(20.5, -6.5, 23, -4), y: G, top: 14, key: BLOCK },
   // ------------------------------------------------------------------ the rock and the walls that stand on the slabs' far parts, where the ground ends before what lies under it does
@@ -319,7 +328,7 @@ export const CRATES = [
   // the lobby and the ramp room
   [3.2, 28.6, 2.4, 0], [9, 44.6, 1.6, 0], [10.7, 44.8, 1.2, 14],
   // the south yard, the south-east yard, the apron
-  [3.4, -18.8, 2.4, 0], [24, -34.5, 2.4, 8], [42.6, -19.2, 2.4, 0], [45.2, -19.6, 1.6, 12], [39.5, 12.2, 2.4, 0],
+  [3.4, -18.8, 2.4, 0], [27, -36.6, 2.4, 8], [42.6, -19.2, 2.4, 0], [45.2, -19.6, 1.6, 12], [39.5, 12.2, 2.4, 0],
 ];
 
 /** A site's mark, of our own, on its floor: the upper site in the hall, the lower under it. */

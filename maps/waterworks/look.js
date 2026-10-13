@@ -155,7 +155,7 @@ export const LOOK = {
     ww_can_green: { of: 'ribgreen' },
     ww_tar: { of: 'concrete_floor', tint: 0x6f7076, surface: 'concrete' },
     ww_slab: { of: 'concrete_floor', tint: 0xa6a8a4, surface: 'concrete' },
-    ww_grate: { of: 'metal_painted', tint: 0x56605f },
+    ww_grate: { of: 'metal_painted', tint: 0x8a9694 },
     ww_steel: { of: 'metal_painted', tint: 0x40474a },
     ww_paint: { of: 'metal_painted', tint: 0x5d8c82 },
     ww_tank: { of: 'metal_painted', tint: 0xb4bab8 },
