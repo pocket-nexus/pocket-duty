@@ -611,7 +611,8 @@ impl Gfx {
             }
             // (a program that does not take the sun's depth picture has no such number)
             if let Some(sun) = sun_depth {
-                f.set(s.sun_edge, &[sun.bias, 1.0 / sun.edge.max(1e-9), 0.0, 0.0]);
+                // (lit up to `bias` past the picture's depth, then out over `edge`)
+                f.set(s.sun_edge, &[sun.bias + sun.edge, 1.0 / sun.edge.max(1e-9), 0.0, 0.0]);
             }
         };
 

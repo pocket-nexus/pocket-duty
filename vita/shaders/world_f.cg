@@ -3,8 +3,8 @@
 //   GROUND  the sun's shadow over the ground comes from a picture (one half is all of the sun)
 //   FLASH   a muzzle's light reaches what is near it: uFlash xyz where, w its strength; uFlashColour
 //   SUN     the sun's shadow from its depth picture: the fragment is lit while its depth from the sun is no
-//           more than the picture's there (uSunEdge x: what it may exceed it by; y: 1 / the depth over
-//           which the light then goes out), and its light goes from vShade, the vertex's colour with the
+//           more than the picture's there (uSunEdge x: what it may exceed it by before the light is all
+//           gone; y: 1 / the depth over which it goes), and its light goes from vShade, the vertex's colour with the
 //           sun off, to vColor, its colour in the sun
 //   uLook   rgb: the haze's colour; a: how opaque the surface is (glass)
 
