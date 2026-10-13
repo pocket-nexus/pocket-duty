@@ -409,6 +409,16 @@ impl Texels {
         self.records.len() as u32 - 1
     }
 
+    /// Adds a square picture of depths, 16 bits a texel in rows, and returns its number.
+    pub fn add_depth(&mut self, depths: &[u16], side: usize) -> u32 {
+        assert_eq!(depths.len(), side * side);
+        self.bytes.resize((self.bytes.len() + 15) & !15, 0);
+        let offset = self.bytes.len() as u32;
+        self.bytes.extend(depths.iter().flat_map(|d| d.to_le_bytes()));
+        self.records.push(Texture { offset, width: side as u16, height: side as u16, levels: 1, format: texture::D16, flags: texture::CLAMP });
+        self.records.len() as u32 - 1
+    }
+
     /// Adds a picture and returns its number. Its sides are powers of two.
     pub fn add(&mut self, image: &Image, options: &Options) -> u32 {
         if self.rgba {

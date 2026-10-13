@@ -229,7 +229,9 @@ impl Renderer {
         let mut pictures = Vec::with_capacity(textures.len());
         let mut sun = (Vec::new(), 0, 0);
         for (number, t) in textures.iter().enumerate() {
-            if t.format != texture::T8 && t.format != texture::RGBA8 && t.block().is_none() {
+            // (a depth picture is the PS Vita's own: it is read as greys and nothing here draws from it, so this
+            // renderer shows such a pack's walls with nothing between them and the sun)
+            if t.format != texture::T8 && t.format != texture::RGBA8 && t.format != texture::D16 && t.block().is_none() {
                 return Err(format!("picture {number} has format {} (this renderer reads the PSP's pack and the PS Vita's)", t.format));
             }
             let levels = (t.levels as u32).max(1);

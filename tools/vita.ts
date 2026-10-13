@@ -315,7 +315,7 @@ async function cost(from: string[]): Promise<void> {
     const e = status(from).engine;
     return { gpuMs: e.gpuMs as number, drawMs: e.cpuMs.draw as number, selectMs: e.cpuMs.select as number, tris: e.tris as number, figureTris: e.figureTris as number, draws: e.draws as number };
   };
-  const all = "sky=1 haze=1 shadows=1 effects=1 figures=1 shades=1 flash=1 walls=0 interface=1 nearer=100 merge=150";
+  const all = "sky=1 haze=1 shadows=1 effects=1 figures=1 shades=1 flash=1 walls=0 sun=1 interface=1 nearer=100 merge=150";
   ctl(`ui=start god=1 govern=0 profile=1 pace=1 view=${view},65`, from);
   await Bun.sleep(3000);
   const whole = await read(all);
@@ -329,6 +329,7 @@ async function cost(from: string[]): Promise<void> {
     ["without the soldiers' shadows", "shades=0"],
     ["without the interface", "interface=0"],
     ["a shadow picture read by every fragment of the street (walls=1)", "walls=1"],
+    ["without the sun's depth picture on walls and things (sun=0)", "sun=0"],
     ["runs drawn one by one (merge=0)", "merge=0"],
     ["runs joined across 200 triangles (merge=600)", "merge=600"],
     ["the levels' distances halved (nearer=50)", "nearer=50"],
@@ -341,7 +342,7 @@ async function cost(from: string[]): Promise<void> {
   const out = record(`cost-${engine.map}`, from);
   if (!has("--quick", from)) writeFileSync(out, JSON.stringify({ map: engine.map, view, pictures: engine.pictures, msaa: engine.msaa, rows: Object.fromEntries(rows) }, null, 2) + "\n");
   const signed = (ms: number) => `${ms >= 0 ? "+" : ""}${ms.toFixed(2)}`;
-  for (const [name, r] of rows) console.log(`${name.padEnd(46)} GPU ${r.gpuMs.toFixed(2)} ms (${signed(r.gpuMs - whole.gpuMs)}), draws ${r.drawMs.toFixed(2)} ms, choice ${r.selectMs.toFixed(2)} ms, ${r.tris} + ${r.figureTris} triangles in ${r.draws} draws`);
+  for (const [name, r] of rows) console.log(`${name.padEnd(62)} GPU ${r.gpuMs.toFixed(2)} ms (${signed(r.gpuMs - whole.gpuMs)}), draws ${r.drawMs.toFixed(2)} ms, choice ${r.selectMs.toFixed(2)} ms, ${r.tris} + ${r.figureTris} triangles in ${r.draws} draws`);
   console.log(`vita: ${out}`);
 }
 

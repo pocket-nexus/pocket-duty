@@ -153,6 +153,7 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
         &chunks::Settings {
             open_floor: number(&profile["light"]["openFloor"], 0.3),
             leaves_both: profile["light"]["leaves"].as_str() == Some("both"),
+            sun_apart: profile["sun"]["depth"].is_object(),
             texture_of,
             texture_flags,
             largest: list(&profile["lod"]["largest"], [4.0, 8.0, 0.0]),
@@ -266,6 +267,18 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
         }
     }
     scene.fx_texture = texels.add_ramp(&fx::picture(32), texture::CLAMP);
+
+    // ---- the sun's depth picture, for a device that takes the sun's shadow a pixel at a time
+    let sun_depth = profile["sun"]["depth"].is_object().then(|| {
+        let t6 = Instant::now();
+        let side = profile["sun"]["depth"]["side"].as_u64().unwrap_or(2048) as usize;
+        let (depths, rows) = lighting.sun_depth(scene.min, scene.max, side);
+        let length = 1.0 / (rows[2][0] * rows[2][0] + rows[2][1] * rows[2][1] + rows[2][2] * rows[2][2]).sqrt();
+        // Metres in the profile, shares of the picture's depth in the pack.
+        let record = pack::SunDepth { rows, texture: texels.add_depth(&depths, side), bias: number(&profile["sun"]["depth"]["bias"], 0.06) / length, edge: number(&profile["sun"]["depth"]["edge"], 0.12) / length, pad: 0 };
+        println!("sun: a depth picture of {side} texels a side over {:.0} m of light, {:.1} cm a texel across ({:.1} s)", length, 100.0 / (rows[0][0] * rows[0][0] + rows[0][1] * rows[0][1] + rows[0][2] * rows[0][2]).sqrt() / side as f32, t6.elapsed().as_secs_f32());
+        (record, side)
+    });
     scene.level_origin = level.origin;
     scene.level_x = level.axis_x;
     scene.level_z = level.axis_z;
@@ -301,6 +314,10 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     writer.add(pack::TEXD, &texels.bytes);
     writer.add(pack::CHNK, &built.chunks);
     writer.add(pack::WVTX, &built.vertices);
+    if let Some((record, _)) = &sun_depth {
+        writer.add(pack::WSHD, &built.shades);
+        writer.add(pack::SUND, &[*record]);
+    }
     writer.add(pack::WIDX, &built.indices);
     writer.add(pack::CLUS, &built.clusters);
     // A device whose rasterizer cuts a triangle at every side of the view asks nothing of the large ones.

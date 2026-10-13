@@ -5,11 +5,20 @@
 //   uUv     xy: the scale of the texture coordinates, over 32768; zw: their offset
 //   uSun    the two rows that take a place's x and z to the ground's shadow picture
 //   uHaze   x: where the haze starts, metres; y: 1 / (the metres it takes to be whole); z: 1 when on
+//   SUN     the sun's shadow comes from its depth picture, a pixel at a time: uDepth's three rows take a
+//           place to the picture's u, its v and the place's own depth; aShade (and aColor's alpha) is the
+//           vertex's colour with the sun off, aColor its colour with nothing between it and the sun
 
 void main(
     float4 aPosition,
     float2 aUv,
     float4 aColor,
+#ifdef SUN
+    float2 aShade,
+    uniform float4 uDepth[3],
+    out float3 oSunAt : TEXCOORD3,
+    out float3 oShade : TEXCOORD4,
+#endif
     uniform float4x4 uClip,
     uniform float4 uPlace,
     uniform float4 uUv,
@@ -26,6 +35,10 @@ void main(
     float3 at = uPlace.xyz + aPosition.xyz * uPlace.w;
     oSun = float2(at.x * uSun[0].x + at.z * uSun[0].y + uSun[0].z, at.x * uSun[1].x + at.z * uSun[1].y + uSun[1].z);
     oAt = at;
+#ifdef SUN
+    oSunAt = float3(dot(uDepth[0].xyz, at) + uDepth[0].w, dot(uDepth[1].xyz, at) + uDepth[1].w, dot(uDepth[2].xyz, at) + uDepth[2].w);
+    oShade = float3(aShade.xy, aColor.a);
+#endif
     // (alpha: how much of the surface the haze leaves)
     oColor = float4(aColor.rgb, 1.0 - saturate((oPosition.w - uHaze.x) * uHaze.y) * uHaze.z);
 }

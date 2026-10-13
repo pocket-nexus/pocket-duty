@@ -547,6 +547,7 @@ unsafe fn remote(words: &str, set: &mut Settings, session: &mut Session, ui: &mu
             "shades" => set.look.shades = on,
             "flash" => set.look.flash = on,
             "walls" => set.look.walls = on,
+            "sun" => set.look.sun = on,
             "merge" => set.look.merge = next() as u32,
             "cull" => set.look.cull = next() as u8,
             "everything" => set.everything = on,

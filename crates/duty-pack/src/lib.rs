@@ -33,6 +33,12 @@ pub const TEXD: u32 = tag(b"TEXD");
 pub const CHNK: u32 = tag(b"CHNK");
 pub const WVTX: u32 = tag(b"WVTX");
 pub const WIDX: u32 = tag(b"WIDX");
+/// For a device that takes the sun's shadow a pixel at a time (the PS Vita): a colour for every
+/// vertex of `WVTX`, in its 16 bits, as the display shows the vertex with the sun off (`WVTX`'s own
+/// is then with nothing between the vertex and the sun), and one [`SunDepth`]. Absent from a pack
+/// whose vertices carry the shadow themselves.
+pub const WSHD: u32 = tag(b"WSHD");
+pub const SUND: u32 = tag(b"SUND");
 /// [`Cluster`] records: the runs of triangles a level of detail is drawn by.
 pub const CLUS: u32 = tag(b"CLUS");
 /// `Large` records, and for each cluster the number of its first one.
@@ -121,6 +127,21 @@ pub struct Scene {
     pub level_z: [f32; 3],
 }
 
+/// The sun's depth picture: how far the sun's light goes before it meets the map, seen from the sun.
+/// `rows` take a place (x, y, z, 1) to the picture's `u`, its `v` and the place's own depth, each 0…1;
+/// a place is lit when its depth is no more than the picture's there. `texture` is the picture
+/// (`texture::D16`), `bias` what a place's depth may exceed the picture's by and still be lit, and
+/// `edge` the depth over which the light goes out past that.
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct SunDepth {
+    pub rows: [[f32; 4]; 3],
+    pub texture: u32,
+    pub bias: f32,
+    pub edge: f32,
+    pub pad: u32,
+}
+
 pub mod texture {
     /// 8-bit indices into a palette of 256 32-bit colours; texels swizzled (the PSP's GE).
     pub const T8: u8 = 0;
@@ -139,6 +160,8 @@ pub mod texture {
     /// a quarter of true colour's bytes.
     pub const BC1: u8 = 5;
     pub const BC3: u8 = 6;
+    /// One number of 16 bits a texel, rows from the top one, one level: a depth ([`super::SunDepth`]).
+    pub const D16: u8 = 7;
     /// Palette entry 0 is clear: the device tests alpha.
     pub const CUTOUT: u16 = 1;
     /// Coordinates outside 0…1 take the edge's texel.
@@ -210,6 +233,10 @@ impl Texture {
         if self.format == texture::RGBA8 {
             let c = &texels[base + at + (y * width + x) * 4..][..4];
             return [c[0], c[1], c[2], c[3]];
+        }
+        if self.format == texture::D16 {
+            let v = texels[base + at + (y * width + x) * 2 + 1];
+            return [v, v, v, 255];
         }
         if let Some(block) = self.block() {
             let b = &texels[base + at + ((y / 4) * width.div_ceil(4) + x / 4) * block..][..block];
