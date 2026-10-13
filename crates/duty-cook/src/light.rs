@@ -108,6 +108,8 @@ pub struct Lighting {
     nodes: Vec<Node>,
     pub sky: Sky,
     rays: Vec<[f32; 3]>,
+    /// A place's floors lie at any height: which materials are a floor's, and a height over everything.
+    floors: Option<(Vec<bool>, f32)>,
 }
 
 /// Directions over the half space about +Y, their density following the cosine.
@@ -140,7 +142,13 @@ impl Lighting {
             tris.extend(soup.idx.chunks_exact(3).map(|t| bvh::Tri { v: [base + t[0], base + t[1], base + t[2]], tag }));
         }
         let nodes = bvh::build(&verts, &mut tris);
-        Lighting { verts, tris, nodes, sky, rays: hemisphere(rays) }
+        Lighting { verts, tris, nodes, sky, rays: hemisphere(rays), floors: None }
+    }
+
+    /// The map's floors lie at any height: `floor` says of each material whether it is a floor's, and
+    /// `top` is a height over everything. Without this the ground is what lies about height 0.
+    pub fn floors(&mut self, floor: Vec<bool>, top: f32) {
+        self.floors = Some((floor, top));
     }
 
     fn bvh(&self) -> Bvh<'_> {
@@ -158,7 +166,21 @@ impl Lighting {
 
     /// The height of the ground (or of what lies on it) at a point of the map.
     pub fn ground(&self, x: f32, z: f32) -> f32 {
-        self.bvh().raycast(v3(x, 0.9, z), v3(0.0, -1.0, 0.0), 4.0, tag::CLEAR).map_or(0.0, |hit| 0.9 - hit.t)
+        let Some((floor, top)) = &self.floors else {
+            return self.bvh().raycast(v3(x, 0.9, z), v3(0.0, -1.0, 0.0), 4.0, tag::CLEAR).map_or(0.0, |hit| 0.9 - hit.t);
+        };
+        // The highest floor at the point, under whatever stands over it: down through a roof and a
+        // crate until a face of a floor's material that looks up.
+        let mut y = *top;
+        for _ in 0..24 {
+            let Some(hit) = self.bvh().raycast(v3(x, y, z), v3(0.0, -1.0, 0.0), 400.0, tag::CLEAR) else { break };
+            let at = y - hit.t;
+            if floor.get((hit.tag & tag::MATERIAL) as usize).copied().unwrap_or(false) && hit.n.y > 0.5 {
+                return at;
+            }
+            y = at - 0.02;
+        }
+        0.0
     }
 
     /// How much of the sun a point sees, 0…1: rays to points across the sun's disc, widened to `spread` radians.

@@ -58,8 +58,9 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     let list = |v: &Value, fallback: [f32; 3]| -> [f32; 3] { core::array::from_fn(|i| number(&v[i], fallback[i] as f64)) };
     let settings = lod::Settings {
         error: list(&profile["lod"]["error"], [0.035, 0.16, 0.45]),
-        ground_families: profile["ground"]["families"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default(),
-        ground_below: number(&profile["ground"]["below"], 0.75),
+        // (a place's floors lie at any height and have surfaces of the map's own: its scene names them)
+        ground_families: [&profile["ground"]["families"], &scene_json["ground"]["families"]].iter().filter_map(|list| list.as_array()).flatten().filter_map(|v| v.as_str().map(String::from)).collect(),
+        ground_below: number(&scene_json["ground"]["below"], number(&profile["ground"]["below"], 0.75) as f64),
         min_area: list(&profile["lod"]["minArea"], [0.0, 0.0, 0.0]),
     };
     let t1 = Instant::now();
@@ -111,7 +112,10 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     let t2 = Instant::now();
     let tone = light::Tone::open(ir)?;
     let sky = light::Sky::open(ir)?;
-    let lighting = light::Lighting::new(&world, sky, profile["light"]["rays"].as_u64().unwrap_or(64) as usize);
+    let mut lighting = light::Lighting::new(&world, sky, profile["light"]["rays"].as_u64().unwrap_or(64) as usize);
+    if scene_json["ground"].is_object() {
+        lighting.floors(world.materials.iter().map(|m| settings.ground_families.contains(&m.family)).collect(), settings.ground_below);
+    }
     println!("light: {} triangles stand in its way, sun {:.3} {:.3} {:.3} at {:.1} h ({:.1} s)", lighting.triangles(), lighting.sky.sun.x, lighting.sky.sun.y, lighting.sky.sun.z, lighting.sky.hour, t2.elapsed().as_secs_f32());
 
     let mut scene = Scene {

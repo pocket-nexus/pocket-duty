@@ -456,6 +456,8 @@ async function exportScene() {
     map: world.map ? { id: world.map.id, title: world.map.title ?? world.map.id } : { id: 'street', title: 'Market Street' },
     seed: 0x5eed1234,
     bounds: { min: world.bounds.min.toArray(), max: world.bounds.max.toArray() },
+    // A place's floors lie at any height and have surfaces of its own: the cook's ground follows them.
+    ...(world.ground ? { ground: world.ground } : {}),
     // The reference lays the street out along its own axes and turns it into the world: a level point
     // (x, z) stands at `origin + x·axisX + z·axisZ`.
     level: {
@@ -483,15 +485,17 @@ window.__LOOK__ = async ({ pos, look, fov = 60, frames = 12 }) => {
   player?.setControlEnabled?.(false);
   if (engine.viewScene) engine.viewScene.visible = false;
   const camera = engine.camera;
-  world.levelToWorld(pos[0], pos[1], pos[2], camera.position);
+  // (a place's views are in its own coordinates: east, north, up)
+  const at = (p) => (world.fromPlace ? world.fromPlace(p) : world.levelToWorld(p[0], p[1], p[2]));
+  camera.position.copy(at(pos));
   camera.fov = fov;
   camera.updateProjectionMatrix();
-  camera.lookAt(world.levelToWorld(look[0], look[1], look[2]));
+  camera.lookAt(at(look));
   player?.teleport?.(camera.position, camera.rotation);
   await pump(frames);
   // (the player's own camera rig may have moved it: put it back for the frame that is looked at)
-  world.levelToWorld(pos[0], pos[1], pos[2], camera.position);
-  camera.lookAt(world.levelToWorld(look[0], look[1], look[2]));
+  camera.position.copy(at(pos));
+  camera.lookAt(at(look));
   camera.updateMatrixWorld(true);
   await pump(2);
   return true;

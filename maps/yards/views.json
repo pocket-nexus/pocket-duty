@@ -1,13 +1,12 @@
 [
-  { "name": "above", "pos": [0, 190, 30], "look": [0, 0, 0], "fov": 40 },
-  { "name": "south-street", "pos": [0.4, 1.7, 46], "look": [0, 2.2, 0], "fov": 65 },
-  { "name": "gate", "pos": [0.5, 1.7, -10], "look": [0, 3.5, -28], "fov": 65 },
-  { "name": "north-court", "pos": [-3, 1.7, -46], "look": [8, 2.5, -30], "fov": 70 },
-  { "name": "west-yard", "pos": [-27, 1.7, -30], "look": [-45, 1.5, -46], "fov": 70 },
-  { "name": "east-yard", "pos": [19, 1.7, -32], "look": [44, 2, -48], "fov": 70 },
-  { "name": "long-lane", "pos": [51.5, 1.7, 33], "look": [51.5, 2.2, -20], "fov": 65 },
-  { "name": "long-doors", "pos": [44, 1.7, 47], "look": [51.5, 2.2, 30], "fov": 65 },
-  { "name": "covered-way", "pos": [-51.5, 1.7, 29], "look": [-51.5, 1.8, -10], "fov": 70 },
-  { "name": "lower-way", "pos": [-9, 1.7, 5], "look": [-40, 1.8, 5], "fov": 65 },
-  { "name": "short-way", "pos": [8, 1.7, -9], "look": [26, 2, -12], "fov": 70 }
+  { "name": "above", "pos": [0, -8, 185], "look": [0, 0, 0], "fov": 40 },
+  { "name": "high-start", "pos": [-22, -56, 8.2], "look": [0, -52, 6], "fov": 70 },
+  { "name": "middle-lane", "pos": [0, -19, 4.7], "look": [0, 17, 1.5], "fov": 65 },
+  { "name": "doors-way", "pos": [25.5, -34, 4.7], "look": [25.5, -10, 4.4], "fov": 65 },
+  { "name": "long-lane", "pos": [45, -30, 1.7], "look": [45.5, 20, 5], "fov": 65 },
+  { "name": "east-site", "pos": [45, 22, 4.7], "look": [36, 32, 6.2], "fov": 70 },
+  { "name": "raised-walk", "pos": [5, -4, 4.7], "look": [17, 9, 4.6], "fov": 70 },
+  { "name": "low-start", "pos": [8, 24, 1.7], "look": [-1, 14, 1.6], "fov": 70 },
+  { "name": "west-site", "pos": [-20, 23, 4.7], "look": [-34, 35, 4.6], "fov": 70 },
+  { "name": "covered-way", "pos": [-41, -19, 5.7], "look": [-33, -6, 5.5], "fov": 75 }
 ]
