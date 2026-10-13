@@ -21,9 +21,11 @@
 //                                             # tools/listing.ts makes the listing's clips from. --bare: no interface
 //   bun tools/psp.ts package                  # dist/psp/PSP/GAME/PocketDuty for a Memory Stick: every cooked map's pack,
 //                                             # as pieces named by their bytes under one list (pocket.packs)
-//   bun tools/psp.ts emu [--frames 240] [--ctl "at=..."] [--out f.png] [--standalone] [--keep] [--no-interface]
+//   bun tools/psp.ts emu [--frames 240] [--ctl "at=..."] [--out f.png] [--standalone] [--keep] [--no-interface] [--timeout 240]
 //                                             # the same PRX in PPSSPPHeadless (software GE): a frame and its status;
-//                                             # --keep leaves interface.json from the last run
+//                                             # --keep leaves interface.json from the last run; a word of --ctl
+//                                             # written @N:word is said at frame N; --timeout is the seconds
+//                                             # the emulator may take
 //
 // `run`, `bench`, `tour`, `film` and `emu` take `--map <id>` (a directory under maps/): the map the run starts on. Every
 // cooked map's pack is staged, so the interface's map list offers them all. Staging brings a directory up

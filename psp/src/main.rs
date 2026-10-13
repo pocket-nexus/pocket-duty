@@ -31,6 +31,7 @@ use alloc::format;
 use alloc::string::String;
 use core::ffi::c_void;
 use core::fmt::Write;
+use core::mem::ManuallyDrop;
 
 use duty_interface::maps;
 use duty_interface::{channel, pad, parse_f32, Mode, Pad, Session};
@@ -317,6 +318,82 @@ fn micros() -> u32 {
     unsafe { sceKernelGetSystemTimeLow() }
 }
 
+/// One step of reading a map: said on the loading screen, where the guest takes a turn for it, or in
+/// the debug text when there is no interface.
+unsafe fn step(ui: &mut interface::Ui, waking: &Session, host: bool, name: &str) {
+    if ui.up() {
+        let state = &mut channel().state;
+        state.message.clear();
+        state.message.push_str(name);
+        ui.turn(interface::TURN, 0, interface::STICK_CENTER, waking);
+        gfx::interlude(ui);
+    } else {
+        psp::dprintln!("  {}", name);
+    }
+    if host {
+        store::note(&format!("{{\"target\":\"psp\",\"stage\":\"loading\",\"step\":\"{name}\"}}"));
+    }
+}
+
+/// What a run holds of one map. All of it lies in the map's memory (`mem::of_map`) or was made from
+/// what lies there, so it goes before another map is read into that memory.
+struct Held {
+    file: store::PackFile,
+    scene: Scene,
+    gfx: gfx::Gfx,
+    figures: Option<figures::Figures>,
+    game: Game<'static>,
+    sounding: bool,
+}
+
+impl Held {
+    /// Reads the map of `file` into the map's memory and starts a match's state on it, saying each step.
+    unsafe fn read(file: store::PackFile, ui: &mut interface::Ui, waking: &Session) -> Result<Held, &'static str> {
+        let host = file.host;
+        let mut stage = |name: &str| step(ui, waking, host, name);
+        let scene: Scene = *file.records::<Scene>(pack::SCEN)?.first().ok_or("scene section")?;
+        let gfx = gfx::Gfx::load(&file, scene, &mut stage)?;
+        stage("Reading the ground");
+        let solid_verts: store::Kept<[f32; 3]> = file.resident(pack::COLV)?;
+        let solid_tris: store::Kept<Tri> = file.resident(pack::COLT)?;
+        let solid_nodes: store::Kept<Node> = file.resident(pack::COLN)?;
+        let nav: store::Kept<u8> = file.resident(pack::NAVG)?;
+        let weapons: alloc::vec::Vec<WeaponDef> = file.records(pack::WEAP)?;
+        let defs: [WeaponDef; WEAPONS] = if weapons.len() == WEAPONS { [weapons[0], weapons[1], weapons[2]] } else { weapon::reference() };
+        // The sections stay where they are while this map is held.
+        let solid = Bvh { nodes: &*(solid_nodes.as_slice() as *const [Node]), tris: &*(solid_tris.as_slice() as *const [Tri]), verts: &*(solid_verts.as_slice() as *const [[f32; 3]]) };
+        let level: Level<'static> = Level::parse_nav(solid, &*(nav.as_slice() as *const [u8])).ok_or("the pack's walk grid")?;
+        stage("Reading the soldiers");
+        let figures = figures::Figures::load(&file);
+        stage("Reading the sounds");
+        let sounds: Option<(store::Kept<Sound>, store::Kept<u8>)> = file.resident(pack::SNDS).ok().zip(file.resident(pack::SNDD).ok());
+        let sounding = match &sounds {
+            Some((records, samples)) if records.len() == Id::ALL.len() => audio::start(&*(records.as_slice() as *const [Sound]), &*(samples.as_slice() as *const [u8])),
+            _ => audio::start(&[], &[]) && false,
+        };
+        stage("Starting");
+        let mut game = Game::new(level, defs, 0x5eed_1234);
+        game.timer = Some(micros);
+        // (no piece stays open between two maps)
+        file.rest();
+        Ok(Held { file, scene, gfx, figures, game, sounding })
+    }
+}
+
+/// Tells the session which map is held: its id, its picture from above (which travels beside its
+/// pack and goes into the interface's core here), and where the picture's corner lies.
+unsafe fn settle(session: &mut Session, file: &store::PackFile, scene: &Scene, ui: &mut interface::Ui) {
+    session.map_id = store::map().id;
+    session.chart = file.chart().and_then(|bytes| {
+        let (mut chart, entry) = duty_interface::Chart::parse(&bytes)?;
+        chart.handle = ui.picture(entry);
+        (chart.handle >= 0).then_some(chart)
+    });
+    file.rest();
+    // The map picture's corner, as the compiler laid it out about the level's origin.
+    session.map = (scene.level_origin[0] - 80.0, scene.level_origin[2] - 80.0);
+}
+
 unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'static str> {
     scePowerSetClockFrequency(333, 333, 166);
     // Test runs: `boot.txt` on the share holds control words for the start, plus `title=0` (no title card),
@@ -334,13 +411,24 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
     let t_load = sceKernelGetSystemTimeLow();
     let free_at_start = sceKernelTotalFreeMemSize();
     let file = store::PackFile::open()?;
-    let scene: Scene = *file.records::<Scene>(pack::SCEN)?.first().ok_or("scene section")?;
+    // Every map's sections go to memory that is cut once (`mem`): what the kernel has left beside the
+    // arena, and a stretch of the arena's tail. The stretch is as long as the largest map there is a
+    // pack for needs, when the interface still has its room beside it: another map is then read in the
+    // running program. Otherwise it is this map's alone, and a larger map is another run.
+    let first = mem::kernel_stretch();
+    let own = mem::tail_needed(file.kept_sizes(), first);
+    let largest = store::maps().filter_map(|map| store::tail_for(map, first)).fold(own, usize::max);
+    let room = arena::stats().tail_free_bytes;
+    let beside = 1024 * 1024 + interface::RESERVE;
+    let tail = if room >= largest + beside { largest } else { own };
+    if !mem::reserve_tail(tail) {
+        return Err("no memory for the pack");
+    }
 
     // The interface starts first when memory has room for it beside the pack: the loading steps
     // are then its first screen.
-    let room = arena::stats().tail_free_bytes + mem::kernel_room();
     let arena_before_ui = arena::stats().bump_bytes;
-    if room < file.resident_bytes() + 1024 * 1024 + interface::RESERVE {
+    if room < tail + beside {
         *ui = interface::Ui::none("no memory for the interface beside the pack");
         store::leave_beside(store::SCRIPT);
         store::leave_beside(store::PAK);
@@ -354,69 +442,29 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
         gfx::init();
         *on_screen = true;
     }
-    // While the pack loads the guest takes every turn it is offered.
+    // While a pack loads the guest takes every turn it is offered.
     let waking = Session::new();
-    let mut stage = |name: &str| {
-        if ui.up() {
-            let state = &mut channel().state;
-            state.message.clear();
-            state.message.push_str(name);
-            ui.turn(interface::TURN, 0, interface::STICK_CENTER, &waking);
-            gfx::interlude(ui);
-        } else {
-            psp::dprintln!("  {}", name);
-        }
-        if file.host {
-            store::note(&format!("{{\"target\":\"psp\",\"stage\":\"loading\",\"step\":\"{name}\"}}"));
-        }
-    };
-    let mut gfx = gfx::Gfx::load(&file, scene, &mut stage)?;
-    stage("Reading the ground");
-    let solid_verts: store::Kept<[f32; 3]> = file.resident(pack::COLV)?;
-    let solid_tris: store::Kept<Tri> = file.resident(pack::COLT)?;
-    let solid_nodes: store::Kept<Node> = file.resident(pack::COLN)?;
-    let nav: store::Kept<u8> = file.resident(pack::NAVG)?;
-    let weapons: alloc::vec::Vec<WeaponDef> = file.records(pack::WEAP)?;
-    let defs: [WeaponDef; WEAPONS] = if weapons.len() == WEAPONS { [weapons[0], weapons[1], weapons[2]] } else { weapon::reference() };
-    // The pack's sections live as long as the program.
-    let solid = Bvh { nodes: &*(solid_nodes.as_slice() as *const [Node]), tris: &*(solid_tris.as_slice() as *const [Tri]), verts: &*(solid_verts.as_slice() as *const [[f32; 3]]) };
-    let level: Level<'static> = Level::parse_nav(solid, &*(nav.as_slice() as *const [u8])).ok_or("the pack's walk grid")?;
-    stage("Reading the soldiers");
-    let mut figures = figures::Figures::load(&file);
-    stage("Reading the sounds");
-    let sounds: Option<(store::Kept<Sound>, store::Kept<u8>)> = file.resident(pack::SNDS).ok().zip(file.resident(pack::SNDD).ok());
-    let sounding = match &sounds {
-        Some((records, samples)) if records.len() == Id::ALL.len() => audio::start(&*(records.as_slice() as *const [Sound]), &*(samples.as_slice() as *const [u8])),
-        _ => false,
-    };
-    stage("Starting");
+    let Held { file, scene, gfx, figures, game, sounding } = Held::read(file, ui, &waking)?;
+    // What a change of map drops by hand before the next map is read: nothing drops these twice.
+    let (mut file, mut scene, mut gfx, mut figures, mut game, mut sounding) = (file, scene, ManuallyDrop::new(gfx), figures, ManuallyDrop::new(game), sounding);
     store::start(&file);
     if !*on_screen {
         // No interface: the debug text stood until here.
         gfx::init();
         *on_screen = true;
     }
-    let mut game = Game::new(level, defs, 0x5eed_1234);
-    game.timer = Some(micros);
     let mut session = Session::new();
-    // The map this run read, and the maps there is a pack for: what the interface's list offers.
-    session.map_id = store::map().id;
+    // The maps there is a pack for: what the interface's list offers.
     session.maps = store::maps().map(|map| map.id).collect();
-    // The map from above travels beside its pack: it goes into the interface's core, and the interface is told where.
-    session.chart = file.chart().and_then(|bytes| {
-        let (mut chart, entry) = duty_interface::Chart::parse(&bytes)?;
-        chart.handle = ui.picture(entry);
-        (chart.handle >= 0).then_some(chart)
-    });
-    // The map picture's corner, as the compiler laid it out about the level's origin.
-    session.map = (scene.level_origin[0] - 80.0, scene.level_origin[2] - 80.0);
     session.focal = 136.0 / tan(FOV * 0.5 * (PI / 180.0));
+    settle(&mut session, &file, &scene, ui);
     session.apply(&mut game);
     if store::plays() {
         session.play(&mut game);
     }
-    // A map the interface asked for: the program is started again on it (`store`).
-    let mut leaving: Option<&'static maps::Map> = None;
+    // The arena after each change of map, for the status: its carved bytes and what the change took.
+    let mut changes = String::new();
+    let mut changed = 0u32;
     {
         // What the interface asked to have kept in an earlier run.
         let mut buf = [0u8; store::KEPT_MAX];
@@ -478,19 +526,74 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
         if let Some(text) = session.obey(&mut game) {
             prefs = Some(text);
         }
-        // Another map is another run of the program: the storage thread writes its name down and starts
-        // the program again. Until then the match stands still and the screen says what is read; where
-        // the kernel will not start a program, it says how to go on.
+        // Another map takes the held one's place in the running program: the match, the renderer's lists
+        // and the map's memory go back, and the other map's pack is read into the same memory. The
+        // session is the one the interface set up, and the match begins on the new map.
         if let Some(to) = session.wanted.take().and_then(maps::named) {
-            store::change(to);
-            leaving = Some(to);
-        }
-        if let Some(to) = leaving {
-            let waits = store::change_waits();
-            session.mode = if waits { Mode::Error } else { Mode::Loading };
-            let message = &mut channel().state.message;
-            message.clear();
-            let _ = if waits { write!(message, "{} is chosen. Start Pocket Duty again to play it.", to.title) } else { write!(message, "Reading {}", to.title) };
+            let from = sceKernelGetSystemTimeLow();
+            let before = arena::stats().bump_bytes;
+            let fits = store::tail_for(to, mem::kernel_stretch()).is_some_and(|tail| tail <= mem::tail_reserved());
+            let read = if fits {
+                // (the GE finished the last frame's list at that frame's end; the sound thread lets go here)
+                audio::rest();
+                channel().state.mode = Mode::Loading;
+                ManuallyDrop::drop(&mut game);
+                ManuallyDrop::drop(&mut gfx);
+                drop(figures.take());
+                ui.unpicture(session.chart.take().map_or(-1, |chart| chart.handle));
+                mem::release_map();
+                store::hold(to);
+                store::PackFile::open().and_then(|next| Held::read(next, ui, &waking))
+            } else {
+                Err("the map needs more memory than this run set aside")
+            };
+            match read {
+                Ok(next) => {
+                    file = next.file;
+                    scene = next.scene;
+                    gfx = ManuallyDrop::new(next.gfx);
+                    figures = next.figures;
+                    game = ManuallyDrop::new(next.game);
+                    sounding = next.sounding;
+                    settle(&mut session, &file, &scene, ui);
+                    session.apply(&mut game);
+                    session.play(&mut game);
+                    // The screens the change took down left cycles of owners in the guest's heap.
+                    ui.collect();
+                    // (the next start of the program opens on this map)
+                    store::chose(to);
+                    if sounding {
+                        audio::ambience(Id::Ambience, 110);
+                    }
+                    changed += 1;
+                    if changed <= 12 {
+                        let _ = write!(changes, "{}{{\"map\":\"{}\",\"arena\":{},\"took\":{},\"mapBytes\":{},\"ms\":{}}}", if changed > 1 { "," } else { "" }, to.id, arena::stats().bump_bytes, arena::stats().bump_bytes as i64 - before as i64, mem::map_bytes(), sceKernelGetSystemTimeLow().wrapping_sub(from) / 1000);
+                    }
+                    last_vcount = sceDisplayGetVcount();
+                    last_swap = sceKernelGetSystemTimeLow();
+                    ticks = pace;
+                    continue;
+                }
+                Err(_) => {
+                    // The map could not be read here (this run set memory aside for a smaller one, or a
+                    // piece is missing): the program is started again on it, as every change once was.
+                    // Nothing of the old map is left to show, so the interface alone is drawn until then.
+                    store::change(to);
+                    loop {
+                        let waits = store::change_waits();
+                        let state = &mut channel().state;
+                        state.mode = if waits { Mode::Error } else { Mode::Loading };
+                        state.message.clear();
+                        let _ = if waits { write!(state.message, "{} is chosen. Start Pocket Duty again to play it.", to.title) } else { write!(state.message, "Reading {}", to.title) };
+                        if ui.up() {
+                            ui.turn(interface::TURN, 0, interface::STICK_CENTER, &waking);
+                            gfx::interlude(ui);
+                        } else {
+                            sceKernelDelayThread(100_000);
+                        }
+                    }
+                }
+            }
         }
         // What the interface asked to have kept goes to the storage thread, which writes it beside the pack.
         if let Some(text) = prefs.take() {
@@ -717,9 +820,9 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
             let s = gfx.stats;
             let c = s.counts;
             let recent = ui.recent();
-            let p = &game.player;
             // (a frame's worth: the steps of the last fifteen frames)
             let spent = core::mem::take(&mut game.spent).map(|us| us / 15);
+            let p = &game.player;
             let _ = write!(
                 status,
                 "{{\"target\":\"psp\",\"stage\":\"running\",\"map\":\"{}\",\"frames\":{},\"frameMs\":{:.2},\"worstMs\":{:.2},\"late\":{},\"mode\":\"{}\",\"draws\":{},\"tris\":{},\"figureTris\":{},\"clusters\":{{\"listed\":{},\"unseen\":{},\"outside\":{},\"turned\":{},\"drawn\":{},\"cut\":{},\"large\":{}}},\"cut\":{{\"tested\":{},\"near\":{},\"corners\":{},\"cut\":{}}},\"nearer\":{:.2},\"farNear\":{:.2},\"budget\":{},\"gpuMs\":{:.2},\"busyMs\":{:.2},\"geMs\":{:.2},\"geWaited\":{},\"cpuMs\":{{\"sim\":{:.2},\"select\":{:.2},\"list\":{:.2}}},\"simUs\":[{},{},{},{}],\"near\":[{},{},{}],\"selectUs\":{},\"listUs\":[{},{},{},{},{},{},{},{},{},{}],\"words\":{},\"eye\":[{:.2},{:.2},{:.2}],\"yaw\":{:.1},\"pitch\":{:.1},\"match\":{{\"health\":{:.0},\"us\":{},\"them\":{},\"clock\":{:.0},\"standing\":{},\"kills\":{},\"deaths\":{},\"shots\":{},\"hits\":{},\"weapon\":{},\"magazine\":{}}},\"sound\":{},\"memory\":{{\"freeAtStart\":{},\"freeAfterLoad\":{},\"free\":{},\"resident\":{},\"arena\":{{\"capacity\":{},\"afterLoad\":{},\"now\":{}}},\"kernelBlocks\":{}}},\"loadMs\":{},\"pack\":{},\"interface\":{{\"up\":{},\"error\":\"{}\",\"turns\":{},\"why\":[{},{},{},{},{}],\"turnMs\":{{\"script\":{:.2},\"layout\":{:.2},\"news\":{:.2},\"quiet\":{:.2},\"ticks\":{:.2},\"worst\":{:.2},\"recent\":{:.2}}},\"collections\":{},\"cpuMs\":{:.2},\"words\":{},\"bytes\":{}}}}}",
@@ -819,6 +922,11 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
                 ui.words(),
                 ui.bytes
             );
+            // (the arena across each change of map, before the record's last brace)
+            if changed > 0 && status.ends_with('}') {
+                status.pop();
+                let _ = write!(status, ",\"changes\":[{}]}}", changes);
+            }
             store::publish(&status);
         }
     }

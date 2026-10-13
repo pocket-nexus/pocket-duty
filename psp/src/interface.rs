@@ -141,6 +141,22 @@ impl Ui {
     }
 
     /// The guest is on the screen.
+    /// Takes a picture out of the interface's core (`picture` put it there).
+    pub unsafe fn unpicture(&mut self, texture: i32) {
+        if self.up() && texture >= 0 {
+            ffi::ui().free_texture(texture);
+        }
+    }
+
+    /// Runs the guest's cycle collector: the screens a change of map takes down leave owners that
+    /// point at each other, which reference counts do not free.
+    pub unsafe fn collect(&mut self) {
+        if let Some((rt, ..)) = self.guest {
+            JS_RunGC(rt);
+            self.collected = arena::stats().bump_bytes;
+        }
+    }
+
     /// Puts a picture (a PocketJS image entry) in the interface's core: its texture there, or -1.
     pub unsafe fn picture(&mut self, entry: &[u8]) -> i32 {
         if self.up() {

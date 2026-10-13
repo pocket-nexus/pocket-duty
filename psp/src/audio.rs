@@ -38,9 +38,11 @@ static TAKEN: AtomicU32 = AtomicU32::new(0);
 
 static STARTED: AtomicU32 = AtomicU32::new(0);
 static RUNNING: AtomicU32 = AtomicU32::new(0);
+/// The frame thread asks the output thread to let go of the sections: 1 asked, 2 let go, 0 playing.
+static HOLD: AtomicU32 = AtomicU32::new(0);
 
-// What the output thread works on. `start` writes the two sections before the thread exists;
-// after that only the thread touches the three.
+// What the output thread works on. `start` writes the two sections before the thread exists, and
+// again for another map while the thread has let go of them (`rest`); the mixer is the thread's alone.
 static mut MIXER: Mixer<VOICES> = Mixer::new();
 static mut SOUNDS: &[Sound] = &[];
 static mut SAMPLES: &[u8] = &[];
@@ -51,11 +53,16 @@ static mut SAMPLES: &[u8] = &[];
 /// # Safety
 /// From the frame thread, as every other function here.
 pub unsafe fn start(sounds: &'static [Sound], samples: &'static [u8]) -> bool {
-    if STARTED.load(Ordering::Relaxed) != 0 {
-        return true;
-    }
     addr_of_mut!(SOUNDS).write(sounds);
     addr_of_mut!(SAMPLES).write(samples);
+    if STARTED.load(Ordering::Relaxed) != 0 {
+        // Another map's sections: the thread, which let go of the last map's (`rest`), takes these.
+        HOLD.store(0, Ordering::Release);
+        return true;
+    }
+    if sounds.is_empty() {
+        return false;
+    }
     // Above the frame thread's priority (a lower number): a block is due every 23 ms whatever a frame takes.
     let id = sceKernelCreateThread(b"duty_audio\0".as_ptr(), output, 24, 32 * 1024, ThreadAttributes::USER, ptr::null_mut());
     if id.0 < 0 || sceKernelStartThread(id, 0, ptr::null_mut()) < 0 {
@@ -63,6 +70,18 @@ pub unsafe fn start(sounds: &'static [Sound], samples: &'static [u8]) -> bool {
     }
     STARTED.store(1, Ordering::Relaxed);
     true
+}
+
+/// Has the output thread let go of the sound sections, whose memory another map is about to take:
+/// every sound stops, and it plays silence until `start` hands it the next map's. Returns once it has.
+pub unsafe fn rest() {
+    if !running() {
+        return;
+    }
+    HOLD.store(1, Ordering::Release);
+    while HOLD.load(Ordering::Acquire) != 2 {
+        sceKernelDelayThread(1_000);
+    }
 }
 
 /// True once the thread holds the output channel.
@@ -142,15 +161,23 @@ unsafe extern "C" fn output(_: usize, _: *mut c_void) -> i32 {
     RUNNING.store(1, Ordering::Relaxed);
     // SAFETY: see the three statics.
     let mixer = &mut *addr_of_mut!(MIXER);
-    let sounds = addr_of!(SOUNDS).read();
-    let samples = addr_of!(SAMPLES).read();
     let mut block = Align16([0i16; BLOCK * 2]);
     let mut bed = None;
     loop {
-        take(mixer, sounds, &mut bed);
         // The mixer adds to what the block holds.
         block.0 = [0; BLOCK * 2];
-        mixer.render(sounds, samples, &mut block.0);
+        if HOLD.load(Ordering::Acquire) != 0 {
+            // A change of map: nothing plays and no section is read until the next map's are there.
+            mixer.stop_all();
+            bed = None;
+            HOLD.compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire).ok();
+        } else {
+            // (the sections are the held map's: read where they are now)
+            let sounds = addr_of!(SOUNDS).read();
+            let samples = addr_of!(SAMPLES).read();
+            take(mixer, sounds, &mut bed);
+            mixer.render(sounds, samples, &mut block.0);
+        }
         if sceAudioSRCOutputBlocking(0x8000, block.0.as_mut_ptr() as *mut c_void) < 0 {
             // The output took nothing and held nobody: wait a block's time, or this loop would
             // keep the frame thread from running.

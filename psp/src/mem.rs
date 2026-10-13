@@ -3,9 +3,14 @@
 //! PocketJS's arena is the program's allocator (`pocketjs-psp` installs it):
 //! one kernel block, handed out in power-of-two classes so that QuickJS's
 //! churn recycles in constant time. A 4.8 MB vertex buffer from it would take
-//! 8 MB. The world's buffers live for the whole run and are never given back,
-//! so they come from here: first from the 2 MB the arena leaves the kernel
-//! (as kernel blocks, down to `KEEP`), then from the arena's uncarved tail.
+//! 8 MB, and the arena takes nothing back that it cut at an exact size.
+//!
+//! So a map's sections lie in two stretches cut once: what the 2 MB the arena
+//! leaves the kernel have beyond `KEEP` (one kernel block), and a stretch of
+//! the arena's uncarved tail as long as the largest map needs. A map's
+//! sections fill them from their starts; another map takes them over from the
+//! start again (`release_map`). The interface's pak, which stays for the run,
+//! comes from `permanent`.
 //!
 //! Only the frame thread allocates.
 
@@ -53,11 +58,107 @@ pub unsafe fn permanent(bytes: usize) -> *mut u8 {
     arena::alloc_permanent(bytes, 64)
 }
 
-/// A vector of capacity `n` over permanent memory, empty. It must live for the rest of the run and
-/// never grow: the allocator did not hand this memory out and cannot take it back.
-pub unsafe fn vec<T: Copy>(n: usize) -> Option<Vec<T>> {
-    let p = permanent(n.max(1) * core::mem::size_of::<T>());
+// ---------------------------------------------------------------- one map's memory
+
+/// A stretch of memory: where it starts, its length, and how much of it the held map's sections take.
+#[derive(Clone, Copy)]
+struct Stretch {
+    base: usize,
+    bytes: usize,
+    used: usize,
+}
+
+/// The kernel's stretch, then the arena's. A base of 0 is a stretch not cut yet.
+static mut STRETCHES: [Stretch; 2] = [Stretch { base: 0, bytes: 0, used: 0 }; 2];
+/// The second stretch is this much longer than the sections' sizes call for: a section's records can
+/// take a few bytes more than its size says (an empty one takes a record).
+const SLACK: usize = 4096;
+
+/// What a request takes of a stretch: 64-byte aligned, 16 bytes at least.
+const fn taken(bytes: usize) -> usize {
+    ((if bytes < 16 { 16 } else { bytes }) + 63) & !63
+}
+
+/// Bytes of the second stretch that sections of these sizes take, read in this order, when the first
+/// stretch is `first` long: each goes to the first stretch while it fits there (`of_map` does the same).
+pub fn tail_needed(sizes: impl Iterator<Item = usize>, first: usize) -> usize {
+    let (mut a, mut b) = (0, SLACK);
+    for bytes in sizes {
+        if a + taken(bytes) <= first {
+            a += taken(bytes);
+        } else {
+            b += taken(bytes);
+        }
+    }
+    b
+}
+
+/// The kernel's stretch, cut on the first call: all the kernel can give as one block beyond what it
+/// keeps. Its length, 0 when the kernel has less than a block is worth.
+pub unsafe fn kernel_stretch() -> usize {
+    let stretch = &mut (*ptr::addr_of_mut!(STRETCHES))[0];
+    if stretch.base == 0 {
+        // (kernel blocks start on 256-byte boundaries)
+        let room = kernel_room() & !255;
+        *stretch = match if room >= SMALL { kernel_block(room) } else { None } {
+            Some((p, _)) => {
+                KERNEL_BYTES += room;
+                Stretch { base: p as usize, bytes: room, used: 0 }
+            }
+            None => Stretch { base: usize::MAX, bytes: 0, used: 0 },
+        };
+    }
+    stretch.bytes
+}
+
+/// Cuts the arena's stretch, `bytes` long, once. False when the arena's tail is shorter than that.
+pub unsafe fn reserve_tail(bytes: usize) -> bool {
+    let stretch = &mut (*ptr::addr_of_mut!(STRETCHES))[1];
+    if stretch.base != 0 {
+        return stretch.bytes >= bytes;
+    }
+    let p = arena::alloc_permanent(bytes.max(64), 64);
+    if p.is_null() {
+        return false;
+    }
+    *stretch = Stretch { base: p as usize, bytes: bytes.max(64), used: 0 };
+    true
+}
+
+/// The arena's stretch as it was cut.
+pub unsafe fn tail_reserved() -> usize {
+    (*ptr::addr_of!(STRETCHES))[1].bytes
+}
+
+/// Bytes of the two stretches the held map's sections take.
+pub unsafe fn map_bytes() -> usize {
+    (*ptr::addr_of!(STRETCHES)).iter().map(|stretch| stretch.used).sum()
+}
+
+/// `bytes` of the held map's memory, 64-byte aligned and uninitialized. Null when neither stretch has them.
+pub unsafe fn of_map(bytes: usize) -> *mut u8 {
+    for stretch in (*ptr::addr_of_mut!(STRETCHES)).iter_mut() {
+        if stretch.base != 0 && stretch.used + taken(bytes) <= stretch.bytes {
+            let p = stretch.base + stretch.used;
+            stretch.used += taken(bytes);
+            return p as *mut u8;
+        }
+    }
+    ptr::null_mut()
+}
+
+/// A vector of capacity `n` over the held map's memory, empty. It must not grow and is never dropped:
+/// its memory goes with the map.
+pub unsafe fn map_vec<T: Copy>(n: usize) -> Option<Vec<T>> {
+    let p = of_map(n.max(1) * core::mem::size_of::<T>());
     (!p.is_null()).then(|| Vec::from_raw_parts(p.cast(), 0, n.max(1)))
+}
+
+/// Hands the held map's memory to the next map. Nothing may point into it any more.
+pub unsafe fn release_map() {
+    for stretch in (*ptr::addr_of_mut!(STRETCHES)).iter_mut() {
+        stretch.used = 0;
+    }
 }
 
 /// Bytes the kernel can still give as one block, beyond what it keeps.
