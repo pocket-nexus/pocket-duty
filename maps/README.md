@@ -103,14 +103,14 @@ Two rules of the walk grid shape a plan: **a step between two floors is 0.45 m a
 
 ## On the devices
 
-A device holds **one map's pack at a time**. The interface lists the maps the device has a pack for (`maps` of the state); with one, the title's first row starts the match as before.
+A device holds **one map's pack at a time**, and reads it through one list of every map's pack, `pocket.packs`: the packs cut into **pieces named by their bytes** (PocketJS's `pocket3d-packs`; `tools/packs.ts` cuts them and brings them to a device, the pieces it lacks). The interface lists the maps the device has a pack for (`maps` of the state); with one, the title's first row starts the match as before.
 
-| Device | Where the packs are | A change of map |
+| Device | Where the pieces are | A change of map |
 | --- | --- | --- |
-| Browser tab | A file or a manifest a map, named by the page (`<meta name="pocket-pack">` for the first, `<meta name="pocket-packs">` for the others) | The shell lets its world go, the page reads the other pack (`Duty::map_wanted`), the match starts when it is there |
-| PSP | `duty.pack` and `<id>.pack` beside `EBOOT.PBP` | A pack's memory cannot be given back, so another map is another run: the program writes `map.txt` and starts itself again (`store::start_again`), into the match. Where the kernel will not start it, the screen says to start it again, and that start opens on the chosen map |
-| Nintendo 3DS | `romfs:/duty.pack`, inside the `.3dsx` | None: a package holds one map, the first unless it is built for another (`bun tools/n3ds.ts build --map <id>`). The `.3dsx` is **31.1 MB** with the street and **32.5 MB** with Twin Yards, and the paired wire installs **32 MiB** at most, so a second pack does not fit in it |
+| Browser tab | `pack/<hash>.packs` and its `.bin` files in the page's directory; the page names `<manifest>#<map>` | The shell lets its world go, the page reads the other pack (`Duty::map_wanted`), the match starts when it is there |
+| PSP | `pocket.packs` and the pieces beside `EBOOT.PBP` (on PSPLINK: `host0:/duty/`) | A pack's memory cannot be given back, so another map is another run: the program writes `map.txt` and starts itself again (`store::start_again`), into the match. Where the kernel will not start it, the screen says to start it again, and that start opens on the chosen map |
+| Nintendo 3DS | `sdmc:/3ds/pocket-duty/packs/` on the memory card, then `romfs:/packs/` inside the `.3dsx` | In the running program: it frees the pack's sections and its textures and reads the other map's (`dt_wanted`, `dt_drop`, `load` in `n3ds/src/main.c`) |
 
-A `.3dsx` of another map is the same program with that map's pack in its ROMFS: `bun tools/duty.ts cook --map <id> --profile n3ds30` (25 seconds), then `bun tools/n3ds.ts build --map <id>` and `emu --map <id>`. Its interface lists that map alone, and the core is built with the map's id (`DUTY_MAP`).
+**The 3DS package is a zip** of `3ds/pocket-duty/pocket-duty.3dsx` and `3ds/pocket-duty/packs/`, unpacked onto the root of the memory card: the list has every map. The `.3dsx` alone holds the first map in its ROMFS (`bun tools/n3ds.ts build --embed <id>`, `--embed none` for the zip's), so it stays under the **32 MiB** the paired wire installs and a program installed over the wire plays; `bun tools/n3ds.ts bring` then sends the running program the pieces its card lacks over the LAN.
 
-Choosing among maps on a 3DS needs three things this repository does not have: the host opening `sdmc:/3ds/pocket-duty/<id>.pack` before `romfs:/duty.pack` (`n3ds/src/main.c`, where the pack is opened) and letting go of a pack's memory or starting itself again, a way to put a pack of 28 MB on the card (the wire sends one program), and a package of more than one file on Pocket Studio.
+Checked in Chrome, PPSSPPHeadless and Azahar. **No console has read pieces or changed map this way**: the LAN delivery to a 3DS, the map change on a 3DS's memory, and a PSP opening pieces from a Memory Stick are unchecked.

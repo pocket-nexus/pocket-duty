@@ -3,9 +3,22 @@
 // the C host into a .3dsx (devkitARM in PocketJS's pinned container), install
 // and start it over PocketJS's paired LAN wire, steer and measure it.
 //
-//   bun tools/n3ds.ts build [--no-ui]           # dist/3ds/pocket-duty.3dsx, the pack and the interface in its ROMFS
-//                                               # (--no-ui keeps the interface as last compiled)
+//   bun tools/n3ds.ts build [--no-ui] [--embed street|none]
+//                                               # dist/3ds/pocket-duty.3dsx with the interface in its ROMFS and one
+//                                               # map's pack as pieces there (the first map's; `none` for a
+//                                               # program that reads every pack from the card)
+//                                               # (--no-ui keeps the interface as last compiled; --map <id>
+//                                               # is --embed <id>)
+//   bun tools/n3ds.ts card <directory>          # what goes on a memory card, under <directory>: the .3dsx and
+//                                               # every cooked map's pack as pieces (3ds/pocket-duty/packs/),
+//                                               # brought up to date with the pieces <directory> lacks
 //   bun tools/n3ds.ts install [--no-build]      # build, send, start, wait for the program to report
+//   bun tools/n3ds.ts bring [--prune] [--verify]
+//                                               # bring the running program's card up to date with every cooked
+//                                               # map's pack over the LAN: the pieces it lacks, then the list
+//                                               # (--prune removes the pieces no map names any more; --verify
+//                                               # has the console read the pieces it holds). The program reads
+//                                               # the held map again from the new list
 //   bun tools/n3ds.ts status
 //   bun tools/n3ds.ts ctl "ui=start auto=1"     # the core's words (n3ds/core/src/lib.rs `dt_control`: mode=, ui=, pad=,
 //                                               # at=, near=, auto=, god=, hurt=, clock=, skill=, budget=, option=), and:
@@ -13,9 +26,11 @@
 //                                               #   touch=X,Y | touch=off (a stylus on the lower screen)
 //   bun tools/n3ds.ts capture [--out f.png] [--surface top|auxiliary]
 //   bun tools/n3ds.ts bench [--seconds 60] [--install]   # a match played by the bench's player → .pocket-build/validation/3ds/
-//   bun tools/n3ds.ts emu [--frames 90] [--ctl "at=..."] [--out f.png] [--prefs JSON]
+//   bun tools/n3ds.ts emu [--frames 90] [--ctl "at=..."] [--out f.png] [--prefs JSON] [--no-card] [--map <id>]
 //                                               # the same .3dsx in Azahar (software PICA): both screens of a
-//                                               # frame (the lower one under the upper) and the status
+//                                               # frame (the lower one under the upper) and the status. Every
+//                                               # cooked map's pack is on the emulated card unless --no-card;
+//                                               # --map changes to that map at the start
 //
 // `--host ADDRESS` (default 192.168.8.159, or POCKET_3DS_HOST). The console
 // must run a Pocket Runtime build with the paired wire: this program itself
@@ -30,7 +45,10 @@ import { pocketRuntimeDeviceId } from "../vendor/pocketjs/contracts/spec/pocket-
 import { extractHostBuildInputs } from "../vendor/pocketjs/framework/src/manifest/index.ts";
 import { withDeviceLease } from "../vendor/pocketjs/tools/device-lease.ts";
 import { ensureQuickJs, runContainer, THREE_DS_CONTAINER_IMAGE } from "../vendor/pocketjs/tools/3ds-toolchain.ts";
+import { deliver } from "../vendor/pocketjs/tools/pocket3d-delivery.ts";
+import { bring, writePacks } from "../vendor/pocketjs/tools/pocket3d-packs.ts";
 import { FIRST, mapNamed, packPath } from "./maps.ts";
+import { bringMaps, cooked, cutMaps, packsDir, said } from "./packs.ts";
 import { compileInterface } from "./ui.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -49,13 +67,15 @@ const opt = (key: string, fallback: string) => {
   const at = argv.indexOf(key);
   return at < 0 ? fallback : (argv[at + 1] ?? fallback);
 };
-// The map the package holds. The pack is in the `.3dsx` (its ROMFS), and the paired wire installs a file of
-// 32 MiB at most: one pack fits. So a package is one map's: the first, or `--map <id>` for a `.3dsx` of
-// another. Its interface lists that map alone, and the core is built knowing its id (`DUTY_MAP`).
-// maps/README.md says what choosing among maps on this device needs.
-const MAP = mapNamed(opt("--map", FIRST));
-const PACK = packPath(MAP.id, "n3ds30");
-const HELD = [MAP];
+// The maps' packs are pieces named by their bytes with one manifest (tools/packs.ts). The program reads the
+// card's copy when it is there (`sdmc:/3ds/pocket-duty/packs/`, every cooked map: `card`), and otherwise the
+// one map the `.3dsx` carries in its ROMFS (`--embed`, the first map's). The paired wire installs a file of
+// 32 MiB at most, so the `.3dsx` carries one pack or none; the interface lists every map that is cooked,
+// and the program offers the ones it finds a whole pack for.
+const EMBED = opt("--embed", opt("--map", FIRST));
+const HELD = cooked("n3ds30").map((each) => mapNamed(each.id));
+/** Where the card's files lie on it. */
+const CARD = "3ds/pocket-duty";
 const host = opt("--host", process.env.POCKET_3DS_HOST ?? "192.168.8.159");
 
 // Loaded by path at run time: PocketJS's client module is checked by PocketJS's own compiler settings.
@@ -107,13 +127,14 @@ async function interfaceCore(): Promise<string> {
 }
 
 async function build() {
-  if (!existsSync(PACK)) throw new Error(`no pack at ${PACK}: run \`bun tools/duty.ts cook${MAP.id === FIRST ? "" : ` --map ${MAP.id}`} --profile n3ds30\` first`);
+  if (HELD[0]?.id !== FIRST) throw new Error(`no pack at ${packPath(FIRST, "n3ds30")}: run \`bun tools/duty.ts cook --profile n3ds30\` first`);
+  if (EMBED !== "none" && !existsSync(packPath(mapNamed(EMBED).id, "n3ds30"))) throw new Error(`no pack of "${EMBED}" for the 3DS: bun tools/duty.ts cook --map ${EMBED} --profile n3ds30`);
   // The interface: its bundle and pak for this device, and the plan they were resolved against.
   const uiDirectory = join(ROOT, ".pocket-build/ui/3ds");
   const ui = argv.includes("--no-ui") ? extractHostBuildInputs(JSON.parse(readFileSync(join(uiDirectory, "plan.json"), "utf8"))) : (await compileInterface("3ds", HELD)).inputs;
   const aux = ui.surfaces?.auxiliary.logical;
   if (ui.viewport.logical.join("x") !== "400x240" || aux?.join("x") !== "320x240") throw new Error("the interface's 3DS presentation is not 400x240 over 320x240");
-  await $`rustup run ${TOOLCHAIN} cargo build --release`.cwd(join(ROOT, "n3ds/core")).env({ ...process.env, DUTY_MAP: MAP.id });
+  await $`rustup run ${TOOLCHAIN} cargo build --release`.cwd(join(ROOT, "n3ds/core"));
   const core = "n3ds/core/target/armv6k-nintendo-3ds/release/libduty_n3ds_core.a";
   const uiCore = await interfaceCore();
   const mounts = [{ hostPath: ROOT, containerPath: "/duty" }];
@@ -121,12 +142,17 @@ async function build() {
   const romfs = join(DIR, "romfs");
   mkdirSync(romfs, { recursive: true });
   mkdirSync(join(DIR, "build"), { recursive: true });
-  const packSha = JSON.parse(readFileSync(resolve(PACK, "../receipt.json"), "utf8")).pack.sha256 as string;
-  const mark = join(DIR, "romfs.json");
-  if (!existsSync(join(romfs, "duty.pack")) || !existsSync(mark) || JSON.parse(readFileSync(mark, "utf8")).sha256 !== packSha) {
-    cpSync(PACK, join(romfs, "duty.pack"));
-    writeFileSync(mark, JSON.stringify({ sha256: packSha }));
+  // The ROMFS's packs: the embedded map's pieces and a manifest that lists that map alone, or nothing.
+  rmSync(join(romfs, "duty.pack"), { force: true });
+  rmSync(join(DIR, "romfs.json"), { force: true });
+  let packSha = "no pack";
+  if (EMBED === "none") rmSync(join(romfs, "packs"), { recursive: true, force: true });
+  else {
+    const cut = writePacks(join(DIR, "embed"), [{ name: mapNamed(EMBED).id, file: packPath(EMBED, "n3ds30") }]);
+    bring(join(DIR, "embed"), cut.manifest, join(romfs, "packs"), { prune: true });
+    packSha = cut.packs[0]!.sha256;
   }
+  mkdirSync(join(romfs, "packs"), { recursive: true });
   // The build's identity: the sources, both Rust libraries, the interface and the pack.
   const id = new Bun.CryptoHasher("sha256");
   for (const f of readdirSync(join(ROOT, "n3ds/src")).sort()) id.update(readFileSync(join(ROOT, "n3ds/src", f)));
@@ -152,8 +178,9 @@ async function build() {
   await runContainer(
     `mkdir -p /tmp/source /tmp/build /tmp/romfs && tar -xf /duty/.pocket-build/3ds/${snapshot} -C /tmp/source
 cp /tmp/source/.pocket-build/3ds/build/config.h /tmp/build/config.h
-cp /duty/.pocket-build/3ds/romfs/duty.pack /tmp/source/.pocket-build/ui/3ds/duty.js /tmp/source/.pocket-build/ui/3ds/duty.pak /tmp/romfs/
-echo "${packSha}  /tmp/romfs/duty.pack" | sha256sum -c -
+cp /tmp/source/.pocket-build/ui/3ds/duty.js /tmp/source/.pocket-build/ui/3ds/duty.pak /tmp/romfs/
+mkdir -p /tmp/romfs/packs && cp -r /duty/.pocket-build/3ds/romfs/packs/. /tmp/romfs/packs/
+for piece in /tmp/romfs/packs/*.bin; do [ -e "$piece" ] || continue; [ "$(sha256sum "$piece" | cut -c1-20)" = "$(basename "$piece" .bin)" ] || { echo "$piece is not the piece its name says"; exit 1; }; done
 make -f /tmp/source/n3ds/Makefile -j8 BUILD=/tmp/build SOURCE=/tmp/source/n3ds/src ROMFS=/tmp/romfs CORE=/tmp/source/${core} UI_CORE=/tmp/source/${uiCoreInTar}
 cp /tmp/build/duty.elf /tmp/build/duty.map /duty/.pocket-build/3ds/build/`,
     mounts,
@@ -264,6 +291,20 @@ switch (cmd) {
     await device(async (lease) => console.log(JSON.stringify(await install(lease, receipt), null, 1)));
     break;
   }
+  case "bring":
+    await device(async () => {
+      const written = cutMaps("n3ds30");
+      console.log(said(written));
+      const brought = await session((c) =>
+        deliver(c, packsDir("n3ds30"), written.manifest, {
+          prune: argv.includes("--prune"),
+          verify: argv.includes("--verify"),
+          onPiece: (piece, done, of) => console.log(`${String(done).padStart(3)}/${of} ${piece.name} ${piece.bytes} bytes${piece.had ? " (there)" : ""}`),
+        }),
+      );
+      console.log(`3ds: ${brought.sent} pieces sent (${(brought.bytes / 1048576).toFixed(1)} MiB), ${brought.had} were there, ${brought.removed} removed, ${(brought.ms / 1000).toFixed(1)} s`);
+    });
+    break;
   case "status":
     await device(async () => console.log(JSON.stringify(await session((c) => status(c)), null, 1)));
     break;
@@ -351,6 +392,18 @@ switch (cmd) {
       });
     });
     break;
+  case "card": {
+    // What a memory card takes: the program where the Homebrew Launcher lists it, and beside it every cooked
+    // map's pack as pieces with their manifest. A directory that has some of the pieces gets the others.
+    const to = argv[1];
+    if (!to || to.startsWith("--")) throw new Error("usage: bun tools/n3ds.ts card <directory>");
+    if (!existsSync(ARTIFACT)) throw new Error(`${ARTIFACT} is missing: bun tools/n3ds.ts build --embed none`);
+    mkdirSync(join(to, CARD), { recursive: true });
+    cpSync(ARTIFACT, join(to, CARD, NAME));
+    const brought = bringMaps("n3ds30", join(to, CARD, "packs"), { prune: true });
+    console.log(`${said(brought.written)}\n${resolve(to)}: ${CARD}/${NAME}, and ${brought.sent} pieces copied to ${CARD}/packs/ (${brought.had} were there)`);
+    break;
+  }
   case "emu": {
     // Azahar with a home of its own: the emulated memory card holds the run's control words, and takes the
     // frame and the status the program writes.
@@ -369,8 +422,12 @@ switch (cmd) {
     writeFileSync(`${user}/config/qt-config.ini`, config);
     const card = `${user}/sdmc/pocket-duty`;
     mkdirSync(card, { recursive: true });
+    // The card's packs: every cooked map's (`--no-card`: the `.3dsx` and what its ROMFS carries, alone).
+    if (!argv.includes("--no-card")) bringMaps("n3ds30", `${user}/sdmc/${CARD}/packs`);
     const frames = Number(opt("--frames", "90"));
-    writeFileSync(`${card}/boot.txt`, `title=0 ${opt("--ctl", "")} shot=${frames} exit=${frames + 3}\n`);
+    // `--map <id>`: the run changes to that map at its start, as a choice in the interface's list does.
+    const onMap = argv.includes("--map") ? `map=${mapNamed(opt("--map", FIRST)).id} ` : "";
+    writeFileSync(`${card}/boot.txt`, `title=0 ${onMap}${opt("--ctl", "")} shot=${frames} exit=${frames + 3}\n`);
     // What the interface kept in an earlier run, when the run is to start from it.
     const kept = `${user}/sdmc/3ds/pocket-duty/interface.json`;
     if (opt("--prefs", "")) {
@@ -448,6 +505,6 @@ switch (cmd) {
     break;
   }
   default:
-    console.log("usage: bun tools/n3ds.ts <build|install|status|ctl|capture|bench|emu> [--host ADDRESS]");
+    console.log("usage: bun tools/n3ds.ts <build|card|install|bring|status|ctl|capture|bench|emu> [--host ADDRESS]");
     process.exit(cmd ? 1 : 0);
 }

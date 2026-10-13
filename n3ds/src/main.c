@@ -34,6 +34,8 @@
 #include <sys/stat.h>
 
 #include "core.h"
+#include "packs_delivery.h"
+#include "pocket3d_packs.h"
 #include "devserver.h"
 #include "gfx.h"
 #include "guest.h"
@@ -125,9 +127,58 @@ typedef struct {
   u32 tag, offset, size, zero;
 } Section;
 
-static FILE *pack;
+/* The maps' packs are pieces named by their bytes, listed in one manifest (pocket3d_packs.h, PocketJS's
+ * tools/pocket3d-packs.ts): `pocket.packs` and the pieces beside it. The card's copy is read when it is
+ * there (a release's zip puts it in sdmc:/3ds/pocket-duty/packs/), with every map it lists; otherwise the
+ * one the `.3dsx` carries in its ROMFS. */
+static const char *const PACK_DIRS[] = {"sdmc:/3ds/pocket-duty/packs/", "romfs:/packs/"};
+/* Where a delivery over the LAN puts the pieces and the list (`bun tools/n3ds.ts bring`): the card's directory. */
+#define CARD_PACKS "sdmc:/3ds/pocket-duty/packs"
+/* A delivery replaced the list of packs: the held map is read again from it. */
+static bool relist;
+static const char *pack_dir;
+static P3dPacks *packs;
+static int held = -1;
+static char held_id[P3D_PACK_NAME_BYTES + 1];
 static Section sections[32];
 static u32 section_count, pack_bytes;
+/* The piece read last stays open: a section is read from one piece or from a few in a row. */
+static FILE *piece;
+static char piece_name[P3D_PIECE_FILE_BYTES];
+
+static int32_t piece_read(void *user, const char *file, uint32_t at, uint8_t *into, uint32_t bytes) {
+  (void)user;
+  if (!piece || strcmp(file, piece_name) != 0) {
+    char path[96];
+    if (piece)
+      fclose(piece);
+    snprintf(path, sizeof path, "%s%s", pack_dir, file);
+    piece = fopen(path, "rb");
+    snprintf(piece_name, sizeof piece_name, "%s", piece ? file : "");
+    if (!piece)
+      return 2;
+  }
+  return fseek(piece, at, SEEK_SET) == 0 && fread(into, 1, bytes, piece) == bytes ? 0 : 3;
+}
+
+/* Closes the piece read last: a delivery may replace or remove its file. */
+static void rest_piece(void) {
+  if (piece)
+    fclose(piece);
+  piece = NULL;
+  piece_name[0] = 0;
+}
+
+/* Lets go of the list of packs, so that `load` reads the one a delivery wrote. */
+static void forget_packs(void) {
+  rest_piece();
+  if (packs)
+    p3d_packs_free(packs);
+  packs = NULL;
+  held = -1;
+}
+
+static bool pack_read(u32 offset, void *into, u32 bytes) { return p3d_packs_read(packs, held, offset, into, bytes, piece_read, NULL) == 0; }
 
 static const Section *section(u32 tag) {
   for (u32 i = 0; i < section_count; i++)
@@ -136,35 +187,101 @@ static const Section *section(u32 tag) {
   return NULL;
 }
 
+/* What `read_section` handed out for the map that is held: freed when another map is read. */
+static struct {
+  void *p;
+  bool linear;
+} owned[40];
+static unsigned owned_count;
+
 /* Reads a whole section into memory from `alloc` (malloc or linearAlloc). */
-static void *read_section(u32 tag, void *(*alloc)(size_t), u32 *size) {
+static void *read_section(u32 tag, void *(*alloc)(size_t), bool in_linear, u32 *size) {
   const Section *s = section(tag);
-  if (!s)
+  if (!s || owned_count == sizeof owned / sizeof *owned)
     return NULL;
   void *p = alloc(s->size ? s->size : 1);
   if (!p)
     return NULL;
-  if (fseek(pack, s->offset, SEEK_SET) != 0 || fread(p, 1, s->size, pack) != s->size)
+  owned[owned_count].p = p;
+  owned[owned_count++].linear = in_linear;
+  if (!pack_read(s->offset, p, s->size))
     return NULL;
   if (size)
     *size = s->size;
   return p;
 }
 
-static bool open_pack(void) {
-  pack = fopen("romfs:/duty.pack", "rb");
-  if (!pack) {
-    snprintf(app_error, sizeof app_error, "romfs:/duty.pack is missing");
+static void free_sections(void) {
+  while (owned_count) {
+    owned_count--;
+    if (owned[owned_count].linear)
+      linearFree(owned[owned_count].p);
+    else
+      free(owned[owned_count].p);
+  }
+}
+
+/* Whether every piece of a pack is in the directory. */
+static bool pack_whole(u32 index) {
+  for (u32 i = 0; i < p3d_packs_pieces(packs, index); i++) {
+    char file[P3D_PIECE_FILE_BYTES], path[96];
+    p3d_packs_piece(packs, index, i, file);
+    snprintf(path, sizeof path, "%s%s", pack_dir, file);
+    FILE *f = fopen(path, "rb");
+    if (!f)
+      return false;
+    fclose(f);
+  }
+  return true;
+}
+
+/* Finds the manifest and says which maps there is a whole pack for (`have`: ids with spaces between). */
+static bool find_packs(char *have, size_t cap) {
+  for (unsigned d = 0; d < sizeof PACK_DIRS / sizeof *PACK_DIRS && !packs; d++) {
+    char path[96];
+    snprintf(path, sizeof path, "%spocket.packs", PACK_DIRS[d]);
+    FILE *f = fopen(path, "rb");
+    if (!f)
+      continue;
+    static char text[24 * 1024];
+    size_t n = fread(text, 1, sizeof text, f);
+    fclose(f);
+    packs = p3d_packs_parse((const uint8_t *)text, n);
+    pack_dir = PACK_DIRS[d];
+  }
+  if (!packs) {
+    snprintf(app_error, sizeof app_error, "no maps: sdmc:/3ds/pocket-duty/packs/pocket.packs is missing or is not a manifest");
     return false;
   }
+  have[0] = 0;
+  for (u32 i = 0; i < p3d_packs_count(packs); i++) {
+    char id[P3D_PACK_NAME_BYTES + 1];
+    p3d_packs_name(packs, i, id);
+    if (pack_whole(i) && strlen(have) + strlen(id) + 2 < cap) {
+      if (have[0])
+        strcat(have, " ");
+      strcat(have, id);
+    }
+  }
+  if (!have[0]) {
+    snprintf(app_error, sizeof app_error, "no map's pack is whole in %s", pack_dir);
+    return false;
+  }
+  return true;
+}
+
+/* Opens a map's pack: its table of sections. */
+static bool open_pack(const char *id) {
+  held = p3d_packs_find(packs, id);
   u32 head[4];
-  if (fread(head, 4, 4, pack) != 4 || head[0] != TAG('D', 'U', 'T', 'Y') || head[1] != dt_pack_version() || head[2] > 32 || fread(sections, sizeof(Section), head[2], pack) != head[2]) {
-    snprintf(app_error, sizeof app_error, "duty.pack is not a version %lu pack", (unsigned long)dt_pack_version());
+  if (held < 0 || !pack_read(0, head, 16) || head[0] != TAG('D', 'U', 'T', 'Y') || head[1] != dt_pack_version() || head[2] > 32 || !pack_read(16, sections, head[2] * sizeof(Section))) {
+    snprintf(app_error, sizeof app_error, "the pack of \"%s\" is not a version %lu pack", id, (unsigned long)dt_pack_version());
     return false;
   }
   section_count = head[2];
-  fseek(pack, 0, SEEK_END);
-  pack_bytes = ftell(pack);
+  char name[P3D_PACK_NAME_BYTES + 1];
+  pack_bytes = (u32)p3d_packs_name(packs, held, name);
+  snprintf(held_id, sizeof held_id, "%s", id);
   return true;
 }
 
@@ -174,7 +291,9 @@ static void *lined(size_t n) { return memalign(64, n); }
 
 static u32 micros(void) { return (u32)(svcGetSystemTick() * 1000000ULL / SYSCLOCK_ARM11); }
 
-static bool load(void) {
+static char maps_have[256];
+
+static bool load(const char *id) {
   u32 sizes[8];
   dt_sizes(sizes);
   if (sizes[0] != sizeof(DtPack) || sizes[1] != sizeof(DtDraw) || sizes[2] != sizeof(DtFigure) || sizes[3] != sizeof(DtView) || sizes[4] != sizeof(DtScene) || sizes[5] != sizeof(DtTexture) || sizes[6] != sizeof(DtFxVertex) ||
@@ -182,21 +301,27 @@ static bool load(void) {
     snprintf(app_error, sizeof app_error, "core.h does not match the core library");
     return false;
   }
-  if (!open_pack())
+  if (!packs && !find_packs(maps_have, sizeof maps_have))
+    return false;
+  /* (the first map there is a pack for, when none is named) */
+  char first[P3D_PACK_NAME_BYTES + 1];
+  snprintf(first, sizeof first, "%.*s", (int)strcspn(maps_have, " "), maps_have);
+  if (!open_pack(id ? id : first))
     return false;
   static RenderData data;
   static DtPack p;
+  memset(&p, 0, sizeof p);
   u32 size = 0;
   loading("Reading the map");
-  p.scene = read_section(TAG('S', 'C', 'E', 'N'), malloc, &size);
-  p.chunks = read_section(TAG('C', 'H', 'N', 'K'), lined, &size);
+  p.scene = read_section(TAG('S', 'C', 'E', 'N'), malloc, false, &size);
+  p.chunks = read_section(TAG('C', 'H', 'N', 'K'), lined, false, &size);
   p.chunk_count = size / 128;
-  p.clusters = read_section(TAG('C', 'L', 'U', 'S'), lined, &size);
+  p.clusters = read_section(TAG('C', 'L', 'U', 'S'), lined, false, &size);
   p.cluster_count = size / 32;
-  u8 *vertices = read_section(TAG('W', 'V', 'T', 'X'), linear, &size);
+  u8 *vertices = read_section(TAG('W', 'V', 'T', 'X'), linear, true, &size);
   if (vertices)
     GSPGPU_FlushDataCache(vertices, size);
-  u16 *indices = read_section(TAG('W', 'I', 'D', 'X'), linear, &size);
+  u16 *indices = read_section(TAG('W', 'I', 'D', 'X'), linear, true, &size);
   if (indices)
     GSPGPU_FlushDataCache(indices, size);
   if (!p.scene || !p.chunks || !p.clusters || !vertices || !indices) {
@@ -204,24 +329,24 @@ static bool load(void) {
     return false;
   }
   loading("Reading what is seen from where");
-  p.cells = read_section(TAG('V', 'C', 'E', 'L'), malloc, &size);
+  p.cells = read_section(TAG('V', 'C', 'E', 'L'), malloc, false, &size);
   p.cell_count = size / 12;
-  p.lists = read_section(TAG('V', 'L', 'S', 'T'), malloc, &size);
+  p.lists = read_section(TAG('V', 'L', 'S', 'T'), malloc, false, &size);
   p.list_count = size / 2;
-  p.bits = read_section(TAG('V', 'B', 'I', 'T'), malloc, &p.bit_bytes);
+  p.bits = read_section(TAG('V', 'B', 'I', 'T'), malloc, false, &p.bit_bytes);
   loading("Reading the pictures");
-  p.textures = read_section(TAG('T', 'E', 'X', 'T'), malloc, &size);
+  p.textures = read_section(TAG('T', 'E', 'X', 'T'), malloc, false, &size);
   p.texture_count = size / sizeof(DtTexture);
-  p.texels = read_section(TAG('T', 'E', 'X', 'D'), malloc, &p.texel_bytes);
+  p.texels = read_section(TAG('T', 'E', 'X', 'D'), malloc, false, &p.texel_bytes);
   loading("Reading the ground");
-  p.solid_verts = read_section(TAG('C', 'O', 'L', 'V'), malloc, &size);
+  p.solid_verts = read_section(TAG('C', 'O', 'L', 'V'), malloc, false, &size);
   p.solid_vert_count = size / 12;
-  p.solid_tris = read_section(TAG('C', 'O', 'L', 'T'), malloc, &size);
+  p.solid_tris = read_section(TAG('C', 'O', 'L', 'T'), malloc, false, &size);
   p.solid_tri_count = size / 16;
-  p.solid_nodes = read_section(TAG('C', 'O', 'L', 'N'), malloc, &size);
+  p.solid_nodes = read_section(TAG('C', 'O', 'L', 'N'), malloc, false, &size);
   p.solid_node_count = size / 32;
-  p.nav = read_section(TAG('N', 'A', 'V', 'G'), malloc, &p.nav_bytes);
-  p.weapons = read_section(TAG('W', 'E', 'A', 'P'), malloc, &size);
+  p.nav = read_section(TAG('N', 'A', 'V', 'G'), malloc, false, &p.nav_bytes);
+  p.weapons = read_section(TAG('W', 'E', 'A', 'P'), malloc, false, &size);
   p.weapon_bytes = p.weapons ? size : 0;
   if (!p.cells || !p.lists || !p.bits || !p.textures || !p.texels || !p.solid_verts || !p.solid_tris || !p.solid_nodes || !p.nav) {
     snprintf(app_error, sizeof app_error, "the pack lacks a table, or memory is short");
@@ -229,18 +354,20 @@ static bool load(void) {
   }
   loading("Reading the soldiers");
   /* (their vertices are drawn from where they are read: linear memory) */
-  p.figures = read_section(TAG('F', 'I', 'G', 'S'), linear, &p.figure_bytes);
+  p.figures = read_section(TAG('F', 'I', 'G', 'S'), linear, true, &p.figure_bytes);
   if (p.figures)
     GSPGPU_FlushDataCache(p.figures, p.figure_bytes);
   loading("Reading the sounds");
-  p.sounds = read_section(TAG('S', 'N', 'D', 'S'), malloc, &size);
+  p.sounds = read_section(TAG('S', 'N', 'D', 'S'), malloc, false, &size);
   p.sound_bytes = p.sounds ? size : 0;
-  p.samples = read_section(TAG('S', 'N', 'D', 'D'), malloc, &p.sample_bytes);
+  p.samples = read_section(TAG('S', 'N', 'D', 'D'), malloc, false, &p.sample_bytes);
   /* (the sections are in memory. A file left open on the ROMFS is closed by the C library at exit, after the
    * ROMFS is gone.) */
-  fclose(pack);
-  pack = NULL;
+  if (piece)
+    fclose(piece);
+  piece = NULL;
   loading("Starting");
+  dt_maps(held_id, maps_have);
   const char *e = dt_init(&p, micros);
   if (e) {
     snprintf(app_error, sizeof app_error, "%s", e);
@@ -281,6 +408,15 @@ static s16 *ring[2];
 static u64 ring_start, ring_written;
 static u32 ring_timer;
 
+/* Held by a worker around each call of the mixer, and by the frame's thread while a map's pack is let go of
+ * and another is read: the mixer reads the pack's sounds. */
+static LightLock mixing;
+static void mix(s16 *out, u32 frames) {
+  LightLock_Lock(&mixing);
+  dt_mix(out, frames);
+  LightLock_Unlock(&mixing);
+}
+
 static void sound_worker(void *arg) {
   (void)arg;
   while (!sound_quit) {
@@ -289,7 +425,7 @@ static void sound_worker(void *arg) {
       ndspWaveBuf *w = &sound_wave[i];
       if (w->status != NDSP_WBUF_FREE && w->status != NDSP_WBUF_DONE)
         continue;
-      dt_mix(w->data_pcm16, SOUND_BLOCK);
+      mix(w->data_pcm16, SOUND_BLOCK);
       DSP_FlushDataCache(w->data_pcm16, SOUND_BLOCK * 4);
       ndspChnWaveBufAdd(0, w);
       fed = true;
@@ -309,7 +445,7 @@ static void ring_worker(void *arg) {
       ring_written = played;
     bool wrote = false;
     while (ring_written + SOUND_BLOCK <= played + RING_LEAD) {
-      dt_mix(block, SOUND_BLOCK);
+      mix(block, SOUND_BLOCK);
       for (unsigned i = 0; i < SOUND_BLOCK; i++) {
         unsigned at = (ring_written + i) % RING;
         ring[0][at] = block[i * 2];
@@ -626,8 +762,10 @@ int main(void) {
     snprintf(app_error, sizeof app_error, "PICA initialization failed");
   else if (R_FAILED(romfs))
     snprintf(app_error, sizeof app_error, "romfsInit failed: %08lx", (unsigned long)romfs);
-  else
-    loaded = load();
+  else {
+    LightLock_Init(&mixing);
+    loaded = load(NULL);
+  }
   if (loaded) {
     sounding = sound_start();
     say(sounding == 1 ? "Sound through the DSP" : sounding == 2 ? "Sound through the older service: the DSP's firmware is not on the card (sdmc:/3ds/dspfirm.cdc)" : "No sound");
@@ -678,6 +816,16 @@ int main(void) {
       for (char *line = strtok_r(control, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
         if (strstr(line, "\"screenshot\""))
           devserver_request_screenshot();
+        /* The maps' packs brought over the LAN, a step a line: a piece, the list, a prune. The frame waits. */
+        static char answer[512];
+        bool listed = false;
+        if (strstr(line, "\"pocket3d.packs\""))
+          rest_piece();
+        if (p3d_delivery(line, CARD_PACKS, answer, sizeof answer, &listed)) {
+          devserver_send_ctrl(answer, strlen(answer));
+          relist |= listed;
+          continue;
+        }
         controls(line);
       }
     }
@@ -722,6 +870,31 @@ int main(void) {
     DtPad pad;
     read_pad(&pad);
     /* Does what the interface asked on its last turn, then shows it the match as it now is. */
+    /* A match asked on another map: its pack takes the place of the one in memory. */
+    char wanted[P3D_PACK_NAME_BYTES + 1];
+    bool change = dt_wanted(wanted, sizeof wanted) != 0;
+    bool relisted = relist;
+    if (!change && relisted)
+      snprintf(wanted, sizeof wanted, "%s", held_id);
+    if (change || relisted) {
+      LightLock_Lock(&mixing);
+      dt_drop();
+      render_drop();
+      free_sections();
+      if (relisted)
+        forget_packs();
+      relist = false;
+      loaded = load(wanted[0] ? wanted : NULL);
+      /* (the new list may not name the held map: the first it names, then) */
+      if (!loaded && relisted)
+        loaded = load(NULL);
+      LightLock_Unlock(&mixing);
+      if (!loaded) {
+        stage = "load-error";
+        failed();
+      }
+      continue;
+    }
     dt_step(&pad, ticks);
     dt_report(&perf);
     keep_prefs();

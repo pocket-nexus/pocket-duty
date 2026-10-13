@@ -19,13 +19,15 @@
 //                                             # the pictures of a run, one thirtieth of a second of the match apart,
 //                                             # drawn by the console (or by PPSSPPHeadless with --emu): what
 //                                             # tools/listing.ts makes the listing's clips from. --bare: no interface
-//   bun tools/psp.ts package                  # dist/psp/PSP/GAME/PocketDuty for a Memory Stick: every cooked map's pack
+//   bun tools/psp.ts package                  # dist/psp/PSP/GAME/PocketDuty for a Memory Stick: every cooked map's pack,
+//                                             # as pieces named by their bytes under one list (pocket.packs)
 //   bun tools/psp.ts emu [--frames 240] [--ctl "at=..."] [--out f.png] [--standalone] [--keep] [--no-interface]
 //                                             # the same PRX in PPSSPPHeadless (software GE): a frame and its status;
 //                                             # --keep leaves interface.json from the last run
 //
 // `run`, `bench`, `tour`, `film` and `emu` take `--map <id>` (maps/maps.json): the map the run starts on. Every
-// cooked map's pack is staged, so the interface's map list offers them all.
+// cooked map's pack is staged, so the interface's map list offers them all. Staging brings a directory up
+// to date (tools/packs.ts): only the pieces it lacks are copied, and the ones no map lists any more go.
 //
 // One usbhostfs_pc owns the PSP's cable. If one is running (in any checkout),
 // these commands use its directory; `--share DIR` names another. Device
@@ -38,7 +40,9 @@ import { deflateSync } from "node:zlib";
 import { extractHostBuildInputs, hostBuildEnvironment } from "../vendor/pocketjs/framework/src/manifest/index.ts";
 import { withDeviceLease } from "../vendor/pocketjs/tools/device-lease.ts";
 import { POCKET3D_ICON } from "../vendor/pocketjs/tools/pocket3d-icon.ts";
+import { PACKS_FILE } from "../vendor/pocketjs/tools/pocket3d-packs.ts";
 import { FIRST, mapNamed, MAPS, packPath } from "./maps.ts";
+import { bringMaps, said } from "./packs.ts";
 import { compileInterface, type Interface } from "./ui.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -232,35 +236,36 @@ function packId(pack = PACK): string {
   return existsSync(receipt) ? JSON.parse(readFileSync(receipt, "utf8")).pack.sha256 : sha(pack);
 }
 
-/** The packs of the maps that are cooked, under the names the program opens them by (`Map::pack_name`). */
-function packs(): { id: string; file: string; name: string }[] {
-  return MAPS.flatMap((map) => (existsSync(packPath(map.id, "psp30")) ? [{ id: map.id, file: packPath(map.id, "psp30"), name: map.id === FIRST ? "duty" : map.id }] : []));
+/** A piece's file, as Pocket3D's pack pieces name it. */
+const PIECE = /^[0-9a-f]{20}\.bin$/;
+
+/** Takes the whole packs an earlier version of this tool staged (`duty.pack`, `<map>.pack` and their marks) out of `dir`. */
+function unstageWhole(dir: string) {
+  for (const map of MAPS) for (const end of ["pack", "json"]) rmSync(`${dir}/${map.id === FIRST ? "duty" : map.id}.${end}`, { force: true });
 }
 
 /**
- * Puts every cooked map's pack in `dir`, and the name of the map the run starts on (`map.txt`: `MAP`, or
- * none for a copy a person starts). Returns the first map's pack's identity.
+ * Brings `dir` up to date with every cooked map's pack (its pieces and `pocket.packs`), and writes the
+ * name of the map the run starts on (`map.txt`: `MAP`, or none for a copy a person starts). Returns the
+ * first map's pack's identity.
  */
 function stage(dir: string, map: string | null = MAP) {
   if (!existsSync(PACK)) throw new Error(`no pack at ${PACK}: run \`bun tools/duty.ts cook\` first`);
   if (map && !existsSync(packPath(map, "psp30"))) throw new Error(`no pack at ${packPath(map, "psp30")}: run \`bun tools/duty.ts cook --map ${map}\` first`);
   mkdirSync(dir, { recursive: true });
-  for (const pack of packs()) {
-    const id = packId(pack.file);
-    const mark = `${dir}/${pack.name}.json`;
-    if (!existsSync(`${dir}/${pack.name}.pack`) || !existsSync(mark) || JSON.parse(readFileSync(mark, "utf8")).sha256 !== id) {
-      cpSync(pack.file, `${dir}/${pack.name}.pack`);
-      writeFileSync(mark, JSON.stringify({ sha256: id, bytes: statSync(pack.file).size }));
-    }
-  }
+  unstageWhole(dir);
+  const brought = bringMaps("psp30", dir, { prune: true });
+  console.log(`psp: ${said(brought.written)}; ${dir} lacked ${brought.sent} pieces (${(brought.bytes / 1048576).toFixed(1)} MiB), ${brought.removed} removed`);
   if (map) writeFileSync(`${dir}/map.txt`, map);
   else rmSync(`${dir}/map.txt`, { force: true });
   return packId();
 }
 
-/** Takes the packs and their marks out of a directory a run does not read them from. */
+/** Takes the packs out of a directory a run does not read them from. */
 function unstage(dir: string) {
-  for (const map of MAPS) for (const end of ["pack", "json"]) rmSync(`${dir}/${map.id === FIRST ? "duty" : map.id}.${end}`, { force: true });
+  unstageWhole(dir);
+  if (existsSync(dir)) for (const file of readdirSync(dir)) if (PIECE.test(file)) rmSync(`${dir}/${file}`);
+  rmSync(`${dir}/${PACKS_FILE}`, { force: true });
   rmSync(`${dir}/map.txt`, { force: true });
 }
 
@@ -494,7 +499,7 @@ async function start(boot: string, bare = false): Promise<any> {
       await Bun.sleep(1000);
     }
   }
-  if (!/duty\.pack/.test(await pspsh("ls host0:/duty"))) throw new Error("PSPLINK does not serve host0: restart PSPLINK on the console");
+  if (!/pocket\.packs/.test(await pspsh("ls host0:/duty"))) throw new Error("PSPLINK does not serve host0: restart PSPLINK on the console");
   await pspsh("ldstart host0:/pocket-duty.prx");
   const s = await waitFor((s) => s.stage === "running", 180);
   return s;
@@ -637,7 +642,6 @@ switch (cmd) {
     // (every cooked map's pack; no `map.txt`: a copy opens on the first map until a person chooses another)
     stage(dir, null);
     stageInterface(dir);
-    for (const pack of packs()) rmSync(`${dir}/${pack.name}.json`, { force: true });
     console.log(`psp: copy ${OUT}/PSP to the root of a Memory Stick`);
     break;
   }

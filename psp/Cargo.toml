@@ -19,6 +19,8 @@ duty-interface = { path = "../crates/duty-interface", default-features = false, 
 # The Allegrex FPU has no doubles: single-precision kernels and its own square root.
 duty-sim = { path = "../crates/duty-sim", default-features = false, features = ["hw-sqrt", "single-float"] }
 duty-pack = { path = "../crates/duty-pack", default-features = false }
+# The maps' packs as pieces named by their bytes, read through one manifest.
+pocket3d-packs = { path = "../vendor/pocketjs/engine/pocket3d/crates/pocket3d-packs", default-features = false }
 pocket3d-title = { path = "../vendor/pocketjs/engine/pocket3d/crates/pocket3d-title" }
 libm = "0.2"
 

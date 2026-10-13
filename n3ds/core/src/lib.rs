@@ -20,6 +20,10 @@ extern crate alloc;
 mod allocator;
 mod wire;
 
+// The manifest of the maps' packs and the reader the C host reads a pack through (`pocket3d_packs.h`):
+// the functions are this library's.
+pub use pocket3d_packs::cabi::*;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_char;
@@ -287,6 +291,55 @@ pub extern "C" fn dt_sizes(out: &mut [u32; 8]) {
     ];
 }
 
+/// The map the host holds, and the maps it has a pack for in the list's order, until the next call.
+static mut MAPS_TOLD: (Option<&'static str>, Vec<&'static str>) = (None, Vec::new());
+/// The interface's setup carried over a change of map: the match on the new map begins with it.
+static mut CARRIED: Option<Session> = None;
+
+/// Says which map's pack `dt_init` is given next (`held`) and which maps the card has a pack for
+/// (`have`: ids with spaces between). Ids `maps/maps.json` does not list are left out.
+///
+/// # Safety
+/// Both are C strings.
+#[no_mangle]
+pub unsafe extern "C" fn dt_maps(held: *const c_char, have: *const c_char) {
+    let text = |p: *const c_char| core::ffi::CStr::from_ptr(p).to_str().unwrap_or("");
+    let have: Vec<&'static str> = maps::MAPS.iter().map(|m| m.id).filter(|id| text(have).split(' ').any(|word| word == *id)).collect();
+    *core::ptr::addr_of_mut!(MAPS_TOLD) = (maps::named(text(held)).map(|m| m.id), have);
+}
+
+/// The map the interface asked a match on, when the host does not hold it: its id as a C string in
+/// `out`, and its length; 0 for none. The host reads that map's pack and calls `dt_drop`, `dt_maps`
+/// and `dt_init` again.
+///
+/// # Safety
+/// `out` holds `cap` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dt_wanted(out: *mut c_char, cap: u32) -> u32 {
+    let Some(c) = (*core::ptr::addr_of_mut!(CORE)).as_mut() else { return 0 };
+    let Some(id) = c.session.wanted.take() else { return 0 };
+    if id.len() + 1 > cap as usize {
+        return 0;
+    }
+    core::ptr::copy_nonoverlapping(id.as_ptr(), out as *mut u8, id.len());
+    *out.add(id.len()) = 0;
+    id.len() as u32
+}
+
+/// Lets go of the pack: nothing of it is read after this returns, so the host may free it. The
+/// mixer plays nothing until the next `dt_init`. The next match begins at once (the interface asked
+/// for it), with the setup the interface made.
+///
+/// # Safety
+/// No other thread is inside a function of this library.
+#[no_mangle]
+pub unsafe extern "C" fn dt_drop() {
+    *core::ptr::addr_of_mut!(SOUNDS) = (&[], &[]);
+    if let Some(core) = (*core::ptr::addr_of_mut!(CORE)).take() {
+        *core::ptr::addr_of_mut!(CARRIED) = Some(core.session);
+    }
+}
+
 /// Starts a match on the pack. Returns why it could not, or null.
 ///
 /// # Safety
@@ -315,16 +368,22 @@ pub unsafe extern "C" fn dt_init(pack: &PackIn, clock: Option<unsafe extern "C" 
     let weapons = slice(pack.weapons, pack.weapon_bytes / core::mem::size_of::<WeaponDef>() as u32);
     let defs: [WeaponDef; WEAPONS] = if weapons.len() == WEAPONS { [weapons[0], weapons[1], weapons[2]] } else { weapon::reference() };
     let mut game = Game::new(level, defs, 0x5eed_1234);
-    let mut session = Session::new();
-    // The map whose pack is in the package: the tools build this library with its id (`DUTY_MAP`,
-    // tools/n3ds.ts), and without one it is the first. The package holds no other pack.
-    let held = option_env!("DUTY_MAP").and_then(maps::named).unwrap_or(maps::first());
-    session.map_id = held.id;
-    session.maps = alloc::vec![held.id];
+    // After a change of map the interface's setup is the one it made, and the match begins at once.
+    let carried = (*core::ptr::addr_of_mut!(CARRIED)).take();
+    let begins = carried.is_some();
+    let mut session = carried.unwrap_or_else(Session::new);
+    // The map whose pack the host read, and the maps it has a pack for (`dt_maps`). A host that said
+    // nothing has the first map alone.
+    let told = &*core::ptr::addr_of!(MAPS_TOLD);
+    session.map_id = told.0.unwrap_or(maps::first().id);
+    session.maps = if told.1.is_empty() { alloc::vec![session.map_id] } else { told.1.clone() };
     // The map picture's corner, as the compiler laid it out about the level's origin.
     session.map = (scene.level_origin[0] - 80.0, scene.level_origin[2] - 80.0);
     session.focal = 120.0 / tan(FOV * 0.5 * (PI / 180.0));
     session.apply(&mut game);
+    if begins {
+        session.play(&mut game);
+    }
     let sounds = slice(pack.sounds, pack.sound_bytes / core::mem::size_of::<Sound>() as u32);
     *core::ptr::addr_of_mut!(SOUNDS) = if sounds.len() == Id::ALL.len() { (sounds, slice(pack.samples, pack.sample_bytes)) } else { (&[], &[]) };
     *core::ptr::addr_of_mut!(CORE) = Some(Core {
@@ -443,6 +502,10 @@ pub unsafe extern "C" fn dt_control(text: *const u8, len: u32) {
                 "title" => r#"{"type":"title"}"#,
                 _ => continue,
             }),
+            // A match on a map, as the interface's list asks for one.
+            "map" => {
+                c.session.command(&mut c.game, Command::Map(value.into()));
+            }
             "pad" => c.held = (Pad { held: next() as u32, sx: next() * 0.01, sy: next() * 0.01 }, next() as u32),
             "at" => {
                 let (x, y, z, yaw, pitch) = (next(), next(), next(), next(), next());

@@ -23,6 +23,9 @@ duty-sim = { path = "../../crates/duty-sim", default-features = false, features 
 duty-pack = { path = "../../crates/duty-pack", default-features = false }
 # The flow around the match; the interface's channel is answered in src/wire.rs.
 duty-interface = { path = "../../crates/duty-interface", default-features = false }
+# The maps' packs as pieces: the manifest and the reader the C host reads a pack through
+# (`pocket3d_packs.h`; the functions are in this library).
+pocket3d-packs = { path = "../../vendor/pocketjs/engine/pocket3d/crates/pocket3d-packs", default-features = false, features = ["cabi"] }
 
 [profile.release]
 # The target defaults to unwinding; a static library in a libctru program has no unwinder.

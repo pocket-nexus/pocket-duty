@@ -116,8 +116,21 @@ static bool texture(C3D_Tex *t, const DtTexture *r) {
   return true;
 }
 
-bool render_init(const RenderData *data, char *error, size_t n) {
-  d = data;
+/* The pictures of the map that was held: another map brings its own. */
+void render_drop(void) {
+  for (unsigned i = 0; textures && d && i < d->texture_count; i++)
+    C3D_TexDelete(&textures[i]);
+  free(textures);
+  textures = NULL;
+}
+
+/* The vertex programs and the buffers of the sky and the effects are made once; a map's pictures and its sky
+ * each time a map is read. */
+static bool programs_ready;
+
+static bool programs_init(char *error, size_t n) {
+  if (programs_ready)
+    return true;
   if (!program_init(&world_prog, world_shbin, world_shbin_size) || !program_init(&skin_prog, skin_shbin, skin_shbin_size) || !program_init(&flat_prog, flat_shbin, flat_shbin_size)) {
     snprintf(error, n, "a vertex program did not load");
     return false;
@@ -149,7 +162,14 @@ bool render_init(const RenderData *data, char *error, size_t n) {
   AttrInfo_AddLoader(&flat_prog.attr, 0, GPU_FLOAT, 2);
   AttrInfo_AddLoader(&flat_prog.attr, 1, GPU_UNSIGNED_BYTE, 4);
   AttrInfo_AddLoader(&flat_prog.attr, 2, GPU_FLOAT, 3);
+  programs_ready = true;
+  return true;
+}
 
+bool render_init(const RenderData *data, char *error, size_t n) {
+  d = data;
+  if (!programs_init(error, n))
+    return false;
   textures = calloc(d->texture_count, sizeof *textures);
   for (unsigned i = 0; i < d->texture_count; i++) {
     if (d->textures[i].format == DT_T8) {
@@ -161,10 +181,12 @@ bool render_init(const RenderData *data, char *error, size_t n) {
       return false;
     }
   }
-  sky_vb = linearAlloc(1024 * sizeof *sky_vb);
-  sky_ib = linearAlloc(4096 * 2);
-  fx_vb = linearAlloc((DT_FX_VERTICES + 4) * sizeof *fx_vb);
-  quad_ib = linearAlloc((DT_FX_VERTICES / 4 + 1) * 6 * 2);
+  if (!sky_vb) {
+    sky_vb = linearAlloc(1024 * sizeof *sky_vb);
+    sky_ib = linearAlloc(4096 * 2);
+    fx_vb = linearAlloc((DT_FX_VERTICES + 4) * sizeof *fx_vb);
+    quad_ib = linearAlloc((DT_FX_VERTICES / 4 + 1) * 6 * 2);
+  }
   if (!sky_vb || !sky_ib || !fx_vb || !quad_ib) {
     snprintf(error, n, "no memory for the sky and the effects");
     return false;

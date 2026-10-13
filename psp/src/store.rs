@@ -2,6 +2,10 @@
 //! it (the interface's bundle and what it asked to have kept), and the PSPLINK
 //! mailbox.
 //!
+//! The maps' packs are pieces named by their bytes, listed by `pocket.packs`
+//! (Pocket3D's `pocket3d-packs`): a section two maps share is one file. A
+//! section is read through the pieces it lies in.
+//!
 //! Each section is read straight into memory of its exact size (`mem`), which
 //! keeps it for the rest of the run: the program holds one map's pack and
 //! cannot give it back. So another map is another run. `map.txt` beside the
@@ -12,20 +16,23 @@
 //! The kernel keeps a working directory per thread, and only the thread the
 //! program started on has one (the EBOOT's directory): a path without a
 //! device fails anywhere else. So that thread opens what lies beside the
-//! EBOOT before the frame thread starts (`locate`), and it is the one that
-//! writes there. After that it serves the mailbox (a status file written, a
+//! EBOOT before the frame thread starts (`locate`), it is the one that
+//! writes there, and it opens each piece the frame thread reads from
+//! (`open_piece`). After that it serves the mailbox (a status file written, a
 //! control file read, on the computer's share) and writes what the interface
 //! asked to have kept (`serve`), at a lower priority than the frame's: it
 //! runs while the frame waits for the GE or the display, so host I/O never
 //! delays a frame.
 
 use alloc::vec::Vec;
+use core::cell::Cell;
 use core::ffi::c_void;
 use core::mem::ManuallyDrop;
 use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use duty_interface::maps::{Map, MAPS};
+use pocket3d_packs::{names, Manifest, Pack, Piece, Reader, Store, NAME_DIGITS};
 use psp::sys::*;
 
 use crate::mem;
@@ -41,7 +48,10 @@ pub struct Section {
 }
 
 pub struct PackFile {
-    pub fd: SceUid,
+    /// The map's pack as the manifest lists it: its pieces in order.
+    pack: Pack,
+    /// The piece last read from, open. Sections are read in the pack's order, so a piece is opened once.
+    piece: Cell<([u8; NAME_DIGITS], SceUid)>,
     pub sections: Vec<Section>,
     pub bytes: u32,
     /// Whether the computer's share is there (PSPLINK): the pack came from it, or it holds `duty/boot.txt`.
@@ -51,12 +61,72 @@ pub struct PackFile {
 /// The pack sits beside the EBOOT, and so do the files that go with it; otherwise they are on the
 /// computer's share.
 static mut LOCAL: bool = true;
-/// What `locate` opened: the pack, the interface's script and pak, what the interface kept.
-static mut FOUND: [SceUid; 4] = [SceUid(-1); 4];
-const PACK: usize = 0;
-pub const SCRIPT: usize = 1;
-pub const PAK: usize = 2;
-const KEPT: usize = 3;
+/// What `locate` opened: the interface's script and pak, what the interface kept.
+static mut FOUND: [SceUid; 3] = [SceUid(-1); 3];
+pub const SCRIPT: usize = 0;
+pub const PAK: usize = 1;
+const KEPT: usize = 2;
+
+/// The file that lists the maps' packs and their pieces.
+const MANIFEST: &[u8] = b"pocket.packs";
+/// The manifest's text, read by `locate`. A piece is a line of about 30 bytes: room for a thousand.
+const MANIFEST_MAX: usize = 32 * 1024;
+static mut MANIFEST_TEXT: [u8; MANIFEST_MAX] = [0; MANIFEST_MAX];
+static mut MANIFEST_LEN: usize = 0;
+
+fn manifest() -> &'static str {
+    unsafe { core::str::from_utf8(core::slice::from_raw_parts(ptr::addr_of!(MANIFEST_TEXT) as *const u8, MANIFEST_LEN)).unwrap_or("") }
+}
+
+// A piece's file beside the EBOOT, which the thread the program started on opens for the frame thread:
+// 0 none asked for, 1 asked for (`PIECE_FILE`), 2 opened (`PIECE_FD`).
+static PIECE_FLAG: AtomicU32 = AtomicU32::new(0);
+static mut PIECE_FILE: [u8; NAME_DIGITS + 5] = [0; NAME_DIGITS + 5];
+static mut PIECE_FD: SceUid = SceUid(-1);
+
+/// Opens a piece's file, on the frame thread. A path on the computer's share names its device, so any
+/// thread opens it; a file beside the EBOOT is opened by `serve`, within a hundredth of a second.
+unsafe fn open_piece(piece: &Piece) -> SceUid {
+    if !LOCAL {
+        return open(false, &piece.file());
+    }
+    PIECE_FILE = piece.file();
+    PIECE_FLAG.store(1, Ordering::Release);
+    while PIECE_FLAG.load(Ordering::Acquire) != 2 {
+        sceKernelDelayThread(1_000);
+    }
+    PIECE_FLAG.store(0, Ordering::Release);
+    PIECE_FD
+}
+
+/// The pieces of the pack a `PackFile` holds, as the reader asks for them.
+struct Pieces<'a>(&'a Cell<([u8; NAME_DIGITS], SceUid)>);
+
+impl Store for Pieces<'_> {
+    type Error = &'static str;
+
+    fn read(&mut self, piece: &Piece, at: u32, into: &mut [u8]) -> Result<(), &'static str> {
+        unsafe {
+            let (name, mut fd) = self.0.get();
+            if fd.0 < 0 || name != piece.name {
+                if fd.0 >= 0 {
+                    sceIoClose(fd);
+                }
+                fd = open_piece(piece);
+                self.0.set((piece.name, fd));
+                if fd.0 < 0 {
+                    return Err("a piece of the map's pack is missing");
+                }
+            }
+            sceIoLseek32(fd, at as i32, IoWhence::Set);
+            if read_exact(fd, into.as_mut_ptr(), into.len()) {
+                Ok(())
+            } else {
+                Err("reading the pack failed")
+            }
+        }
+    }
+}
 
 /// The computer's share, where the files are when they are not beside the EBOOT.
 const SHARE: &[u8] = b"host0:/duty/";
@@ -87,30 +157,31 @@ unsafe fn open(local: bool, name: &[u8]) -> SceUid {
     sceIoOpen(path(local, name).as_ptr(), IoOpenFlags::RD_ONLY, 0)
 }
 
-/// Opens a map's pack and the files that go with it, beside the EBOOT (a packaged copy) or else on the
-/// computer's share. The map is the one `map.txt` names when its pack is there, else the first. Call on
-/// the thread the program started on, before the frame thread exists. It allocates nothing.
+/// Reads the list of the maps' packs and opens the files that go with them, beside the EBOOT (a packaged
+/// copy) or else on the computer's share. The map is the one `map.txt` names when the list has its pack,
+/// else the first the list has. Call on the thread the program started on, before the frame thread
+/// exists. It allocates nothing.
 pub unsafe fn locate() {
-    // The first map's pack says where everything is: every copy of the game has it.
-    let mut name = [0u8; 32];
-    MAPS[0].pack_name(&mut name);
-    let first = open(true, &name);
-    LOCAL = first.0 >= 0;
-    if first.0 >= 0 {
-        sceIoClose(first);
+    // The list says where everything is: every copy of the game has it.
+    let mut list = open(true, MANIFEST);
+    LOCAL = list.0 >= 0;
+    if !LOCAL {
+        list = open(false, MANIFEST);
     }
-    // The maps there is a pack for.
+    MANIFEST_LEN = 0;
+    if list.0 >= 0 {
+        MANIFEST_LEN = sceIoRead(list, ptr::addr_of_mut!(MANIFEST_TEXT) as *mut c_void, MANIFEST_MAX as u32).max(0) as usize;
+        sceIoClose(list);
+    }
+    // The maps the list has a pack for. Whoever brought the pieces wrote the list after them.
     HAVE = 0;
-    for (i, map) in MAPS.iter().enumerate().take(32) {
-        map.pack_name(&mut name);
-        let fd = open(LOCAL, &name);
-        if fd.0 >= 0 {
-            sceIoClose(fd);
+    for (name, _) in names(manifest()) {
+        if let Some(i) = MAPS.iter().position(|m| m.id == name).filter(|i| *i < 32) {
             HAVE |= 1 << i;
         }
     }
     // The map chosen in an earlier run.
-    HELD = 0;
+    HELD = if HAVE == 0 { 0 } else { HAVE.trailing_zeros() as usize };
     let choice = open(LOCAL, CHOICE);
     if choice.0 >= 0 {
         let mut text = [0u8; 32];
@@ -127,8 +198,6 @@ pub unsafe fn locate() {
             write_choice(id.as_bytes(), b"");
         }
     }
-    MAPS[HELD].pack_name(&mut name);
-    FOUND[PACK] = open(LOCAL, &name);
     for (file, name) in [(SCRIPT, &b"duty.js"[..]), (PAK, b"duty.pak"), (KEPT, b"interface.json")] {
         FOUND[file] = open(LOCAL, name);
     }
@@ -215,31 +284,45 @@ pub unsafe fn read_exact(fd: SceUid, dst: *mut u8, len: usize) -> bool {
 }
 
 impl PackFile {
-    /// The pack `locate` opened: its section table.
+    /// The pack of the map `locate` chose: its pieces in the list, and its section table.
     pub unsafe fn open() -> Result<PackFile, &'static str> {
-        let (fd, bytes) = found(PACK).ok_or("no pack beside the program or on host0:/duty")?;
+        if MANIFEST_LEN == 0 {
+            return Err("no pocket.packs beside the program or on host0:/duty");
+        }
+        let list = Manifest::parse(manifest()).map_err(|_| "pocket.packs is not a list of packs")?;
+        let pack = list.packs.into_iter().find(|pack| pack.name == map().id).ok_or("pocket.packs has no pack for the map")?;
+        let bytes = pack.bytes;
+        let mut file = PackFile { pack, piece: Cell::new(([0; NAME_DIGITS], SceUid(-1))), sections: Vec::new(), bytes: bytes as u32, host: false };
         let mut head = [0u32; 4];
-        if !read_exact(fd, head.as_mut_ptr().cast(), 16) || head[0] != duty_pack::MAGIC {
-            return Err("duty.pack is not a pack");
+        file.read(0, head.as_mut_ptr().cast(), 16)?;
+        if head[0] != duty_pack::MAGIC {
+            return Err("the map's pack is not a pack");
         }
         if head[1] != duty_pack::VERSION {
-            return Err("duty.pack has another version");
+            return Err("the map's pack has another version");
         }
         let n = head[2] as usize;
         if n > 64 {
-            return Err("duty.pack section table");
+            return Err("the map's pack has no section table");
         }
         let mut table = alloc::vec![0u32; n * 4];
-        if !read_exact(fd, table.as_mut_ptr().cast(), n * 16) {
-            return Err("duty.pack section table");
-        }
-        let sections = (0..n).map(|i| Section { tag: table[i * 4], offset: table[i * 4 + 1], size: table[i * 4 + 2] }).collect();
+        file.read(16, table.as_mut_ptr().cast(), n * 16).map_err(|_| "the map's pack has no section table")?;
+        file.sections = (0..n).map(|i| Section { tag: table[i * 4], offset: table[i * 4 + 1], size: table[i * 4 + 2] }).collect();
         // The mailbox is there when the computer's share has the game's directory, wherever the pack came from.
         let probe = sceIoOpen(b"host0:/duty/boot.txt\0".as_ptr(), IoOpenFlags::RD_ONLY, 0);
         if probe.0 >= 0 {
             sceIoClose(probe);
         }
-        Ok(PackFile { fd, sections, bytes: bytes as u32, host: !LOCAL || probe.0 >= 0 })
+        file.host = !LOCAL || probe.0 >= 0;
+        Ok(file)
+    }
+
+    /// Reads `len` bytes at `offset` of the pack into `dst`, from the pieces they lie in.
+    unsafe fn read(&self, offset: usize, dst: *mut u8, len: usize) -> Result<(), &'static str> {
+        Reader::new(&self.pack, Pieces(&self.piece)).read(offset as u64, core::slice::from_raw_parts_mut(dst, len)).map_err(|error| match error {
+            pocket3d_packs::ReadError::Store(why) => why,
+            pocket3d_packs::ReadError::Pack(_) => "read past the pack's end",
+        })
     }
 
     /// Bytes of the sections: all of them stay in memory.
@@ -257,12 +340,7 @@ impl PackFile {
         if offset + len > s.size as usize {
             return Err("read past a section's end");
         }
-        sceIoLseek32(self.fd, (s.offset as usize + offset) as i32, IoWhence::Set);
-        if read_exact(self.fd, dst, len) {
-            Ok(())
-        } else {
-            Err("reading the pack failed")
-        }
+        self.read(s.offset as usize + offset, dst, len)
     }
 
     /// A whole section as `T` records, in memory of exactly its size that keeps it for the rest of the run.
@@ -379,7 +457,14 @@ pub unsafe fn serve() -> ! {
     let mut last_len = usize::MAX;
     let mut beat = 0u32;
     loop {
-        sceKernelDelayThread(200_000);
+        // A fifth of a second a turn, in waits short enough for a piece the frame thread asks for.
+        for _ in 0..20 {
+            if PIECE_FLAG.load(Ordering::Acquire) == 1 {
+                PIECE_FD = open(true, &*ptr::addr_of!(PIECE_FILE));
+                PIECE_FLAG.store(2, Ordering::Release);
+            }
+            sceKernelDelayThread(10_000);
+        }
         if KEPT_FLAG.load(Ordering::Acquire) == 1 {
             let path: &[u8] = if LOCAL { b"interface.json\0" } else { b"host0:/duty/interface.json\0" };
             let fd = sceIoOpen(path.as_ptr(), IoOpenFlags::WR_ONLY | IoOpenFlags::CREAT | IoOpenFlags::TRUNC, 0o644);
