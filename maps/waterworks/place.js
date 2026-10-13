@@ -71,7 +71,7 @@ const over = (at, y = G, more = {}) => ({ at, y, over: true, thick: THICK, rail:
 /** A roof nobody walks. */
 const roof = (at, y, more = {}) => ({ at, y, over: true, thick: 0.5, rail: 0, soldiers: false, key: ROOF, side: SHEET, ...more });
 /** A floor under the ground: its walls are blocks, up to the slab over it. */
-const low = (at, y, more = {}) => ({ at, y, key: SLAB, wall: BLOCK, crown: false, ...more });
+const low = (at, y, more = {}) => ({ at, y, key: SLAB, wall: BLOCK, side: BLOCK, crown: false, ...more });
 
 /**
  * The floors: polygons of [east, north], level (`y`) or sloped (`y: { from, to }`, each [east, north, up]).
@@ -105,6 +105,8 @@ export const GROUND = [
   over(box(1, 6, 20.5, 17.5), G, { key: TILE }),
   over(box(5, 4.5, 20.5, 6), G, { key: TILE }),
   over(box(6.75, -6.5, 20.5, 4.5), G, { key: TILE }),
+  over(box(1, -1.5, 2.5, 4.5), G, { key: TILE }),
+  over(box(1, -6.5, 2.5, -4), G, { key: TILE }),
   over(box(1, -11.5, 20.5, -6.5), G, { key: TILE }),
   over(box(1, -15.5, 5.5, -11.5), G, { key: TILE }),
   over(box(7, -15.5, 14.5, -11.5), G, { key: TILE }),
@@ -159,9 +161,9 @@ export const GROUND = [
   // ------------------------------------------------------------------ north of it: the corridor under the lobby, the ramp up, the ramp room
   low(box(4.5, 17.5, 17.5, 26.5), C),
   low(box(7.5, 26.5, 14, 39.5), { from: [10.75, 26.5, C], to: [10.75, 39.5, N] }),
-  { at: box(2, 32, 7.5, 39.5), y: { from: [4.75, 32, G], to: [4.75, 39.5, N] }, key: SLAB, wall: BLOCK, crown: false },
-  { at: box(14, 32, 20, 39.5), y: { from: [17, 32, G], to: [17, 39.5, N] }, key: SLAB, wall: BLOCK, crown: false },
-  { at: [[2, 39.5], [20, 39.5], [20, 43], [15, 43], [15, 48], [7, 48], [7, 43], [2, 43]], y: N, key: SLAB, wall: BLOCK, crown: false },
+  { at: box(2, 32, 7.5, 39.5), y: { from: [4.75, 32, G], to: [4.75, 39.5, N] }, key: SLAB, wall: BLOCK, side: BLOCK, crown: false },
+  { at: box(14, 32, 20, 39.5), y: { from: [17, 32, G], to: [17, 39.5, N] }, key: SLAB, wall: BLOCK, side: BLOCK, crown: false },
+  { at: [[2, 39.5], [20, 39.5], [20, 43], [15, 43], [15, 48], [7, 48], [7, 43], [2, 43]], y: N, key: SLAB, wall: BLOCK, side: BLOCK, crown: false },
   // ------------------------------------------------------------------ the west tunnel, the east room, its corridor, the east tunnel and the rooms at its end
   low(box(-14.5, -32.5, -10.5, 1.5), C),
   low(box(19, 4.5, 28.5, 12.5), C),
@@ -169,7 +171,7 @@ export const GROUND = [
   low(box(32.5, -32.5, 36.5, 10.5), C),
   low(box(30, -38, 57, -32.5), C),
   // the stair from those rooms up to the south-east yard, in its own well
-  { at: box(50, -32.5, 53, -22), y: { from: [51.5, -32.5, C], to: [51.5, -22, G] }, key: SLAB, wall: BLOCK, crown: false, steps: true },
+  { at: box(50, -32.5, 53, -22), y: { from: [51.5, -32.5, C], to: [51.5, -22, G] }, key: SLAB, wall: BLOCK, side: BLOCK, crown: false, steps: true },
   // ------------------------------------------------------------------ the south room: its floor about the ramp, the catwalks, the ramp, its tunnels
   low([[5, -41.5], [8.5, -41.5], [8.5, -35.5], [13.5, -35.5], [13.5, -41.5], [17, -41.5], [17, -22], [5, -22]], B, { key: TILE }),
   low(box(8.5, -45, 13.5, -35.5), { from: [11, -35.5, B], to: [11, -45, C] }),
