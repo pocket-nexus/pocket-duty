@@ -8,7 +8,7 @@
   "sight": { "rays": 400000, "near": 3 },
   "clip": { "largeEdge": 0.9 },
   "cluster": { "triangles": 96, "cone": 0.25 },
-  "figures": { "soldier": 6000, "soldierFar": 1500, "weapon": 9000, "arm": 2200 },
+  "figures": { "soldier": 6000, "soldierFar": 1500, "weapon": 9000, "arm": 2200, "arms": "open" },
   "ground": { "families": ["sand", "dirt", "gravel", "asphalt", "concrete"], "below": 0.75, "shadow": { "extent": 128, "side": 2048 } },
   "light": { "rays": 96, "openFloor": 0.3, "leaves": "both" },
   "textures": { "format": "rgba", "side": 512, "levels": 10 },
