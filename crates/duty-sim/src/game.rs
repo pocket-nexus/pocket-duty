@@ -576,6 +576,12 @@ impl<'a> Game<'a> {
                 continue;
             }
             let mut s = self.soldiers[i];
+            // (who is on a ladder as he steps, where the place has one)
+            let climbers = if self.level.links.is_empty() {
+                0
+            } else {
+                (0..MAX).filter(|k| *k != i && self.soldiers[*k].on_ladder()).fold(0u16, |bits, k| bits | 1 << k)
+            };
             let around = Around {
                 level: &self.level,
                 target,
@@ -585,6 +591,7 @@ impl<'a> Game<'a> {
                 tick: self.tick,
                 time: self.time,
                 others: &others,
+                climbers,
             };
             let act = s.step(
                 i as u8,
@@ -774,7 +781,8 @@ mod tests {
                 flags: &self.flags,
                 floor: &self.floor,
                 cover: &self.cover,
-                spawns: &self.spawns,
+                spawns: &self.spawns,                over: &[],
+                links: &[],
             }
         }
     }
@@ -789,6 +797,35 @@ mod tests {
             .iter()
             .filter(|s| s.alive())
             .all(|s| (s.pos - game.player.body.pos).len() > 18.0));
+    }
+
+    #[test]
+    fn soldiers_climb_a_ladder_to_the_player() {
+        // A floor 3.2 m over the yard's south part, with no way up but a ladder at its edge.
+        let boxes = crate::body::tests::Boxes::new(&[([-2.0, -1.0, -2.0], [42.0, 0.0, 42.0]), ([-2.0, 0.0, -2.0], [42.0, 3.2, 12.0])]);
+        let rows: Vec<alloc::string::String> = (0..51).map(|j| core::iter::repeat_n(if j < 15 { 'i' } else if j == 15 { '#' } else { 'a' }, 51).collect()).collect();
+        let refs: Vec<&str> = rows.iter().map(|r| r.as_str()).collect();
+        let mut plan = crate::nav::Plan::new(&refs, &[]);
+        let (foot, top) = (plan.at(25, 16, 0.0), plan.at(25, 14, 3.2));
+        plan.ladder(foot, top);
+        let spawns = [[20.0, 3.2, 4.0], [8.0, 0.0, 36.0], [32.0, 0.0, 36.0], [20.0, 0.0, 38.0], [14.0, 0.0, 34.0]].map(|pos| Spawn { pos, yaw: 0.0 });
+        let level = Level { solid: boxes.level().solid, spawns: &spawns, ..plan.level() };
+        let mut game = Game::new(level, reference(), 7);
+        game.player.place(v3(20.0, 3.2, 4.0), 0.0);
+        let (mut on_it, mut up, mut together) = (false, false, false);
+        for t in 0..60 * 120 {
+            // He fires at nothing now and then: they hear him and come. Nothing they do fells him.
+            game.player.health = 100.0;
+            game.step(&Input { buttons: if t % 240 < 20 { btn::FIRE } else { 0 }, ..Default::default() });
+            let climbers: Vec<&Soldier> = game.soldiers.iter().filter(|s| s.alive() && s.climbing).collect();
+            on_it |= !climbers.is_empty();
+            // (two on the ladder keep a body's height between them)
+            together |= climbers.iter().enumerate().any(|(k, a)| climbers[..k].iter().any(|b| (a.pos - b.pos).len() < 1.0));
+            up |= game.soldiers.iter().any(|s| s.alive() && !s.climbing && s.pos.y > 3.1 && s.pos.z < 11.5);
+            // No one stands in the air: off a ladder his feet are on one floor or the other.
+            assert!(game.soldiers.iter().filter(|s| s.alive() && !s.climbing).all(|s| s.pos.y < 0.2 || s.pos.y > 3.0), "step {t}");
+        }
+        assert!(on_it && up && !together, "on the ladder {on_it}, up it {up}, two together on it {together}");
     }
 
     #[test]

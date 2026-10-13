@@ -38,6 +38,10 @@ fn main() {
     let watch = std::env::var("DUTY_WATCH").is_ok();
     let (mut worst, mut total) = (0.0f64, 0.0f64);
     let mut over = None;
+    // On a place with floors over floors or ladders: the soldiers' steps by the height of their
+    // feet (metres), and their steps and the player's on a ladder.
+    let storeyed = !game.level.over.is_empty() || !game.level.links.is_empty();
+    let (mut heights, mut ladders) = (std::collections::BTreeMap::<i32, u32>::new(), [0u32; 2]);
     for t in 0..ticks {
         let eye = game.player.head();
         let mut input = Input::default();
@@ -79,7 +83,7 @@ fn main() {
             if std::env::var("DUTY_WAYS").is_ok() {
                 for s in game.soldiers.iter().filter(|s| s.alive()) {
                     let (going, asked, len, at, stuck, goal) = s.way();
-                    let node = game.level.node(s.pos.x, s.pos.z);
+                    let node = game.level.node_at(s.pos.x, s.pos.z, s.pos.y);
                     println!("        at ({:.1},{:.1},{:.1}) node open {:?} floor {:?} | going {going} asked {asked} way {at}/{len} stuck {stuck:.1} goal ({:.1},{:.1},{:.1}) next {:?}", s.pos.x, s.pos.y, s.pos.z, node.map(|n| game.level.open(n)), node.map(|n| game.level.floor[n as usize]), goal.x, goal.y, goal.z, (len > 0).then(|| s.path_point()));
                 }
             }
@@ -87,6 +91,13 @@ fn main() {
         let from = Instant::now();
         game.step(&input);
         let took = from.elapsed().as_secs_f64() * 1e6;
+        if storeyed {
+            for s in game.soldiers.iter().filter(|s| s.alive()) {
+                *heights.entry((s.pos.y + 0.5).floor() as i32).or_insert(0) += 1;
+                ladders[0] += s.climbing as u32;
+            }
+            ladders[1] += game.player.ladder.is_some() as u32;
+        }
         total += took;
         worst = worst.max(took);
         if let Phase::Over { won } = game.phase {
@@ -99,5 +110,8 @@ fn main() {
     }
     println!("ticks {ticks}: mean {:.1} us, worst {:.1} us a tick on this machine", total / ticks as f64, worst);
     println!("ways asked, found, not there, given up: {:?}", game.paths.counts);
+    if storeyed {
+        println!("soldiers' steps by the height of their feet (m): {heights:?}; on a ladder: {} of theirs, {} of the player's", ladders[0], ladders[1]);
+    }
     println!("score {}:{}, kills {}, deaths {}, shots {}, hits {}, standing {}, over {:?}", game.score[0], game.score[1], game.tally.kills, game.tally.deaths, game.tally.shots, game.tally.hits, game.standing(), over);
 }

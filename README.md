@@ -179,7 +179,7 @@ vendor/pocketjs      PocketJS and Pocket3D
 - **A sphere and the longest edge of each large triangle** (339 568 of them, 8 bytes each): what the device asks before it reads a triangle's corners.
 - **A chunk's record is 128 bytes**, two lines of the PSP's data cache, with what a frame asks of a chunk it leaves out in the first.
 - **Textures**: 24 pictures with 256-colour palettes, 695 KiB.
-- **The walk grid**: only its largest connected part stays open (29 776 of 38 742 nodes), so every way a soldier asks for exists.
+- **The walk grid**: only its largest connected part stays open (29 776 of 38 742 nodes), so every way a soldier asks for exists. A place with a floor over a floor has **a node for each floor of a cell** and its ladders as links between nodes (`maps/README.md`); the street has neither.
 - The pack is **30.5 MB**; `receipt.json` records its hash and counts.
 
 ### The frame

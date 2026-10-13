@@ -18,7 +18,7 @@ pub mod sound;
 
 pub const MAGIC: u32 = u32::from_le_bytes(*b"DUTY");
 /// Raised by any change to a record or to what a section holds.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 pub const fn tag(name: &[u8; 4]) -> u32 {
     u32::from_le_bytes(*name)

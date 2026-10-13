@@ -53,6 +53,11 @@ pub mod player {
     pub const MANTLE_MIN: f32 = 0.5;
     pub const MANTLE_MAX: f32 = 1.85;
     pub const MANTLE_REACH: f32 = 0.62;
+    /// This game's: metres a second up or down a ladder, how near its line he takes hold of it,
+    /// and how far under its top he is carried onto the floor.
+    pub const LADDER_SPEED: f32 = 2.6;
+    pub const LADDER_REACH: f32 = 0.55;
+    pub const LADDER_HEAD: f32 = 0.6;
     // `player/tuning.js:148-152`: seconds the eye takes to settle after a change of stance.
     pub const EYE_TAU: f32 = 0.067;
     // `player/tuning.js:255-265`
@@ -97,6 +102,8 @@ pub mod soldier {
     pub const COVER_SPEED: f32 = 4.3;
     pub const FLANK_SPEED: f32 = 4.4;
     pub const RETREAT_SPEED: f32 = 4.6;
+    /// This game's: metres a second up or down a ladder, whatever his state.
+    pub const LADDER_SPEED: f32 = 1.6;
     // `ai/index.js:352-359`: the player's rounds lose force with distance on the soldiers' side too.
     pub const FALLOFF_FROM: f32 = 22.0;
     pub const FALLOFF_PER_METRE: f32 = 0.0125;
