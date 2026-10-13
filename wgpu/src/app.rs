@@ -90,11 +90,15 @@ pub struct Shape {
     pub height: u32,
     /// The interface's turns a second: what the device's own host tells its guest (`globalThis.__simHz`).
     pub turns: u32,
+    /// Whether the device's display has 16-bit colours (the PSP's, with the GE's dither). A 3DS draws its
+    /// upper screen into eight bits a channel.
+    pub sixteen: bool,
 }
 
 /// The screens the game runs on, with the turns a second each one's host gives the interface (`TURNS` in
-/// `psp/src/interface.rs`).
-pub const SHAPES: [Shape; 1] = [Shape { name: "psp", width: 480, height: 272, turns: 30 }];
+/// `psp/src/interface.rs`, `rate` in `n3ds/src/guest.c`). A 3DS's is its upper screen: the lower one is the
+/// interface's alone, and the page draws it.
+pub const SHAPES: [Shape; 2] = [Shape { name: "psp", width: 480, height: 272, turns: 30, sixteen: true }, Shape { name: "3ds", width: 400, height: 240, turns: 30, sixteen: false }];
 
 impl Shape {
     pub fn named(name: &str) -> Option<Shape> {
@@ -106,8 +110,8 @@ impl Shape {
         60 / self.turns.clamp(1, 60)
     }
 
-    /// The flow's pad from the PSP's controls, as its own build reads them (`read_pad` in
-    /// `psp/src/main.rs`).
+    /// The flow's pad from the device's controls, as its own build reads them (`read_pad` in
+    /// `psp/src/main.rs` and in `n3ds/src/main.c`: a 3DS's X A B Y are where a PSP's △ ○ × □ are).
     pub fn pad(&self, held: &Held) -> Pad {
         let mut out = 0;
         for (from, to) in [
@@ -352,6 +356,8 @@ pub struct App {
     pub gpu: Gpu,
     pub screen: Screen,
     pub shape: Shape,
+    /// A contact was on a screen at the turn last offered to the guest.
+    touched: bool,
     /// The interface's picture, laid over every frame.
     pub overlay: Overlay,
     /// How much of the pack has arrived, for the loading screen.
@@ -400,6 +406,7 @@ impl App {
             gpu,
             screen,
             shape,
+            touched: false,
             overlay,
             progress: Progress::default(),
             world: None,
@@ -439,7 +446,6 @@ impl App {
         let scene = world.scene;
         // The map picture's corner, as the compiler laid it out about the level's origin.
         self.session.map = (scene.level_origin[0] - 80.0, scene.level_origin[2] - 80.0);
-        self.session.focal = 136.0 / tan(FOV * 0.5 * (PI / 180.0));
         self.session.apply(&mut world.game);
         self.sounding.ambience(&world.sounds, Id::Ambience, 70);
         self.world = Some(world);
@@ -458,6 +464,8 @@ impl App {
             self.screen.resize(&self.gpu, shape.width, shape.height, 1);
         }
         self.shape = shape;
+        // (pixels from the middle of the screen to its upper edge, over the tangent of half the view)
+        self.session.focal = shape.height as f32 * 0.5 / tan(FOV * 0.5 * (PI / 180.0));
     }
 
     fn stage(&mut self, mode: Mode, message: &str) {
@@ -583,7 +591,9 @@ impl App {
     /// `psp/src/interface.rs`); it is taken when it is worth its cost (`duty_interface::Pace`), and the
     /// turns passed over are time the interface's clock is owed. No more than two are owed: a guest that
     /// fell behind does not run after the time.
-    pub fn guest_due(&mut self) -> Option<(u32, u32)> {
+    /// A contact is news of its own: a 3DS's lower screen has keys that answer it (`dt_guest_due` in
+    /// `n3ds/core`).
+    pub fn guest_due(&mut self, touching: bool) -> Option<(u32, u32)> {
         let turn = self.shape.turn();
         let (owed, buttons) = &mut self.guest;
         *owed = (*owed).min(2 * turn);
@@ -593,7 +603,12 @@ impl App {
         *owed -= turn;
         let buttons = core::mem::take(buttons);
         // (while the world is read the guest takes every turn, as on the device)
-        if self.world.is_some() && !self.pace.due(&self.session, buttons, READOUTS_EVERY) {
+        // The turn after a contact has left is the one that tells the guest so: at the title nothing
+        // else would bring a turn, and the key under the finger would never be let go.
+        let contact = touching || self.touched;
+        self.touched = touching;
+        // (the pace is asked first: it notes what it was shown)
+        if self.world.is_some() && !self.pace.due(&self.session, buttons, READOUTS_EVERY) && !contact {
             self.skipped += 1;
             return None;
         }
@@ -796,7 +811,7 @@ impl App {
             covering,
             glowing,
             flash,
-            look: self.set.look,
+            look: Look { sixteen: self.set.look.sixteen && self.shape.sixteen, ..self.set.look },
         };
         self.drawn = w.renderer.frame(&self.gpu, &self.screen, &self.overlay, &w.chunks, &view)?;
         self.cpu_ms += ((task::now() - self.began) as f32 - self.cpu_ms) * 0.1;

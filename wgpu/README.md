@@ -53,7 +53,7 @@ What the interface keeps between visits (the settings, `prefs`) is in the browse
 
 ## The controls
 
-The page's handheld is the PSP, and what its buttons do is the game's (`Shape::pad`, from `read_pad` in `psp/src/main.rs`). The kernel reads the keyboard and the shell's own keys under a pointer or a finger:
+The page's handhelds are the PSP and the Nintendo 3DS (`?device=3ds`, or the bar), and what their buttons do is the game's: a 3DS's X A B Y are where a PSP's △ ○ × □ are, and its lower screen is the interface's second surface, drawn on a canvas of its own (320 × 240) with the level from above and four keys that take the pointer or a finger. The turn after a contact leaves a screen is always taken, so the key under it is let go at the title too, where nothing else brings a turn (`App::guest_due`). What the PSP's buttons do is the game's (`Shape::pad`, from `read_pad` in `psp/src/main.rs`). The kernel reads the keyboard and the shell's own keys under a pointer or a finger:
 
 | | Keys |
 | --- | --- |

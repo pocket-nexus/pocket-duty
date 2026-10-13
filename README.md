@@ -4,7 +4,7 @@
 
 Its page on Pocket Studio, [studio.pocket.nexus/games/duty](https://studio.pocket.nexus/games/duty), has recordings from a console and the package for the PSP.
 
-A browser tab plays it too, at [duty.studio.pocket.nexus](https://duty.studio.pocket.nexus/): the same match compiled to wasm32, with a wgpu renderer that draws the PSP's pack inside a PSP's shell (`wgpu/`, "In a browser tab").
+A browser tab plays it too, at [duty.studio.pocket.nexus](https://duty.studio.pocket.nexus/): the same match compiled to wasm32, with a wgpu renderer that draws the PSP's pack inside a PSP's shell or a Nintendo 3DS's, chosen in the page's bar (`wgpu/`, "In a browser tab").
 
 The reference is a browser game: three.js on WebGL2, every mesh, texture, animation and sound built by code at start. This repository keeps it unmodified in `web/`, runs it once in a desktop browser to record what it builds, and compiles the record for the console.
 
@@ -13,7 +13,7 @@ The reference is a browser game: three.js on WebGL2, every mesh, texture, animat
 | Reference | `web/`, Claude of Duty by mshumer at `d9b237b`, MIT (`web/LICENSE`) |
 | PSP | PSP-2000 or later (the pack needs the 52 MB memory setting; a PSP-1000 has 24 MB). A whole match on a console: **29.9 frames a second, 55 frames late of 18 375** |
 | Nintendo 3DS | Old 3DS or New 3DS with the Homebrew Launcher, one `.3dsx`. A whole match on an Old 3DS: **29.8 frames a second, 48 frames late of 17 954** |
-| Browser tab | 480 × 272 in the PSP display's 16-bit colours, wgpu over WebGPU, the PSP's pack. Chrome 154 on an M3 Max: **60 frames a second, under 0.4 ms a frame** |
+| Browser tab | As a PSP, 480 × 272 in the PSP display's 16-bit colours; as a Nintendo 3DS, 400 × 240 over a lower screen of 320 × 240 with its four keys. wgpu over WebGPU, the PSP's pack. Chrome 154 on an M3 Max: **60 frames a second, under 0.4 ms a frame** |
 
 The consoles and the browser are measured in "What is measured".
 
@@ -51,7 +51,7 @@ In a browser tab (the `wasm32-unknown-unknown` target and `wasm-bindgen` 0.2.126
 ```
 bun tools/wgpu.ts serve            # build, then http://127.0.0.1:8802/ with the cooked pack
 bun tools/wgpu.ts shot --frames 600 --words "mode=play auto=1" --out f.png   # a frame on this machine's GPU
-bun tools/wgpu.ts check [--dist]   # the page in Chrome with WebGPU: the title, a match, the menu, the results
+bun tools/wgpu.ts check [--dist]   # the page in Chrome with WebGPU: the title, a match, the menu, the results, the same as a 3DS
 bun tools/wgpu.ts dist             # the directory a static host serves → .pocket-build/wgpu/dist
 ```
 
@@ -188,6 +188,8 @@ bun tools/ui.ts test       # the flow through a mock renderer
 - **The pack is the PSP's**: the triangles, the baked light, the palette pictures, the sight lists, the soldiers, the sounds and the walk grid of `duty.pack`. What the GE draws from it with no program, WGSL programs draw: a texel times the corner's colour, doubled, under the haze; the ground once more under its shadow picture; four bones and two lights for a soldier. The frame is shown in the PSP display's 16-bit colours with the GE's dither.
 - **A browser's GPU needs none of the PSP's three devices for a frame**: one depth range of 24 bits holds the street, the rasterizer clips, and the levels of detail stay at the pack's distances. Every tick of the match is drawn, 60 a second.
 - **The page is the kernel's player**: a PSP's shell with the screen in it and its keys as the controls (W A S D the stick, I J K L the four look buttons, E and Q for R and L, the arrows for the direction pad, Space for START). The interface is `ui/` as the PSP loads it, run in a realm of the page and laid over the street.
+- **The page plays as every device the game has a package for**: a PSP and a Nintendo 3DS (`DEVICES` in `wgpu/page/main.js`, `?device=3ds`). Each is a shape of the renderer (`SHAPES` in `wgpu/src/app.rs`) and the interface bundle that device's own build loads (`ui/3ds` has the lower screen, which the page draws on a second canvas and whose keys take the pointer). As a 3DS the page draws the PSP's pack at 400 × 240 with eight bits a colour; the 3DS's own pack and the PICA200's combiners are not in the tab.
+- **A device with a package is a device of the page.** `tools/wgpu.test.ts` holds the release's targets (`tools/release.ts`), the page's devices and `runsOn`, the renderer's shapes, the interface bundles of the site and `<meta name="pocket-devices">` of `wgpu/page/index.html` to one another, and `bun run test` fails when one of them names a device another does not. A new target lands with its shape, its bundle and its place in the page in one change, and the site is deployed before the package is uploaded.
 - **The same renderer writes frames to files** on the build machine (`wgpu/src/bin/shot.rs`), a sixtieth of a second a frame.
 - `bun tools/wgpu.ts dist` writes the directory a static host serves: 53 files, 33.1 MB, the pack in pieces of 2 MiB named by their hashes. `pocket-studio site .pocket-build/wgpu/dist` deploys it to the game's address on Pocket Studio, from the checkout `pocket-studio register` linked.
 
