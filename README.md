@@ -13,7 +13,7 @@ The reference is a browser game: three.js on WebGL2, every mesh, texture, animat
 | Reference | `web/`, Claude of Duty by mshumer at `d9b237b`, MIT (`web/LICENSE`) |
 | PSP | PSP-2000 or later (the pack needs the 52 MB memory setting; a PSP-1000 has 24 MB). A whole match on a console: **29.9 frames a second, 55 frames late of 18 375** |
 | Nintendo 3DS | Old 3DS or New 3DS with the Homebrew Launcher: one `.3dsx` and the maps' packs in `packs/` beside it on the memory card. A whole match on an Old 3DS: **29.8 frames a second, 48 frames late of 17 954** |
-| PS Vita | A PS Vita that runs homebrew: one `.vpk` with every map's pack, the interface and the programs inside. A match on a console: **59.9 frames a second, 1 frame late of 4 698**, with 135 000 triangles of the street in a frame |
+| PS Vita | A PS Vita that runs homebrew: one `.vpk` with every map's pack, the interface and the programs inside. A whole match on a console: **59.9 frames a second, 2 frames late of 50 405**, with 100 000 triangles of the street in a frame on average and 140 000 at most |
 | Browser tab | As a PSP, 480 × 272 in the PSP display's 16-bit colours; as a Nintendo 3DS, 400 × 240 over a lower screen of 320 × 240 with its four keys; as a PS Vita, 960 × 544 with the right stick looking. wgpu over WebGPU, the PSP's pack. Chrome 154 on an M3 Max: **60 frames a second, under 0.4 ms a frame** |
 
 The consoles and the browser are measured in "What is measured".
@@ -226,7 +226,7 @@ What the console's parts cost decides how the frame is written (`probe=1` in `bo
 | A triangle across a shadow's edge is cut to | 1 m | **35 cm** |
 | The figures' budgets: a soldier, the held weapon, an arm | 700, 1 100 and 260 triangles | **6 000, 9 000 and 2 200** |
 | The street's pack, Twin Yards' | 29.1 MiB, 8.9 MiB | **93.0 MiB, 49.7 MiB** |
-| Triangles in a frame of a match | 19 000 | **135 000** |
+| Triangles in a frame of a match | 19 000 | **100 000, 140 000 at most** |
 
 - **Straight into the display's surface.** vita2d starts GXM with a display surface of four samples a pixel and the street is drawn into it; no second target and no copy.
 - **The pictures are true colour** (`texture::RGBA8`, `"format": "rgba"`), mixed between two texels and between two levels. A picture of 512 a side or less goes to video memory in the GPU's own order of texels through the transfer engine; the ground's shadow picture stays as rows, because the engine refuses a copy of 2 048 a side (`0x805b0003`).
@@ -309,8 +309,9 @@ Console (a PS Vita in Pocket Devkit's native slot over USB, 2026-10-13), 960 × 
 
 | | |
 |---|---|
-| `bench --seconds 75 --clock 60` on the street: a match played by the bench's player to its results (6 kills, 240 rounds) | **4 698 frames, 1 late**, 16.68 ms a frame, the longest interval 29.9 ms; 134 500 triangles of the street in 1 109 draws on average, 137 900 at most |
-| A frame of that match, on this thread | choosing the draws 3.4 ms, drawing 3.7 ms, the interface's draw 0.8 ms, the match 0.9 ms |
+| `bench --seconds 615`: a whole match on the street played by the bench's player, who cannot fall, to its results | **50 405 frames, 2 late (0.004%)**, 16.68 ms a frame, the longest interval 27.5 ms; 100 200 triangles of the street in 837 draws on average, 140 200 and 1 131 at most; the levels of detail at their full distances throughout |
+| A frame of that match on this thread, on average and at most | the match 1.0 and 1.6 ms, choosing the draws 2.9 and 3.7 ms, drawing 3.3 and 4.5 ms, the interface's turn 0.3 and 1.3 ms, its draw 1.1 and 1.4 ms |
+| `bench --seconds 75 --clock 60`: a match ended after a minute, where he fights from the start (6 kills) | 4 698 frames, 1 late; 134 500 triangles in 1 109 draws on average |
 | The same on Twin Yards, where the bench's player stays at his start | **5 036 frames, 1 late**, the longest interval 17.9 ms |
 | `cost`: a held view down the street, 116 000 triangles of the street and 11 000 of two soldiers in 800 draws | **the GPU 12.95 ms** |
 | The same view with two samples a pixel, and with one | 10.41 ms, 8.84 ms: **four samples cost 4.1 ms** |
