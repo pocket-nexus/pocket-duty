@@ -23,8 +23,9 @@
 //
 // A second level: a floor with `over: true` stands over another (a storey, a roof a player walks on, a
 // bridge, a gallery). It is a slab with an underside, its edges end in the air with a rail, a wall under
-// it stops at its underside, and a player walks on it and under it. The walk grid holds one height a
-// node: soldiers keep to the floor under it, unless the plan gives them the upper one (`soldiers: true`).
+// it stops at its underside, and a player walks on it and under it. So do soldiers: the walk grid has a
+// node for each of the two floors of a cell (./mapnav.js), unless the plan keeps them off the upper one
+// (`soldiers: false`).
 import * as THREE from 'three';
 import { BOX, BOX_THIN, IDENT, LL } from '../world/kit.js';
 import { fillMasks, polyPrism, solidSlabs, wallPanel } from '../world/util.js';
@@ -156,8 +157,9 @@ export function buildPlace(A, rng, place) {
       under.computeVertexNormals();
       solid(g.side ?? keys.side, under, null, [0.4, 0.8, 0.6]);
       under.dispose();
-      // Soldiers keep to the floor under it, unless the plan gives them this one (`soldiers: true`).
-      if (!g.soldiers) ceilings.push({ poly: g.at.map(([e, n]) => [e, -n]), y: lowest(g) - thickOf(g) });
+      // The walk grid has the floor under it, and this one over it as a further node of each cell
+      // (`storey`), unless the plan keeps soldiers off it (`soldiers: false`).
+      ceilings.push({ poly: g.at.map(([e, n]) => [e, -n]), y: lowest(g) - thickOf(g), slab: true, storey: g.soldiers !== false });
     }
     geo.dispose();
     for (const [e, n] of g.at) {
@@ -288,7 +290,7 @@ export function buildPlace(A, rng, place) {
         const [ae, an] = centre(s0), [be, bn] = centre(s1);
         run(g.key ?? keys.ground, [ae, -an], [be, -bn], yTop - 0.45, yTop, w1 - w0, { collide: steep, masks: [0.6, 0.6, 0.3] });
       }
-      if (steep) stairs.push(g.at.map(([e, n]) => [e, -n]));
+      if (steep) stairs.push({ poly: g.at.map(([e, n]) => [e, -n]), low: Math.min(fy, ty), high: Math.max(fy, ty) });
     }
     // A roof over the floor: a covered way through a block, the block's top level with the walls'.
     if (g.roof) {
@@ -413,17 +415,17 @@ export function buildPlace(A, rng, place) {
       const doorways = (s === 0 ? (w.holes ?? []) : []).filter((o) => (o.sill ?? 0) < 0.45 && o.h >= 1.9).sort((p, q) => p.at - q.at);
       let from = 0;
       for (const o of doorways) {
-        if (o.at - o.w / 2 > from + 0.05) barriers.push({ a: along(from), b: along(o.at - o.w / 2), t });
+        if (o.at - o.w / 2 > from + 0.05) barriers.push({ a: along(from), b: along(o.at - o.w / 2), t, low: y, high: y + h });
         const nx = (-dz / len) * (t / 2 + 0.03), nz = (dx / len) * (t / 2 + 0.03);
         const p = along(o.at - o.w / 2), q = along(o.at + o.w / 2);
         ceilings.push({ poly: [[p[0] + nx, p[1] + nz], [q[0] + nx, q[1] + nz], [q[0] - nx, q[1] - nz], [p[0] - nx, p[1] - nz]], y: y + (o.sill ?? 0) + o.h * (o.arch ? 0.8 : 1) });
         // A doorway narrower than three cells may hold no open cell once its jambs are closed: a line
         // through its middle stays open, so a soldier's way goes through the door.
         const c = along(o.at), reach = t / 2 + 1.0;
-        threads.push({ a: [c[0] - (dz / len) * reach, c[1] + (dx / len) * reach], b: [c[0] + (dz / len) * reach, c[1] - (dx / len) * reach] });
+        threads.push({ a: [c[0] - (dz / len) * reach, c[1] + (dx / len) * reach], b: [c[0] + (dz / len) * reach, c[1] - (dx / len) * reach], y: y + (o.sill ?? 0) });
         from = o.at + o.w / 2;
       }
-      if (len > from + 0.05 && (w.low ?? h) > 0.5) barriers.push({ a: along(from), b: along(len), t });
+      if (len > from + 0.05 && (w.low ?? h) > 0.5) barriers.push({ a: along(from), b: along(len), t, low: y, high: y + h });
     }
   }
 
@@ -461,7 +463,7 @@ export function buildPlace(A, rng, place) {
       run(d.key ?? 'corrugated', p, q, y + h * raised, y + h, 0.08, { masks: [0.8, 0.6, 0.3] });
       run(keys.iron, p, q, y + h, y + h + 0.3, 0.3, { collide: false, masks: [0.9, 0.5, 0.2] });
       if (h * raised >= 2) ceilings.push({ poly: [[p[0] + f[0] * 0.3, p[1] + f[1] * 0.3], [q[0] + f[0] * 0.3, q[1] + f[1] * 0.3], [q[0] - f[0] * 0.3, q[1] - f[1] * 0.3], [p[0] - f[0] * 0.3, p[1] - f[1] * 0.3]], y: y + h * raised });
-      else barriers.push({ a: p, b: q, t: 0.1 });
+      else barriers.push({ a: p, b: q, t: 0.1, low: y, high: y + h });
       continue;
     }
     // (one leaf hangs at the side `hinge` names: -1 or 1)
@@ -472,7 +474,7 @@ export function buildPlace(A, rng, place) {
       const end = [hinge[0] + dir[0] * span, hinge[1] + dir[1] * span];
       run(d.key ?? keys.wood, hinge, end, y + 0.04, y + h, 0.09, { masks: [0.6, 0.6, 0.3] });
       for (const at of [0.14, 0.5, 0.86]) run(keys.iron, hinge, end, y + h * at - 0.05, y + h * at + 0.05, 0.13, { collide: false, masks: [0.9, 0.5, 0.2] });
-      barriers.push({ a: hinge, b: end, t: 0.09 });
+      barriers.push({ a: hinge, b: end, t: 0.09, low: y, high: y + h });
     }
   }
 
@@ -506,8 +508,9 @@ export function buildPlace(A, rng, place) {
     A.add(w.key ?? keys.water ?? 'window_glass', geo, null, { masks: [0.1, 0.2, 0.1] });
     geo.dispose();
   }
-  // A ladder: two rails and its rungs against what it climbs, facing `facing`. It is drawn and listed
-  // (`ladders`); the match has no ladder yet, so a player climbs only what his own climb reaches (1.85 m).
+  // A ladder: two rails and its rungs against what it climbs, facing `facing`, `h` tall. It is drawn and
+  // listed (`ladders`: its foot, and where a climber steps off at its top, `reach` in from its line): the
+  // cook makes it a link of the walk grid, and the match carries a player and a soldier along it.
   for (const l of place.LADDERS ?? []) {
     const [e, n] = l.at, y = standAt(e, n, l.y), f = [Math.sin(l.facing * RAD), -Math.cos(l.facing * RAD)], u = [-f[1], f[0]], half = (l.w ?? 0.5) / 2;
     for (const s of [-1, 1]) {
@@ -515,7 +518,8 @@ export function buildPlace(A, rng, place) {
       run(keys.iron, [at[0] - f[0] * 0.03, at[1] - f[1] * 0.03], [at[0] + f[0] * 0.03, at[1] + f[1] * 0.03], y, y + l.h + 0.9, 0.06, { collide: false, masks: [0.9, 0.5, 0.2] });
     }
     for (let k = 1; k * 0.3 < l.h + 0.6; k++) run(keys.iron, [e - u[0] * half, -n - u[1] * half], [e + u[0] * half, -n + u[1] * half], y + k * 0.3 - 0.02, y + k * 0.3 + 0.02, 0.04, { collide: false, masks: [0.9, 0.5, 0.2] });
-    ladders.push({ foot: [e, y, -n], top: [e - f[0] * 0.6, y + l.h, -n - f[1] * 0.6] });
+    const reach = l.reach ?? 0.75;
+    ladders.push({ foot: [e, y, -n], top: [e - f[0] * reach, y + l.h, -n - f[1] * reach] });
   }
   // A site's mark, of our own: a square of painted bars on the floor with a bar across it.
   for (const m of place.MARKS ?? []) {

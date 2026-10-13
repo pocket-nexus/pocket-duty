@@ -18,7 +18,15 @@
 //   wider than a cell's diagonal, which no step crosses. The ground beyond the perimeter (`world.perimeter`,
 //   half the side of its square) is closed too.
 //
-// The cover points are then found again on the whole grid, as the reference finds them.
+// - A floor over a floor (`storey` on an underside: a storey, a bridge, a gallery). The reference's grid
+//   holds one height a cell. Here the cell keeps the floor under the underside, and what the cell held
+//   before, the floor over it, is kept beside the grid as a further node of that cell (`grid.over`:
+//   `cell`, `flags`, `floor`, `enclosure`, one entry a node). The undersides are taken from the highest
+//   down, so a cell under three floors has two further nodes. A wall closes the nodes at its own height
+//   (`low`, `high` of a barrier) and a doorway's line opens them at its own (`y` of a thread).
+//
+// The cover points are then found again on the whole grid, as the reference finds them, and on the further
+// nodes the same way.
 import * as THREE from 'three';
 import { NavGrid, CoverMap } from '../ai/nav.js';
 
@@ -28,7 +36,11 @@ export function mapGrid(ai, world, physics) {
   const MASK = physics.MASK.WORLD;
   const corner = new THREE.Vector3(), level = new THREE.Vector3();
   let opened = 0;
-  for (const ceiling of world.ceilings ?? []) {
+  const over = { cell: [], flags: [], floor: [], enclosure: [] };
+  // (the cells under a floor that stands over another, whoever walks on it)
+  const beneath = new Set();
+  // (from the highest down: what a cell holds when a floor's underside is taken is the floor over it)
+  for (const ceiling of [...(world.ceilings ?? [])].sort((a, b) => b.y - a.y)) {
     // An underside is a rect or a polygon of level points.
     const [x0, z0, x1, z1] = ceiling.rect ?? [0, 0, 0, 0];
     const poly = ceiling.poly ?? [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
@@ -63,6 +75,13 @@ export function mapGrid(ai, world, physics) {
           if (up.hit && !up.frontFace) flag = 0;
         }
         if (flag && (!grid.flags[to] || grid.floor[to] > under.floor[from] + 1)) opened++;
+        if (ceiling.slab) beneath.add(to);
+        if (ceiling.storey && grid.flags[to] && grid.floor[to] > y) {
+          over.cell.push(to);
+          over.flags.push(grid.flags[to]);
+          over.floor.push(grid.floor[to]);
+          over.enclosure.push(grid.enclosure[to]);
+        }
         grid.flags[to] = flag;
         grid.floor[to] = under.floor[from];
         grid.enclosure[to] = under.enclosure[from];
@@ -81,6 +100,13 @@ export function mapGrid(ai, world, physics) {
     }
   }
   const a = new THREE.Vector3(), b = new THREE.Vector3();
+  // The further nodes of each cell.
+  const overAt = new Map();
+  over.cell.forEach((cell, k) => overAt.set(cell, [...(overAt.get(cell) ?? []), k]));
+  // Where a floor stands over a floor, a wall that states its heights closes the nodes of its own floor:
+  // not the node under that floor when the wall is wholly over its head, nor a further node whose floor
+  // is over the wall's top.
+  const stands = (wall, floor, further, under) => wall.low === undefined || !((under && wall.low > floor + 1.5) || (further && wall.high < floor - 0.2));
   for (const wall of world.barriers ?? []) {
     world.levelToWorld(wall.a[0], 0, wall.a[1], a);
     world.levelToWorld(wall.b[0], 0, wall.b[1], b);
@@ -95,8 +121,11 @@ export function mapGrid(ai, world, physics) {
         const t = Math.min(1, Math.max(0, ((x - a.x) * dx + (z - a.z) * dz) / len2));
         if (Math.hypot(x - a.x - dx * t, z - a.z - dz * t) > reach) continue;
         const i = grid.index(ix, iz);
-        if (grid.flags[i]) closed++;
-        grid.flags[i] = 0;
+        if (stands(wall, grid.floor[i], false, beneath.has(i))) {
+          if (grid.flags[i]) closed++;
+          grid.flags[i] = 0;
+        }
+        for (const k of overAt.get(i) ?? []) if (stands(wall, over.floor[k], true, false)) over.flags[k] = 0;
       }
     }
   }
@@ -111,23 +140,32 @@ export function mapGrid(ai, world, physics) {
         if (!grid.inside(ix, iz)) continue;
         const x = grid.worldX(ix), z = grid.worldZ(iz), i = grid.index(ix, iz);
         const t = Math.min(1, Math.max(0, ((x - a.x) * dx + (z - a.z) * dz) / len2));
-        if (Math.hypot(x - a.x - dx * t, z - a.z - dz * t) <= grid.cell * 0.56 && Number.isFinite(grid.floor[i]) && !grid.flags[i]) grid.flags[i] = 1;
+        if (Math.hypot(x - a.x - dx * t, z - a.z - dz * t) > grid.cell * 0.56) continue;
+        // (the doorway's own floor, where the thread states its height)
+        const at = (floor) => thread.y === undefined || Math.abs(floor - thread.y) < 0.6;
+        if (Number.isFinite(grid.floor[i]) && !grid.flags[i] && at(grid.floor[i])) grid.flags[i] = 1;
+        for (const k of overAt.get(i) ?? []) if (!over.flags[k] && thread.y !== undefined && at(over.floor[k])) over.flags[k] = 1;
       }
     }
   }
   // A stair steeper than a soldier's step from node to node: its open cells carry the stair's mark
   // (4 beside 1 or 2), and the cook and the match let a step between them be twice as tall.
-  for (const poly of world.stairs ?? []) {
+  for (const stair of world.stairs ?? []) {
+    // (a stair is its polygon and the heights it runs between)
+    const poly = stair.poly ?? stair;
+    const on = (floor) => stair.low === undefined || (floor > stair.low - 0.6 && floor < stair.high + 0.6);
     for (let iz = 0; iz < grid.nz; iz++) {
       for (let ix = 0; ix < grid.nx; ix++) {
         const i = grid.index(ix, iz);
-        if (!grid.flags[i]) continue;
+        if (!grid.flags[i] && !overAt.has(i)) continue;
         world.worldToLevel(grid.worldX(ix), 0, grid.worldZ(iz), level);
         let hit = false;
         for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) {
           if (poly[a][1] > level.z !== poly[b][1] > level.z && level.x < ((poly[b][0] - poly[a][0]) * (level.z - poly[a][1])) / (poly[b][1] - poly[a][1]) + poly[a][0]) hit = !hit;
         }
-        if (hit) grid.flags[i] |= 4;
+        if (!hit) continue;
+        if (grid.flags[i] && on(grid.floor[i])) grid.flags[i] |= 4;
+        for (const k of overAt.get(i) ?? []) if (over.flags[k] && on(over.floor[k])) over.flags[k] |= 4;
       }
     }
   }
@@ -136,5 +174,30 @@ export function mapGrid(ai, world, physics) {
   grid.walkableCount = walk;
   ai.cover = new CoverMap(grid, physics);
   ai.cover.build({ step: 1, reach: 1.3 });
-  return { opened, closed };
+  // The further nodes that stayed open, in the order of their cells, and their cover: the reference's
+  // search over a grid that holds them alone, once for each node a cell has over its first.
+  const kept = over.cell.map((_, k) => k).filter((k) => over.flags[k]).sort((p, q) => over.cell[p] - over.cell[q] || over.floor[p] - over.floor[q]);
+  grid.over = { cell: kept.map((k) => over.cell[k]), flags: kept.map((k) => over.flags[k]), floor: kept.map((k) => over.floor[k]), enclosure: kept.map((k) => over.enclosure[k]) };
+  for (let rank = 0; ; rank++) {
+    const view = Object.create(grid);
+    view.flags = new Uint8Array(grid.flags.length);
+    view.floor = new Float32Array(grid.floor.length).fill(-Infinity);
+    view.enclosure = new Uint8Array(grid.enclosure.length);
+    let some = 0;
+    grid.over.cell.forEach((cell, k) => {
+      // (the rank of this node among its cell's)
+      let before = 0;
+      while (k - before - 1 >= 0 && grid.over.cell[k - before - 1] === cell) before++;
+      if (before !== rank) return;
+      view.flags[cell] = grid.over.flags[k];
+      view.floor[cell] = grid.over.floor[k];
+      view.enclosure[cell] = grid.over.enclosure[k];
+      some++;
+    });
+    if (!some) break;
+    const cover = new CoverMap(view, physics);
+    cover.build({ step: 1, reach: 1.3 });
+    ai.cover.points.push(...cover.points);
+  }
+  return { opened, closed, over: grid.over.cell.length };
 }

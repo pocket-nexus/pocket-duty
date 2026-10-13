@@ -322,8 +322,8 @@ async function exportNav() {
   const world = system('world');
   // A map of ours has ground under roofs, lintels and the gate, and walls thinner than a cell (./mapnav.js).
   if (world.map) {
-    const { opened, closed } = mapGrid(ai, world, system('physics'));
-    log(`nav: ${opened} cells opened under ${world.ceilings.length} roofs, lintels and gates, ${closed} closed by ${world.barriers.length} walls`);
+    const { opened, closed, over } = mapGrid(ai, world, system('physics'));
+    log(`nav: ${opened} cells opened under ${world.ceilings.length} roofs, lintels and gates, ${closed} closed by ${world.barriers.length} walls, ${over} nodes on floors over floors`);
   }
   const grid = ai.grid;
   const bundle = new Bundle({
@@ -337,6 +337,13 @@ async function exportNav() {
   bundle.add('flags', Uint8Array.from(grid.flags));
   bundle.add('floor', Float32Array.from(grid.floor));
   bundle.add('enclosure', Uint8Array.from(grid.enclosure));
+  // A place's floors over floors: a further node each, by its cell (./mapnav.js).
+  if (grid.over?.cell.length) {
+    bundle.meta.over = grid.over.cell.length;
+    bundle.add('overCell', Uint32Array.from(grid.over.cell));
+    bundle.add('overFlags', Uint8Array.from(grid.over.flags));
+    bundle.add('overFloor', Float32Array.from(grid.over.floor));
+  }
   const cover = new Float32Array(ai.cover.points.length * 8);
   ai.cover.points.forEach((p, i) => {
     // Where to stand, which way the thing that covers is, and whether it hides a standing soldier.

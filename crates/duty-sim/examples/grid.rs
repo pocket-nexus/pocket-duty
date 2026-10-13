@@ -12,7 +12,8 @@ fn main() {
     let nav_bytes = unsafe { core::slice::from_raw_parts(nav.as_ptr() as *const u8, nav.len() * 4) };
     let level = unsafe { Level::parse_nav(Bvh { nodes: &[], tris: &[], verts: &[] }, nav_bytes) }.expect("the walk grid");
     let (nx, nz) = (level.nav.nx as i32, level.nav.nz as i32);
-    let count = (nx * nz) as usize;
+    // (the grid's nodes, then the further ones where a floor stands over a floor)
+    let count = level.flags.len();
     let mut part = vec![u32::MAX; count];
     let mut sizes: Vec<usize> = Vec::new();
     for start in 0..count {
@@ -24,18 +25,26 @@ fn main() {
         part[start] = id;
         while let Some(node) = stack.pop() {
             size += 1;
-            let (i, j) = (node as i32 % nx, node as i32 / nx);
+            let cell = level.cell_of(node) as i32;
+            let (i, j) = (cell % nx, cell / nx);
             for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                 let (ni, nj) = (i + di, j + dj);
                 if ni < 0 || nj < 0 || ni >= nx || nj >= nz {
                     continue;
                 }
-                let next = (nj * nx + ni) as u32;
-                // (both ways: a step down is a step up coming back)
-                if level.passable(node, next) && level.open(node) && part[next as usize] == u32::MAX {
-                    part[next as usize] = id;
-                    stack.push(next);
+                let beside = (nj * nx + ni) as u32;
+                for next in std::iter::once(beside).chain(level.over(beside)) {
+                    // (both ways: a step down is a step up coming back)
+                    if level.passable(node, next) && level.open(node) && part[next as usize] == u32::MAX {
+                        part[next as usize] = id;
+                        stack.push(next);
+                    }
                 }
+            }
+            // (a ladder a soldier climbs joins its two ends)
+            if let Some((next, _)) = level.ladder(node).filter(|(next, _)| part[*next as usize] == u32::MAX) {
+                part[next as usize] = id;
+                stack.push(next);
             }
         }
         sizes.push(size);
@@ -44,6 +53,12 @@ fn main() {
     let mut order: Vec<usize> = (0..sizes.len()).collect();
     order.sort_by_key(|i| std::cmp::Reverse(sizes[*i]));
     println!("{nx} x {nz} nodes of {} m, {open} open in {} parts; largest: {:?}", level.nav.cell, sizes.len(), order.iter().take(8).map(|i| (*i, sizes[*i])).collect::<Vec<_>>());
+    if !level.over.is_empty() || !level.links.is_empty() {
+        println!("{} further nodes over the grid's own; {} ladders, {} of them a soldier's way", level.over.len(), level.links.len(), level.links.iter().filter(|l| l.nodes[0] != duty_sim::level::NONE).count());
+        for l in level.links {
+            println!("ladder: foot {:?} top {:?} nodes {:?}", l.foot, l.top, l.nodes.map(|n| (n != duty_sim::level::NONE).then(|| level.node_pos(n))));
+        }
+    }
     let of = |x: f32, z: f32, y: f32| level.nearest_open(x, z, y).map(|n| (part[n as usize], level.floor[n as usize]));
     for (i, s) in level.spawns.iter().enumerate() {
         println!("start {i}: {:?} -> part and floor {:?}", s.pos, of(s.pos[0], s.pos[2], s.pos[1]));
