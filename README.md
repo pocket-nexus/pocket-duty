@@ -118,7 +118,7 @@ A map is a plan written by hand in the terms of the reference's kit (`maps/<id>/
 
 - The export's server hands the reference's world a layout of ours in place of its own (`web/src/pocket/vite.config.js`); the reference's files are unchanged. `web/src/pocket/mapkit.js` builds what a layout adds to the reference's terms (open ground, walls, covered ways, raised ground, cover) from the kit's own boxes, materials and props, and `mapnav.js` finds the walk grid under roofs and closes it at thin walls.
 - The cook, the pack, the match and the devices hold no code for a particular map: starts, walk grid, collision and sight lists are sections of each map's pack.
-- **A device holds one map's pack at a time.** The interface lists the maps a device has a pack for. A browser tab reads the other pack in place of the first; a PSP, which cannot give a pack's memory back, writes the map's name beside its packs and starts itself again; a 3DS's package holds the first map.
+- **A device holds one map's pack at a time.** The interface lists the maps a device has a pack for. A browser tab reads the other pack in place of the first; a PSP, which cannot give a pack's memory back, writes the map's name beside its packs and starts itself again; a 3DS's package holds one map, the first unless `bun tools/n3ds.ts build --map <id>` names another.
 - **A map may resemble a place a player knows in its structure, and takes nothing else**: no file of another game is read, and no vertex, texture, sound, entity list, file name or map name of one enters the repository, a pack, a package or a page.
 
 `maps/README.md` is how a map is made, what a layout states, how to add one and how it is checked.

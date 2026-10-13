@@ -70,6 +70,7 @@ cargo run --release -p duty-sim --example match -- .pocket-build/duty/maps/<id>/
 bun tools/wgpu.ts shot --map <id> --words "mode=play auto=1"   # a frame on this computer's GPU
 bun tools/wgpu.ts check                # the page in Chrome: every cooked map is chosen from the list and played
 bun tools/psp.ts emu --map <id>        # the PSP program on it in PPSSPPHeadless
+bun tools/duty.ts cook --map <id> --profile n3ds30 && bun tools/n3ds.ts build --map <id> && bun tools/n3ds.ts emu --map <id>   # a .3dsx of it, in Azahar
 bun tools/duty.ts maps                 # which maps are exported and cooked
 ```
 
@@ -91,6 +92,8 @@ A device holds **one map's pack at a time**. The interface lists the maps the de
 | --- | --- | --- |
 | Browser tab | A file or a manifest a map, named by the page (`<meta name="pocket-pack">` for the first, `<meta name="pocket-packs">` for the others) | The shell lets its world go, the page reads the other pack (`Duty::map_wanted`), the match starts when it is there |
 | PSP | `duty.pack` and `<id>.pack` beside `EBOOT.PBP` | A pack's memory cannot be given back, so another map is another run: the program writes `map.txt` and starts itself again (`store::start_again`), into the match. Where the kernel will not start it, the screen says to start it again, and that start opens on the chosen map |
-| Nintendo 3DS | `romfs:/duty.pack`, inside the `.3dsx` | None: the package holds the first map. The `.3dsx` is **31.1 MB** and the paired wire installs **32 MiB** at most, so a second pack does not fit in it |
+| Nintendo 3DS | `romfs:/duty.pack`, inside the `.3dsx` | None: a package holds one map, the first unless it is built for another (`bun tools/n3ds.ts build --map <id>`). The `.3dsx` is **31.1 MB** with the street and **32.5 MB** with Twin Yards, and the paired wire installs **32 MiB** at most, so a second pack does not fit in it |
 
-A second map on a 3DS needs three things this repository does not have: the host opening `sdmc:/3ds/pocket-duty/<id>.pack` before `romfs:/duty.pack` (`n3ds/src/main.c`, where the pack is opened), a way to put a pack of 28 MB on the card (the wire sends one program), and a package of more than one file on Pocket Studio. The map's pack itself is `bun tools/duty.ts cook --map <id> --profile n3ds30`.
+A `.3dsx` of another map is the same program with that map's pack in its ROMFS: `bun tools/duty.ts cook --map <id> --profile n3ds30` (25 seconds), then `bun tools/n3ds.ts build --map <id>` and `emu --map <id>`. Its interface lists that map alone, and the core is built with the map's id (`DUTY_MAP`).
+
+Choosing among maps on a 3DS needs three things this repository does not have: the host opening `sdmc:/3ds/pocket-duty/<id>.pack` before `romfs:/duty.pack` (`n3ds/src/main.c`, where the pack is opened) and letting go of a pack's memory or starting itself again, a way to put a pack of 28 MB on the card (the wire sends one program), and a package of more than one file on Pocket Studio.
