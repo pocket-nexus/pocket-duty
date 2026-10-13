@@ -47,7 +47,9 @@ const PART: usize = 65536;
 #[derive(Clone, Copy, Default)]
 struct Vertex {
     pos: [i16; 3],
-    pad: i16,
+    /// The red and the green of the vertex's colour with the sun off (`pack::WSHD`); its blue is `colour`'s
+    /// fourth byte. The vertex's own colour again in a pack without that section.
+    shade: [u8; 2],
     uv: [i16; 2],
     colour: [u8; 4],
 }
@@ -57,7 +59,9 @@ mod variant {
     pub const CUTOUT: usize = 1;
     pub const GROUND: usize = 2;
     pub const FLASH: usize = 4;
-    pub const COUNT: usize = 8;
+    /// The sun's shadow from its depth picture (walls and things; the ground's is `GROUND`'s picture).
+    pub const SUN: usize = 8;
+    pub const COUNT: usize = 16;
 }
 
 struct Street {
@@ -70,8 +74,11 @@ struct Street {
     look: Param,
     flash: Param,
     flash_colour: Param,
+    depth: Param,
+    sun_edge: Param,
     picture: u32,
     shadow: u32,
+    depth_picture: u32,
 }
 
 struct Flat {
@@ -92,6 +99,10 @@ pub struct Look {
     pub shades: bool,
     /// The muzzle's light on the street.
     pub flash: bool,
+    /// A measurement: every fragment of the street reads the ground's shadow picture, not the ground's alone.
+    pub walls: bool,
+    /// The sun's shadow on walls and things from its depth picture, where the pack has one.
+    pub sun: bool,
     /// Two runs of one chunk with no more indices than this between them are drawn as one: the triangles
     /// between are cheaper than a draw.
     pub merge: u32,
@@ -102,7 +113,7 @@ pub struct Look {
 impl Look {
     /// (two runs are joined across 50 triangles: measured on the console in a view of 137 000 triangles, the
     /// GPU takes 0.45 ms less than across 200 and this thread's draws 0.18 ms more)
-    pub const DEFAULT: Look = Look { sky: true, haze: true, shadows: true, effects: true, figures: true, shades: true, flash: true, merge: 150, cull: 0 };
+    pub const DEFAULT: Look = Look { sky: true, haze: true, shadows: true, effects: true, figures: true, shades: true, flash: true, walls: false, sun: true, merge: 150, cull: 0 };
 
     pub fn cull(&self, two_sided: bool) -> Cull {
         match (two_sided, self.cull) {
@@ -157,6 +168,8 @@ pub struct Gfx {
     /// How much of the sun each texel of the ground's shadow picture lets through, of 255.
     sun: (Vec<u8>, usize, usize),
     glass: Vec<(f32, Draw)>,
+    /// The sun's depth picture and its numbers, in a pack whose vertices keep the sun's light apart.
+    pub sun_depth: Option<pack::SunDepth>,
     pub geometry_bytes: usize,
     pub picture_bytes: usize,
     pub vertex_count: usize,
@@ -186,11 +199,13 @@ pub fn merge(draws: &mut Vec<Draw>, gap: u32) {
     draws.truncate(kept);
 }
 
-/// A picture of the pack as rows of four bytes a texel, every level after the one above it.
+/// A picture of the pack as the GPU takes it, every level after the one above it: rows of four bytes a
+/// texel, or the picture's own blocks of 4 × 4 texels.
 fn rows(file: &mut PackFile, r: &Record) -> Result<Vec<u8>, String> {
     let levels = (r.levels as u32).max(1);
     let mut out = Vec::new();
-    if r.format == texture::RGBA8 {
+    if r.format == texture::RGBA8 || r.block().is_some() {
+        // (true colour is rows already, and blocks are what the GPU reads)
         for l in 0..levels {
             let (at, len) = r.level(l);
             let from = out.len();
@@ -279,16 +294,17 @@ impl Programs {
         const WORLD_F: &str = include_str!("../shaders/world_f.cg");
         const FLAT_V: &str = include_str!("../shaders/flat_v.cg");
         const FLAT_F: &str = include_str!("../shaders/flat_f.cg");
-        let world_attrs = [("aPosition", 0u16, S16, 3u8), ("aUv", 8, S16, 2), ("aColor", 12, U8N, 4)];
+        let world_attrs = [("aPosition", 0u16, S16, 3u8), ("aShade", 6, U8N, 2), ("aUv", 8, S16, 2), ("aColor", 12, U8N, 4)];
         let mut street = Vec::with_capacity(variant::COUNT);
         for v in 0..variant::COUNT {
             let mut defines = String::new();
-            for (bit, name) in [(variant::CUTOUT, "CUTOUT"), (variant::GROUND, "GROUND"), (variant::FLASH, "FLASH")] {
+            for (bit, name) in [(variant::CUTOUT, "CUTOUT"), (variant::GROUND, "GROUND"), (variant::FLASH, "FLASH"), (variant::SUN, "SUN")] {
                 if v & bit != 0 {
                     defines.push_str(&format!("#define {name}\n"));
                 }
             }
-            let prog = gpu.program(&format!("street{v}"), "", &defines, WORLD_V, WORLD_F, &[Stream { stride: 16, instanced: false, attrs: &world_attrs }], msaa, [Blend::Opaque, Blend::Alpha])?;
+            // (the vertex program has one switch: whether it sends the place's depth from the sun on)
+            let prog = gpu.program(&format!("street{v}"), if v & variant::SUN != 0 { "#define SUN\n" } else { "" }, &defines, WORLD_V, WORLD_F, &[Stream { stride: 16, instanced: false, attrs: &world_attrs }], msaa, [Blend::Opaque, Blend::Alpha])?;
             street.push(Street {
                 clip: prog.vs.param("uClip"),
                 place: prog.vs.param("uPlace"),
@@ -298,8 +314,11 @@ impl Programs {
                 look: prog.fs.param("uLook"),
                 flash: prog.fs.param("uFlash"),
                 flash_colour: prog.fs.param("uFlashColour"),
+                depth: prog.vs.param("uDepth"),
+                sun_edge: prog.fs.param("uSunEdge"),
                 picture: prog.fs.sampler_index("uPicture").unwrap_or(0),
                 shadow: prog.fs.sampler_index("uShadow").unwrap_or(1),
+                depth_picture: prog.fs.sampler_index("uDepthPicture").unwrap_or(1),
                 prog,
             });
         }
@@ -377,18 +396,26 @@ impl Gfx {
         for (k, &n) in sizes.iter().enumerate() {
             at[k] = block.alloc(pad(n), 64).ok_or("the geometry block")?;
         }
+        // The sun's depth picture and the vertices' colours with the sun off, in a pack that has them.
+        let sun_depth = if file.has(pack::SUND) && file.size(pack::WSHD)? == vertex_count * 2 { file.records::<pack::SunDepth>(pack::SUND)?.first().copied() } else { None };
         let mut part = vec![0u8; PART * core::mem::size_of::<WorldVertex>()];
+        let mut shades = vec![0u8; if sun_depth.is_some() { PART * 2 } else { 0 }];
         let mut done = 0usize;
+        // Five bits of red, six of green, five of blue, red the lowest.
+        let wide = |c: u16| -> [u8; 3] { [((c & 31) as u32 * 255 / 31) as u8, (((c >> 5) & 63) as u32 * 255 / 63) as u8, ((c >> 11) as u32 * 255 / 31) as u8] };
         while done < vertex_count {
             let n = (vertex_count - done).min(PART);
             let bytes = &mut part[..n * core::mem::size_of::<WorldVertex>()];
             file.read_into(pack::WVTX, done * core::mem::size_of::<WorldVertex>(), bytes)?;
+            if sun_depth.is_some() {
+                file.read_into(pack::WSHD, done * 2, &mut shades[..n * 2])?;
+            }
             let out = core::slice::from_raw_parts_mut(at[0].add(done * 16) as *mut Vertex, n);
             for (i, o) in out.iter_mut().enumerate() {
                 let v: WorldVertex = pack::read(bytes, i * core::mem::size_of::<WorldVertex>()).unwrap_or_default();
-                // Five bits of red, six of green, five of blue, red the lowest.
-                let (r, g, b) = ((v.colour & 31) as u32, ((v.colour >> 5) & 63) as u32, (v.colour >> 11) as u32);
-                *o = Vertex { pos: v.pos, pad: 0, uv: v.uv, colour: [(r * 255 / 31) as u8, (g * 255 / 63) as u8, (b * 255 / 31) as u8, 255] };
+                let lit = wide(v.colour);
+                let off = if sun_depth.is_some() { wide(u16::from_le_bytes([shades[i * 2], shades[i * 2 + 1]])) } else { lit };
+                *o = Vertex { pos: v.pos, shade: [off[0], off[1]], uv: v.uv, colour: [lit[0], lit[1], lit[2], off[2]] };
             }
             done += n;
             if done % (PART * 8) == 0 {
@@ -411,7 +438,9 @@ impl Gfx {
         let records: Vec<Record> = file.records(pack::TEXT)?;
         let largest = records.iter().map(|r| r.width as usize * r.height as usize * 4).max().unwrap_or(0);
         let mut staging = Block::new(Kind::Main, largest.max(4096))?;
-        let mut up = Uploader::new(64 * 1024)?;
+        // (the uploader stages a level of blocks whole before the transfer engine reorders it)
+        let staged = records.iter().filter(|r| r.block().is_some()).map(|r| r.level(0).1).max().unwrap_or(0);
+        let mut up = Uploader::new(staged.max(64 * 1024))?;
         let mut pictures = Vec::with_capacity(records.len());
         let mut sun = (Vec::new(), 0, 0);
         let mut picture_bytes = 0usize;
@@ -420,6 +449,24 @@ impl Gfx {
                 stage("Reading the pictures", file);
             }
             let (w, h, levels) = (r.width as u32, r.height as u32, (r.levels as u32).max(1));
+            if r.format == texture::D16 {
+                // The sun's depths: one number of 16 bits a texel, as rows, mixed between four texels (a
+                // flat face's depth then follows the face, and its own shadow does not band it).
+                let bytes = (w * h * 2) as usize;
+                let dst = vram.alloc(bytes, 512)?;
+                file.read_into(pack::TEXD, r.offset as usize, core::slice::from_raw_parts_mut(dst, bytes))?;
+                let mut gxm: g::SceGxmTexture = core::mem::zeroed();
+                let made = g::sceGxmTextureInitLinear(&mut gxm, dst.cast(), g::SceGxmTextureFormat_SCE_GXM_TEXTURE_FORMAT_U16_R, w, h, 1);
+                if made < 0 {
+                    return Err(format!("sceGxmTextureInitLinear {w} x {h} of 16 bits 0x{:08x}", made as u32));
+                }
+                let mut t = Texture { gxm, width: w, height: h, mips: 1, format: Format::Rgba8, bytes };
+                t.set_wrap(Wrap::Clamp, Wrap::Clamp);
+                t.set_filter(true, false);
+                picture_bytes += bytes;
+                pictures.push(t);
+                continue;
+            }
             let data = rows(file, r)?;
             if number as u32 == scene.shadow_texture {
                 // The picture's green: one half is all of the sun.
@@ -428,7 +475,13 @@ impl Gfx {
             // The transfer engine refuses a copy of 2048 texels a side into the GPU's order (0x805b0003 on the
             // console); 512 goes through. A larger picture stays as rows: the ground's shadow, which has one
             // level and is not repeated.
-            let mut t = if linear || w.max(h) > SWIZZLED_SIDE { up.texture(vram, Format::Rgba8, w, h, levels, &data)? } else { swizzled(&mut staging, vram, w, h, levels, &data)? };
+            let mut t = match r.format {
+                // A surface's picture in the GPU's blocks: PocketJS's uploader puts the blocks in its order.
+                texture::BC1 => up.texture(vram, Format::Bc1, w, h, levels, &data)?,
+                texture::BC3 => up.texture(vram, Format::Bc3, w, h, levels, &data)?,
+                _ if linear || w.max(h) > SWIZZLED_SIDE => up.texture(vram, Format::Rgba8, w, h, levels, &data)?,
+                _ => swizzled(&mut staging, vram, w, h, levels, &data)?,
+            };
             let wrap = if r.flags & texture::CLAMP != 0 { Wrap::Clamp } else { Wrap::Repeat };
             t.set_wrap(wrap, wrap);
             // Between two texels, and between two levels: the GE and the PICA200 take the nearest level.
@@ -453,6 +506,7 @@ impl Gfx {
             pictures,
             sun,
             glass: Vec::new(),
+            sun_depth,
             geometry_bytes: total,
             picture_bytes,
             vertex_count,
@@ -526,6 +580,7 @@ impl Gfx {
         let sun_rows = [scene.shadow_rows[0][0], scene.shadow_rows[0][1], scene.shadow_rows[0][2], 0.0, scene.shadow_rows[1][0], scene.shadow_rows[1][1], scene.shadow_rows[1][2], 0.0];
         let flash = view.flash.filter(|_| view.look.flash);
         let flash_bit = if flash.is_some() { variant::FLASH } else { 0 };
+        let sun_depth = self.sun_depth.filter(|_| view.look.shadows && view.look.sun);
         let quantum = scene.quantum;
 
         // One run of a chunk's level. A chunk's own numbers go to the vertex program once, with its first run.
@@ -539,6 +594,9 @@ impl Gfx {
                 v.set(s.uv, &[c.uv_scale[0] / 32768.0, c.uv_scale[1] / 32768.0, c.uv_offset[0], c.uv_offset[1]]);
                 v.set(s.sun, &sun_rows);
                 v.set(s.haze, &haze_v);
+                if let Some(sun) = sun_depth.filter(|_| !s.depth.is_null()) {
+                    v.set(s.depth, &[sun.rows[0][0], sun.rows[0][1], sun.rows[0][2], sun.rows[0][3], sun.rows[1][0], sun.rows[1][1], sun.rows[1][2], sun.rows[1][3], sun.rows[2][0], sun.rows[2][1], sun.rows[2][2], sun.rows[2][3]]);
+                }
             }
             g::sceGxmSetVertexStream(ctx, 0, gfx.vertices.add(level.vertex as usize * 16).cast());
             g::sceGxmDraw(ctx, g::SceGxmPrimitiveType_SCE_GXM_PRIMITIVE_TRIANGLES, g::SceGxmIndexFormat_SCE_GXM_INDEX_FORMAT_U16, gfx.indices.add((level.index + d.first) as usize).cast(), d.count);
@@ -550,6 +608,11 @@ impl Gfx {
             if let Some((at, strength)) = flash {
                 f.set(s.flash, &[at.x, at.y, at.z, strength]);
                 f.set(s.flash_colour, &[1.0, 0.8, 0.5, 0.0]);
+            }
+            // (a program that does not take the sun's depth picture has no such number)
+            if let Some(sun) = sun_depth {
+                // (lit up to `bias` past the picture's depth, then out over `edge`)
+                f.set(s.sun_edge, &[sun.bias + sun.edge, 1.0 / sun.edge.max(1e-9), 0.0, 0.0]);
             }
         };
 
@@ -563,7 +626,11 @@ impl Gfx {
                 self.glass.push((mat::box_distance2(view.eye, &c.min, &c.max), *d));
                 continue;
             }
-            let want = (if c.flags & chunk::CUTOUT != 0 { variant::CUTOUT } else { 0 }) | (if view.look.shadows && c.flags & chunk::GROUND != 0 { variant::GROUND } else { 0 }) | flash_bit;
+            let want = (if c.flags & chunk::CUTOUT != 0 { variant::CUTOUT } else { 0 })
+                | (if view.look.shadows && (c.flags & chunk::GROUND != 0 || view.look.walls) { variant::GROUND } else { 0 })
+                // (what is neither ground nor a cut-out keeps the sun's light apart in such a pack)
+                | (if sun_depth.is_some() && c.flags & (chunk::GROUND | chunk::CUTOUT) == 0 { variant::SUN } else { 0 })
+                | flash_bit;
             let cull = view.look.cull(c.flags & chunk::TWO_SIDED != 0);
             if want != program {
                 program = want;
@@ -572,6 +639,9 @@ impl Gfx {
                 fragment(s, 1.0);
                 if want & variant::GROUND != 0 {
                     self.picture(ctx, s.shadow, scene.shadow_texture);
+                }
+                if let Some(sun) = sun_depth.filter(|_| want & variant::SUN != 0) {
+                    self.picture(ctx, s.depth_picture, sun.texture);
                 }
                 // (a program's own numbers and pictures go with it)
                 bound = u32::MAX;

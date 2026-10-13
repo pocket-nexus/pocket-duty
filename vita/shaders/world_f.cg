@@ -2,6 +2,10 @@
 //   CUTOUT  the picture has holes: a texel under half opaque is not drawn
 //   GROUND  the sun's shadow over the ground comes from a picture (one half is all of the sun)
 //   FLASH   a muzzle's light reaches what is near it: uFlash xyz where, w its strength; uFlashColour
+//   SUN     the sun's shadow from its depth picture: the fragment is lit while its depth from the sun is no
+//           more than the picture's there (uSunEdge x: what it may exceed it by before the light is all
+//           gone; y: 1 / the depth over which it goes), and its light goes from vShade, the vertex's colour with the
+//           sun off, to vColor, its colour in the sun
 //   uLook   rgb: the haze's colour; a: how opaque the surface is (glass)
 
 uniform sampler2D uPicture;
@@ -13,15 +17,30 @@ uniform float4 uLook;
 uniform float4 uFlash;
 uniform float4 uFlashColour;
 #endif
+#ifdef SUN
+uniform sampler2D uDepthPicture;
+uniform float4 uSunEdge;
+#endif
 
-half4 main(float2 vUv : TEXCOORD0, float2 vSun : TEXCOORD1, float3 vAt : TEXCOORD2, half4 vColor : COLOR0) : COLOR
+half4 main(float2 vUv : TEXCOORD0, float2 vSun : TEXCOORD1, float3 vAt : TEXCOORD2,
+#ifdef SUN
+    float3 vSunAt : TEXCOORD3, float3 vShade : TEXCOORD4,
+#endif
+    half4 vColor : COLOR0) : COLOR
 {
     half4 texel = tex2D(uPicture, vUv);
 #ifdef CUTOUT
     if (texel.a < 0.5)
         discard;
 #endif
+#ifdef SUN
+    // (the depths are 16 bits: floats, not halves)
+    float reached = tex2D(uDepthPicture, vSunAt.xy).x;
+    half sunned = (half)saturate((reached + uSunEdge.x - vSunAt.z) * uSunEdge.y);
+    half3 lit = texel.rgb * lerp((half3)vShade, vColor.rgb, sunned) * 2.0;
+#else
     half3 lit = texel.rgb * vColor.rgb * 2.0;
+#endif
 #ifdef GROUND
     lit *= min((half3)tex2D(uShadow, vSun).rgb * 2.0, 1.0);
 #endif

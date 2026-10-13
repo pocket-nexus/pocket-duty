@@ -260,6 +260,47 @@ impl Lighting {
         seen / samples as f32
     }
 
+    /// The sun's depth picture over the box `min`…`max`: `side` texels a side, each how far the sun's
+    /// light goes from the box's side toward the sun before it meets something, as a share of the
+    /// box's length along the light (65 535 where it meets nothing); and the rows that take a place to
+    /// the picture and to its own depth (`duty_pack::SunDepth::rows`).
+    pub fn sun_depth(&self, min: [f32; 3], max: [f32; 3], side: usize) -> (Vec<u16>, [[f32; 4]; 3]) {
+        use rayon::prelude::*;
+        let l = self.sky.sun;
+        let right = V3::UP.cross(l).norm_or(v3(1.0, 0.0, 0.0));
+        let up = l.cross(right);
+        // The box's reach along the picture's two axes and along the light.
+        let mut reach = [(f32::MAX, f32::MIN); 3];
+        for corner in 0..8 {
+            let p = v3(if corner & 1 == 0 { min[0] } else { max[0] }, if corner & 2 == 0 { min[1] } else { max[1] }, if corner & 4 == 0 { min[2] } else { max[2] });
+            for (k, axis) in [right, up, l].into_iter().enumerate() {
+                reach[k] = (reach[k].0.min(p.dot(axis)), reach[k].1.max(p.dot(axis)));
+            }
+        }
+        let (r0, rs) = (reach[0].0, reach[0].1 - reach[0].0);
+        let (u0, us) = (reach[1].0, reach[1].1 - reach[1].0);
+        // (a metre past the box on the sun's side, so nothing starts inside a roof)
+        let (near, length) = (reach[2].1 + 1.0, reach[2].1 - reach[2].0 + 2.0);
+        let bvh = self.bvh();
+        let depths: Vec<u16> = (0..side * side)
+            .into_par_iter()
+            .map(|i| {
+                let (a, b) = (r0 + ((i % side) as f32 + 0.5) / side as f32 * rs, u0 + ((i / side) as f32 + 0.5) / side as f32 * us);
+                let from = right * a + up * b + l * near;
+                match bvh.raycast(from, l * -1.0, length, tag::CLEAR) {
+                    Some(hit) => ((hit.t / length).clamp(0.0, 1.0) * 65535.0) as u16,
+                    None => 65535,
+                }
+            })
+            .collect();
+        let rows = [
+            [right.x / rs, right.y / rs, right.z / rs, -r0 / rs],
+            [up.x / us, up.y / us, up.z / us, -u0 / us],
+            [-l.x / length, -l.y / length, -l.z / length, near / length],
+        ];
+        (depths, rows)
+    }
+
     /// How much of the half space in front of a surface is open, 0…1, weighted by the cosine: what is
     /// left of the sky's fill under a balcony or in a room.
     pub fn open(&self, p: V3, n: V3) -> f32 {

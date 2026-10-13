@@ -222,6 +222,145 @@ pub struct Texels {
     /// True colour, four bytes a texel in rows, every level down to one texel (`texture::RGBA8`):
     /// a device with room for it (the PS Vita). No palette, so nothing is rounded to 256 colours.
     pub rgba: bool,
+    /// With `rgba`: a picture that repeats (a surface's) is held in the GPU's blocks of 4 × 4 texels
+    /// (`texture::BC1`, or `BC3` when it has holes), a sixth or a quarter of the bytes. A picture that
+    /// is clamped (the sky's, the ground's shadow) keeps its four bytes a texel: its slow changes of
+    /// colour would show the blocks.
+    pub blocks: bool,
+}
+
+/// The two 16-bit colours and the sixteen 2-bit choices that stand for a block of texels (BC1 with
+/// four colours: the two and the two thirds between them), as the block's 8 bytes.
+fn colour_block(texels: &[[f32; 3]; 16]) -> [u8; 8] {
+    let pack = |c: [f32; 3]| -> u16 { ((c[0].clamp(0.0, 1.0) * 31.0 + 0.5) as u16) << 11 | ((c[1].clamp(0.0, 1.0) * 63.0 + 0.5) as u16) << 5 | (c[2].clamp(0.0, 1.0) * 31.0 + 0.5) as u16 };
+    let wide = |v: u16| -> [f32; 3] { [(v >> 11) as f32 / 31.0, (v >> 5 & 63) as f32 / 63.0, (v & 31) as f32 / 31.0] };
+    // What a pair of colours makes of the block: each texel's nearest of the four, and the squared error.
+    let fit = |c0: u16, c1: u16| -> ([u8; 16], f32) {
+        let (a, z) = (wide(c0), wide(c1));
+        let four: [[f32; 3]; 4] = [a, z, core::array::from_fn(|k| (2.0 * a[k] + z[k]) / 3.0), core::array::from_fn(|k| (a[k] + 2.0 * z[k]) / 3.0)];
+        let mut chosen = [0u8; 16];
+        let mut error = 0.0;
+        for (i, t) in texels.iter().enumerate() {
+            let mut best = f32::MAX;
+            for (n, c) in four.iter().enumerate() {
+                let d = (t[0] - c[0]) * (t[0] - c[0]) + (t[1] - c[1]) * (t[1] - c[1]) + (t[2] - c[2]) * (t[2] - c[2]);
+                if d < best {
+                    best = d;
+                    chosen[i] = n as u8;
+                }
+            }
+            error += best;
+        }
+        (chosen, error)
+    };
+    // The line through the texels' colours along which they spread most, and its two ends.
+    let mean: [f32; 3] = core::array::from_fn(|k| texels.iter().map(|t| t[k]).sum::<f32>() / 16.0);
+    let mut cov = [[0.0f32; 3]; 3];
+    for t in texels {
+        for i in 0..3 {
+            for j in 0..3 {
+                cov[i][j] += (t[i] - mean[i]) * (t[j] - mean[j]);
+            }
+        }
+    }
+    let mut axis: [f32; 3] = core::array::from_fn(|k| texels.iter().map(|t| t[k]).fold(f32::MIN, f32::max) - texels.iter().map(|t| t[k]).fold(f32::MAX, f32::min));
+    for _ in 0..8 {
+        let next: [f32; 3] = core::array::from_fn(|i| cov[i][0] * axis[0] + cov[i][1] * axis[1] + cov[i][2] * axis[2]);
+        let length = (next[0] * next[0] + next[1] * next[1] + next[2] * next[2]).sqrt();
+        if length < 1e-12 {
+            break;
+        }
+        axis = next.map(|c| c / length);
+    }
+    let along = |t: &[f32; 3]| (t[0] - mean[0]) * axis[0] + (t[1] - mean[1]) * axis[1] + (t[2] - mean[2]) * axis[2];
+    let (low, high) = texels.iter().fold((f32::MAX, f32::MIN), |(low, high), t| (low.min(along(t)), high.max(along(t))));
+    let end = |d: f32| -> [f32; 3] { core::array::from_fn(|k| mean[k] + axis[k] * d) };
+    let (mut c0, mut c1) = (pack(end(high)), pack(end(low)));
+    let (mut chosen, mut error) = fit(c0, c1);
+    // The two colours that fit the texels best for the choices made, a few times over.
+    for _ in 0..4 {
+        // Least squares for `a·w + z·(1 − w)` with `w` the share of the first colour in each texel's choice.
+        let (mut aa, mut az, mut zz) = (0.0f32, 0.0f32, 0.0f32);
+        let (mut ta, mut tz) = ([0.0f32; 3], [0.0f32; 3]);
+        for (t, n) in texels.iter().zip(&chosen) {
+            let w = [1.0, 0.0, 2.0 / 3.0, 1.0 / 3.0][*n as usize];
+            aa += w * w;
+            az += w * (1.0 - w);
+            zz += (1.0 - w) * (1.0 - w);
+            for k in 0..3 {
+                ta[k] += t[k] * w;
+                tz[k] += t[k] * (1.0 - w);
+            }
+        }
+        let det = aa * zz - az * az;
+        if det.abs() < 1e-6 {
+            break;
+        }
+        let (n0, n1) = (pack(core::array::from_fn(|k| (ta[k] * zz - tz[k] * az) / det)), pack(core::array::from_fn(|k| (tz[k] * aa - ta[k] * az) / det)));
+        let (again, now) = fit(n0, n1);
+        if now >= error {
+            break;
+        }
+        (c0, c1, chosen, error) = (n0, n1, again, now);
+    }
+    // Four colours are the first above the second; the other order is three and a hole.
+    if c0 < c1 {
+        core::mem::swap(&mut c0, &mut c1);
+        for n in &mut chosen {
+            *n ^= 1;
+        }
+    } else if c0 == c1 {
+        chosen = [0; 16];
+    }
+    let bits = chosen.iter().enumerate().fold(0u32, |all, (i, n)| all | (*n as u32) << (i * 2));
+    let mut out = [0u8; 8];
+    out[..2].copy_from_slice(&c0.to_le_bytes());
+    out[2..4].copy_from_slice(&c1.to_le_bytes());
+    out[4..].copy_from_slice(&bits.to_le_bytes());
+    out
+}
+
+/// The two alphas and the sixteen 3-bit choices among them and the six between (BC3's first 8 bytes).
+fn alpha_block(alphas: &[f32; 16]) -> [u8; 8] {
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let (a0, a1) = (byte(alphas.iter().copied().fold(f32::MIN, f32::max)), byte(alphas.iter().copied().fold(f32::MAX, f32::min)));
+    let mut bits = 0u64;
+    if a0 > a1 {
+        let eight: [f32; 8] = core::array::from_fn(|i| match i {
+            0 => a0 as f32,
+            1 => a1 as f32,
+            i => (a0 as f32 * (8 - i) as f32 + a1 as f32 * (i - 1) as f32) / 7.0,
+        });
+        for (i, a) in alphas.iter().enumerate() {
+            let want = a.clamp(0.0, 1.0) * 255.0;
+            let n = (0..8).min_by(|p, q| (eight[*p] - want).abs().total_cmp(&(eight[*q] - want).abs())).unwrap();
+            bits |= (n as u64) << (i * 3);
+        }
+    }
+    let mut out = [0u8; 8];
+    out[0] = a0;
+    out[1] = a1;
+    out[2..].copy_from_slice(&bits.to_le_bytes()[..6]);
+    out
+}
+
+/// A level in blocks of 4 × 4 texels, the top row of blocks first: a block at the edge of a level
+/// smaller than itself repeats the level's last texels.
+fn blocks(level: &Image, alpha: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(level.width.div_ceil(4) * level.height.div_ceil(4) * if alpha { 16 } else { 8 });
+    for by in 0..level.height.div_ceil(4) {
+        for bx in 0..level.width.div_ceil(4) {
+            let texel = |i: usize| level.data[(by * 4 + i / 4).min(level.height - 1) * level.width + (bx * 4 + i % 4).min(level.width - 1)];
+            if alpha {
+                out.extend(alpha_block(&core::array::from_fn(|i| texel(i)[3])));
+            }
+            out.extend(colour_block(&core::array::from_fn(|i| {
+                let p = texel(i);
+                [p[0], p[1], p[2]]
+            })));
+        }
+    }
+    out
 }
 
 /// `values` (one for each texel, rows from the top) in the PICA200's order: tiles of 8 × 8, the
@@ -267,6 +406,16 @@ impl Texels {
         let indices: Vec<u8> = image.data.iter().map(|p| (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect();
         self.bytes.extend(pocket_psp_ge::swizzle::swizzle_rows(&indices, image.width, image.height).expect("swizzle"));
         self.records.push(Texture { offset, width: image.width as u16, height: image.height as u16, levels: 1, format: texture::T8, flags });
+        self.records.len() as u32 - 1
+    }
+
+    /// Adds a square picture of depths, 16 bits a texel in rows, and returns its number.
+    pub fn add_depth(&mut self, depths: &[u16], side: usize) -> u32 {
+        assert_eq!(depths.len(), side * side);
+        self.bytes.resize((self.bytes.len() + 15) & !15, 0);
+        let offset = self.bytes.len() as u32;
+        self.bytes.extend(depths.iter().flat_map(|d| d.to_le_bytes()));
+        self.records.push(Texture { offset, width: side as u16, height: side as u16, levels: 1, format: texture::D16, flags: texture::CLAMP });
         self.records.len() as u32 - 1
     }
 
@@ -398,12 +547,23 @@ impl Texels {
         }
         self.bytes.resize((self.bytes.len() + 15) & !15, 0);
         let offset = self.bytes.len() as u32;
+        // (a surface's picture goes in blocks where the profile asks; the sky's and the shadow's are clamped)
+        let in_blocks = self.blocks && options.flags & texture::CLAMP == 0 && image.width >= 4 && image.height >= 4;
         for level in &levels {
             self.bytes.resize((self.bytes.len() + 15) & !15, 0);
+            if in_blocks {
+                self.bytes.extend(blocks(level, cutout));
+                continue;
+            }
             let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
             self.bytes.extend(level.data.iter().flat_map(|p| [byte(p[0]), byte(p[1]), byte(p[2]), if cutout { byte(p[3]) } else { 255 }]));
         }
-        self.records.push(Texture { offset, width: image.width as u16, height: image.height as u16, levels: levels.len() as u8, format: texture::RGBA8, flags: options.flags });
+        let format = match (in_blocks, cutout) {
+            (false, _) => texture::RGBA8,
+            (true, false) => texture::BC1,
+            (true, true) => texture::BC3,
+        };
+        self.records.push(Texture { offset, width: image.width as u16, height: image.height as u16, levels: levels.len() as u8, format, flags: options.flags });
         self.records.len() as u32 - 1
     }
 
@@ -477,6 +637,40 @@ mod tests {
         let (start, bytes) = record.level(3);
         assert_eq!((bytes, start + bytes <= texels.bytes.len() - record.offset as usize), (4, true));
         assert_eq!(record.texel(&texels.bytes, 3, 0, 0)[1], 64);
+    }
+
+    /// A surface's picture in blocks reads back within the blocks' rounding, level by level, and a
+    /// picture with holes keeps them.
+    #[test]
+    fn a_picture_in_blocks_reads_back_close_to_its_texels() {
+        let mut image = Image::new(16, 16);
+        for (i, p) in image.data.iter_mut().enumerate() {
+            let (x, y) = ((i % 16) as f32 / 15.0, (i / 16) as f32 / 15.0);
+            *p = [0.3 + 0.4 * x, 0.5, 0.7 - 0.4 * y, if (i % 16) < 8 { 1.0 } else { 0.0 }];
+        }
+        for (flags, format, block) in [(0, texture::BC1, 8), (texture::CUTOUT, texture::BC3, 16)] {
+            let mut texels = Texels { rgba: true, blocks: true, ..Default::default() };
+            let at = texels.add(&image, &Options { levels: 10, flags, dither: false }) as usize;
+            let record = texels.records[at];
+            assert_eq!((record.format, record.levels, record.block()), (format, 5, Some(block)));
+            // (16 blocks, then 4, then one for each level under a block's size)
+            assert_eq!((record.level(0).1, record.level(1).1, record.level(2).1, record.level(4).1), (16 * block, 4 * block, block, block));
+            for (x, y) in [(0usize, 0usize), (5, 3), (15, 15), (2, 12)] {
+                let c = record.texel(&texels.bytes, 0, x, y);
+                let want = image.data[y * 16 + x];
+                // (a hole's colour is the colour about it: only a texel that is there is compared)
+                for k in 0..3 {
+                    assert!(flags != 0 && x >= 8 || (c[k] as f32 / 255.0 - want[k]).abs() < 0.06, "texel {x},{y} channel {k}: {} for {}", c[k], want[k]);
+                }
+                if flags != 0 {
+                    assert_eq!(c[3], if x < 8 { 255 } else { 0 });
+                }
+            }
+        }
+        // A clamped picture (the sky's) keeps its four bytes a texel.
+        let mut texels = Texels { rgba: true, blocks: true, ..Default::default() };
+        let at = texels.add(&image, &Options { levels: 1, flags: texture::CLAMP, dither: false }) as usize;
+        assert_eq!(texels.records[at].format, texture::RGBA8);
     }
 
     /// A hole's texels take the colour of the shape beside them, at every level, and stay holes.

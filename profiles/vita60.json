@@ -11,6 +11,7 @@
   "figures": { "soldier": 6000, "soldierFar": 1500, "weapon": 9000, "arm": 2200, "arms": "open" },
   "ground": { "families": ["sand", "dirt", "gravel", "asphalt", "concrete"], "below": 0.75, "shadow": { "extent": 128, "side": 2048 } },
   "light": { "rays": 96, "openFloor": 0.3, "leaves": "both" },
-  "textures": { "format": "rgba", "side": 512, "levels": 10 },
+  "textures": { "format": "rgba", "blocks": true, "side": 512, "levels": 10 },
+  "sun": { "depth": { "side": 2048, "bias": 0.06, "edge": 0.12 } },
   "sky": { "columns": 8, "width": 512, "height": 512, "floor": -0.12, "top": 0.95 }
 }

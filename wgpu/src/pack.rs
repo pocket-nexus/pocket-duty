@@ -96,8 +96,8 @@ pub fn level_size(record: &Texture, level: u32) -> (u32, u32) {
 /// One level of a picture as rows of RGBA, the top row first. `texels` is the pack's `TEXD` section.
 ///
 /// The pack holds a level as the GE reads it: one byte a texel, in tiles of 16 texels by 8 rows,
-/// each byte the number of one of the palette's 256 colours. A true-colour pack (the PS Vita's,
-/// `texture::RGBA8`) holds the rows themselves.
+/// each byte the number of one of the palette's 256 colours. A true-colour picture (the PS Vita's sky,
+/// `texture::RGBA8`) holds the rows themselves, and its surfaces are in blocks (`BC1`, `BC3`).
 pub fn rgba(record: &Texture, texels: &[u8], level: u32) -> Result<Vec<u8>, String> {
     let (w, h) = level_size(record, level);
     let (w, h) = (w as usize, h as usize);
@@ -106,6 +106,20 @@ pub fn rgba(record: &Texture, texels: &[u8], level: u32) -> Result<Vec<u8>, Stri
     if record.format == pack::texture::RGBA8 {
         // (a true-colour level is rows already)
         return Ok(texels.get(base + at..base + at + w * h * 4).ok_or("a picture's texels are cut short")?.to_vec());
+    }
+    if record.block().is_some() || record.format == pack::texture::D16 {
+        // The GPU's blocks of 4 × 4 texels (the PS Vita's surfaces), or its depths: taken apart a texel at a time.
+        let (_, bytes) = record.level(level);
+        if texels.len() < base + at + bytes {
+            return Err("a picture's texels are cut short".into());
+        }
+        let mut out = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                out.extend_from_slice(&record.texel(texels, level, x, y));
+            }
+        }
+        return Ok(out);
     }
     let (stride, rows) = ((w + 15) & !15, (h + 7) & !7);
     let palette = texels.get(base..base + pack::texture::PALETTE_BYTES).ok_or("a picture's palette is cut short")?;

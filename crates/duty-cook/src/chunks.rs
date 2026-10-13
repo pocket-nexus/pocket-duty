@@ -19,6 +19,8 @@ use crate::world::{Material, Projection, World};
 pub struct Built {
     pub chunks: Vec<Chunk>,
     pub vertices: Vec<WorldVertex>,
+    /// With `Settings::sun_apart`: each vertex's colour with the sun off, in 16 bits (`pack::WSHD`).
+    pub shades: Vec<u16>,
     pub indices: Vec<u16>,
     pub clusters: Vec<Cluster>,
     /// The large triangles' records, and for each cluster where its first one is.
@@ -36,6 +38,10 @@ pub struct Settings {
     /// A cut-out's face (a leaf) takes the light of whichever of its two sides has more of it: the eye
     /// sees a leaf from both, and its stored normal looks at the ground as often as at the sky.
     pub leaves_both: bool,
+    /// The device takes the sun's shadow a pixel at a time from a depth picture: a vertex of what is
+    /// neither ground, cut-out nor glass carries its colour with nothing between it and the sun, and
+    /// a second one with the sun off (`Built::shades`); no face is cut where the shadow falls.
+    pub sun_apart: bool,
     /// The picture each material samples.
     pub texture_of: Vec<u16>,
     pub texture_flags: Vec<u16>,
@@ -226,6 +232,8 @@ fn rgb565(c: [f32; 3]) -> u16 {
 /// One level of one piece, ready to be laid into the pack.
 struct Level {
     vertices: Vec<WorldVertex>,
+    /// Each vertex's colour with the sun off (the vertex's own where the piece's light is not kept apart).
+    shades: Vec<u16>,
     /// Cluster after cluster, each with its large triangles first.
     indices: Vec<u16>,
     /// The clusters, their runs counted from the level's first index.
@@ -246,11 +254,13 @@ struct Lit {
 fn light_piece(piece: &Piece, material: &Material, scene: &Scene, lighting: &Lighting, tone: &Tone, set: &Settings) -> Lit {
     let centre = scene.cell_centre(piece.cell as u32);
     let mut sun = Sun { lighting, quantum: scene.quantum, seen: HashMap::new() };
+    // The sun's shadow on this piece comes from the device's depth picture, a pixel at a time.
+    let apart = set.sun_apart && !piece.ground && !material.cutout && !material.transparent;
     let refined: Vec<Vec<Tri>> = piece
         .lods
         .iter()
         .enumerate()
-        .map(|(l, tris)| if material.cutout { tris.clone() } else { refine(tris.clone(), &mut sun, set.largest[l], if piece.ground { 0.0 } else { set.shadow_edge[l] }) })
+        .map(|(l, tris)| if material.cutout { tris.clone() } else { refine(tris.clone(), &mut sun, set.largest[l], if piece.ground || apart { 0.0 } else { set.shadow_edge[l] }) })
         .collect();
     // The frame the levels' texture coordinates share.
     let coords: Vec<Vec<[[f32; 2]; 3]>> = refined
@@ -277,8 +287,8 @@ fn light_piece(piece: &Piece, material: &Material, scene: &Scene, lighting: &Lig
     let mut open: HashMap<LightKey, f32> = HashMap::new();
     let sun_dir = lighting.sky.sun;
     let levels: [Level; LODS] = core::array::from_fn(|l| {
-        let mut level = Level { vertices: Vec::new(), indices: Vec::new(), clusters: Vec::new(), larges: Vec::new(), large: 0, bounds: ([f32::MAX; 3], [f32::MIN; 3]) };
-        let mut welded: HashMap<WorldVertex, u16> = HashMap::new();
+        let mut level = Level { vertices: Vec::new(), shades: Vec::new(), indices: Vec::new(), clusters: Vec::new(), larges: Vec::new(), large: 0, bounds: ([f32::MAX; 3], [f32::MIN; 3]) };
+        let mut welded: HashMap<(WorldVertex, u16), u16> = HashMap::new();
         let mut triangles: Vec<[u16; 3]> = Vec::new();
         for (t, tri) in refined[l].iter().enumerate() {
             let mut corners = [0u16; 3];
@@ -287,20 +297,22 @@ fn light_piece(piece: &Piece, material: &Material, scene: &Scene, lighting: &Lig
                 let albedo = c.col.map(|v| v.powf(2.2));
                 // A surface the reference's program could not be asked takes the fill open ground has.
                 let ambient = if c.amb[0] < 0.0 { [albedo[0] * 0.13, albedo[1] * 0.21, albedo[2] * 0.41] } else { c.amb };
-                // The light on the face as it looks along `nrm`.
-                let mut side = |nrm: [f32; 3]| -> [f32; 3] {
+                // The light on the face as it looks along `nrm`, and the same with the sun off.
+                let mut side = |nrm: [f32; 3]| -> ([f32; 3], [f32; 3]) {
                     let n = v3(nrm[0], nrm[1], nrm[2]);
                     let sky = *open.entry(key_of(at, nrm, scene.quantum)).or_insert_with(|| lighting.open(v3(at[0], at[1], at[2]), n));
                     let fill = set.open_floor + (1.0 - set.open_floor) * sky;
                     let facing = n.dot(sun_dir).max(0.0);
-                    let seen = if piece.ground { 1.0 } else { sun.facing(nrm, at) };
+                    // (the ground's shadow is a picture, and so is a piece's whose light is kept apart)
+                    let seen = if piece.ground || apart { 1.0 } else { sun.facing(nrm, at) };
                     // (a place's own light: a warmer sky, the ground's bounce, lamps; nothing for the street)
                     let (gain, added) = (lighting.sky_gain(), lighting.added(v3(at[0], at[1], at[2]), n, sky));
-                    core::array::from_fn(|i| ambient[i] * gain[i] * fill + albedo[i] * (added[i] + lighting.sky.sun_colour[i] * facing * seen * core::f32::consts::FRAC_1_PI))
+                    let light = |seen: f32| core::array::from_fn(|i| ambient[i] * gain[i] * fill + albedo[i] * (added[i] + lighting.sky.sun_colour[i] * facing * seen * core::f32::consts::FRAC_1_PI));
+                    (light(seen), light(0.0))
                 };
-                let mut linear = side(c.nrm);
+                let (mut linear, off) = side(c.nrm);
                 if set.leaves_both && material.cutout {
-                    let other = side(c.nrm.map(|n| -n));
+                    let other = side(c.nrm.map(|n| -n)).0;
                     if other[0] + other[1] + other[2] > linear[0] + linear[1] + linear[2] {
                         linear = other;
                     }
@@ -315,10 +327,13 @@ fn light_piece(piece: &Piece, material: &Material, scene: &Scene, lighting: &Lig
                     level.bounds.0[i] = level.bounds.0[i].min(c.pos[i]);
                     level.bounds.1[i] = level.bounds.1[i].max(c.pos[i]);
                 }
+                // (where the light is not kept apart the second colour is the first: the vertices are the same ones)
+                let shade = if apart { rgb565(tone.display(off)) } else { v.colour };
                 let next = welded.len();
-                corners[k] = *welded.entry(v).or_insert_with(|| {
+                corners[k] = *welded.entry((v, shade)).or_insert_with(|| {
                     assert!(next < 65535, "a chunk of cell {} holds more than 65 535 vertices at level {l}: make the cells smaller", piece.cell);
                     level.vertices.push(v);
+                    level.shades.push(shade);
                     next as u16
                 });
             }
@@ -462,7 +477,7 @@ pub fn build(pieces: &[Piece], world: &World, scene: &Scene, lighting: &Lighting
         let p = &pieces[i];
         (world.materials[p.material].transparent, set.texture_of[p.material], p.ground, p.cell, p.material, p.detail)
     });
-    let mut built = Built { chunks: Vec::new(), vertices: Vec::new(), indices: Vec::new(), clusters: Vec::new(), larges: Vec::new(), larges_at: Vec::new(), triangles: [0; LODS], large: [0; LODS], lit_points: lit.iter().map(|l| l.points).sum() };
+    let mut built = Built { chunks: Vec::new(), vertices: Vec::new(), shades: Vec::new(), indices: Vec::new(), clusters: Vec::new(), larges: Vec::new(), larges_at: Vec::new(), triangles: [0; LODS], large: [0; LODS], lit_points: lit.iter().map(|l| l.points).sum() };
     for i in order {
         let (piece, lit) = (&pieces[i], &lit[i]);
         let material = &world.materials[piece.material];
@@ -494,6 +509,7 @@ pub fn build(pieces: &[Piece], world: &World, scene: &Scene, lighting: &Lighting
             *record.lod_mut(l) = Lod { vertex: built.vertices.len() as u32, index: built.indices.len() as u32, cluster: built.clusters.len() as u32, clusters: level.clusters.len() as u16, pad: 0 };
             any = true;
             built.vertices.extend_from_slice(&level.vertices);
+            built.shades.extend_from_slice(&level.shades);
             built.indices.extend_from_slice(&level.indices);
             // Where each cluster's first large triangle's record is.
             let mut at = built.larges.len() as u32;
