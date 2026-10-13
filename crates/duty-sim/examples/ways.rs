@@ -50,7 +50,7 @@ fn main() {
         }
     }
     let mut best = f64::MAX;
-    let (mut found, mut cut, mut metres) = (0u32, 0u32, 0.0f64);
+    let (mut found, mut cut, mut metres, mut held) = (0u32, 0u32, 0.0f64, 0usize);
     let (mut opened, mut steps, mut points): (Vec<u32>, Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new(), Vec::new());
     // The longest single step of a search, of every round's least (a step that ends a search
     // also pulls its way straight).
@@ -88,7 +88,7 @@ fn main() {
             }
         }
         if round == 0 {
-            cut = finder.cut;
+            (cut, held) = (finder.cut, finder.bytes());
         }
         best = best.min(began.elapsed().as_secs_f64());
         longest = longest.min(slowest);
@@ -99,7 +99,7 @@ fn main() {
         (list.iter().map(|n| *n as u64).sum::<u64>() as f64 / ways as f64, list[ways / 2], list[ways * 95 / 100], list[ways - 1])
     };
     let (o, s, p) = (shares(&mut opened), shares(&mut steps), shares(&mut points));
-    println!("walk grid: {} bytes in the pack, {} nodes ({} open), {} bytes of the pathfinder's own", section.len(), level.flags.len(), open.len(), level.flags.len() * 6);
+    println!("walk grid: {} bytes in the pack, {} nodes ({} open), {held} bytes of the pathfinder's own after these ways", section.len(), level.flags.len(), open.len());
     println!("ways: {between} between {} starts and {} between drawn nodes; {found} found, {cut} with more corners than points, {:.1} m a way", ends.len(), ways - between, metres / found.max(1) as f64);
     println!("nodes a search opened: mean {:.0}, half under {}, 95% under {}, most {}", o.0, o.1, o.2, o.3);
     println!("steps of {BUDGET} nodes a way: mean {:.1}, half under {}, 95% under {}, most {}", s.0, s.1, s.2, s.3);

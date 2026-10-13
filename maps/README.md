@@ -148,7 +148,7 @@ A map is ready when:
 - `walk` reports **every start on the part that stays** and **no ground off it**. Red in `walk.png` is ground a player reaches and a soldier does not.
 - The cook's `walk grid:` line reports **0 starts moved**.
 - The pack is **under 34 MB**. A PSP holds one pack in **50.8 MB** with the program, the interface and the match beside it; the street's is 30.5 MB, and Twin Yards, with 39 000 triangles in its export, is **9.4 MB**.
-- A bench match finds its ways: `ways asked, found, not there, given up` with none `not there`.
+- A bench match finds its ways: `ways asked, found, not there, given up` with none `not there` and none `given up` (a search gives up after 16 000 opened nodes; the longest way on the eight places opens 8 119).
 - The `look` pictures show the views a player knows the place by.
 
 Two rules of the walk grid shape a plan: **a step between two floors is 0.45 m at most** (a ledge of half a metre is not walked), and **a slope rises 0.5 m a metre at most** (a stair is a slope with `steps` drawn over it). On a place with storeys the cook prints a second `walk grid:` line: the nodes that stand over another, and the ladders that are a soldier's way.

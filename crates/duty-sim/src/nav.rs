@@ -12,9 +12,10 @@
 //!
 //! A search can visit thousands of nodes, and a step of the game has room for
 //! a few hundred: one search runs at a time, a slice a step, and the soldiers
-//! wait their turn for a moment. A search opens a node once and has no limit of
-//! its own: on a grid whose open nodes hang together it ends at its goal. The
-//! way it finds is pulled straight in the steps after, a few points a step.
+//! wait their turn for a moment. A search opens a node once, so on a grid whose
+//! open nodes hang together it ends at its goal; it gives up after `LIMIT`
+//! nodes, which no way on the places so far comes near. The way it finds is
+//! pulled straight in the steps after, a few points a step.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -27,6 +28,10 @@ pub const POINTS: usize = 32;
 /// Sixteenths of the distance left that a search's estimate is (`estimate`): 16 is the distance
 /// itself, and more leans the search toward the goal.
 const LEAN: u32 = 32;
+/// Nodes a search may open before it gives up: 134 steps of the game, a little over two seconds
+/// in which nobody else is answered. Twice what the longest way on the eight places opens (8 119
+/// of the street's 29 776 open nodes, between two nodes drawn from one seed).
+const LIMIT: u32 = 16_000;
 /// Nodes of a way a point may pass over: a straight walk is looked for this far ahead.
 const AHEAD: usize = 24;
 /// A step that pulls a way straight makes a point for this many nodes it might have opened.
@@ -114,8 +119,7 @@ pub struct Pathfinder {
     parts: u8,
     /// Who waits: (owner, from, to).
     waiting: Vec<(u8, u32, u32)>,
-    /// Ways asked for, found, not there, and given up (none is: a search opens a node once, so it
-    /// ends by itself).
+    /// Ways asked for, found, not there, and given up after `LIMIT` nodes.
     pub counts: [u32; 4],
     /// Nodes the searches opened in all, and the most one opened.
     pub opened: (u64, u32),
@@ -143,6 +147,16 @@ impl Pathfinder {
             cut: 0,
             lean: LEAN,
         }
+    }
+
+    /// Bytes the pathfinder holds: six a node, the heap as far as a search has grown it, the nodes
+    /// of the way in hand, and the parts where a search found the grid in more than one.
+    pub fn bytes(&self) -> usize {
+        use core::mem::size_of;
+        (self.cost.capacity() + self.before.capacity() + self.mark.capacity() + self.way.capacity()) * 2
+            + self.heap.capacity() * size_of::<(u32, u16)>()
+            + self.waiting.capacity() * size_of::<(u8, u32, u32)>()
+            + self.part.capacity()
     }
 
     /// Asks for a way; a later ask by the same owner takes the earlier one's place.
@@ -343,7 +357,14 @@ impl Pathfinder {
                 return None;
             }
             self.mark[node as usize] = settled;
-            self.search.as_mut().unwrap().opened += 1;
+            self.opened.0 += 1;
+            let search = self.search.as_mut().unwrap();
+            search.opened += 1;
+            if search.opened > LIMIT {
+                self.done();
+                self.counts[3] += 1;
+                return Some((owner, Path::default()));
+            }
             let (i, j) = if STOREYS { Self::place(level, node) } else { (node as i32 % nx, node as i32 / nx) };
             let here = self.cost[node as usize] as u32;
             for (di, dj) in [
@@ -440,7 +461,6 @@ impl Pathfinder {
     /// Ends the search in hand and counts what it opened.
     fn done(&mut self) {
         if let Some(search) = self.search.take() {
-            self.opened.0 += search.opened as u64;
             self.opened.1 = self.opened.1.max(search.opened);
         }
     }
