@@ -519,6 +519,23 @@ impl App {
         self.world.is_some()
     }
 
+    /// The held map is to be read again from another pack (a device whose own pack is another's: the
+    /// PS Vita's): its world goes as for another map, the loading screen stands, and the page reads the
+    /// map it is told ([`App::map_wanted`]). A match that was running begins again on it; a title stays one.
+    pub fn repack(&mut self) {
+        let (map, asked) = self.reading;
+        // (a read that was under way keeps what it was for: a match, or the title)
+        let play = if self.world.is_some() { !matches!(self.session.mode, Mode::Title | Mode::Loading | Mode::Error) } else { asked };
+        self.leave(map);
+        self.reading.1 = play;
+    }
+
+    /// Whether this GPU reads pictures in blocks as they are (`texture-compression-bc`): the PS Vita's pack
+    /// holds its surfaces so.
+    pub fn reads_blocks(&self) -> bool {
+        self.gpu.features.contains(pocket_web_wgpu::wgpu::Features::TEXTURE_COMPRESSION_BC)
+    }
+
     /// The held map from above, or none: the interface is told with the rest of the state.
     pub fn chart(&mut self, chart: Option<duty_interface::Chart>) {
         self.session.chart = chart;
@@ -968,6 +985,8 @@ impl App {
             status["clusters"] = json!({"listed": c.clusters, "unseen": c.unseen, "outside": c.outside, "turned": c.turned, "drawn": c.drawn});
             status["chunks"] = json!({"listed": c.listed, "seen": c.chunks});
             status["gpuBytes"] = json!(w.renderer.bytes);
+            // How the pack is drawn: as the PSP's GE draws its own, or as the PS Vita's programs draw that console's.
+            status["drawn"] = json!({"as": if w.renderer.rich { "vita" } else { "psp" }, "samples": w.renderer.samples, "sunDepth": w.renderer.sun_depth.is_some(), "blocks": w.renderer.blocks});
             status["eye"] = json!([self.camera.eye.x, self.camera.eye.y, self.camera.eye.z]);
             status["yaw"] = json!(self.camera.yaw * (180.0 / PI));
             status["pitch"] = json!(self.camera.pitch * (180.0 / PI));

@@ -9,7 +9,7 @@
 //                                                  the page, the module under its build's name, and every
 //                                                  map's pack cut into pieces of that many MiB with its manifest
 //   bun tools/wgpu.ts serve --dist                 that directory as such a host serves it: no byte ranges
-//   bun tools/wgpu.ts shot [--map yards] [--out f.png] [--size WxH] [--frames N] [--words "mode=play auto=1"] [--cue N:WORDS]
+//   bun tools/wgpu.ts shot [--map yards] [--profile vita60] [--out f.png] [--size WxH] [--frames N] [--words "mode=play auto=1"] [--cue N:WORDS]
 //                                                  one frame on this machine's GPU (Metal) → a PNG and the status
 //   bun tools/wgpu.ts check [--headed] [--seconds 5] [--dist]   the page in Chrome, driven by keys and pointer:
 //                                                  from the title into a match, the menu, the results, the same
@@ -21,7 +21,9 @@
 // The site has the pack of every map that is cooked for the PSP (tools/maps.ts): the first
 // map's is what the page opens on, and the map list offers the others. Every command takes [--pack PATH]
 // for the first map's pack (default: .pocket-build/duty/psp30/duty.pack, which `bun tools/duty.ts cook`
-// writes). `build` compiles the interface as tools/ui.ts does: it needs `bun install` in vendor/pocketjs.
+// writes). The PSP and the 3DS draw those. A device with a profile of its own (the PS Vita: `vita60`)
+// draws its own packs, which the site has beside them for every map cooked for that profile
+// (`bun tools/duty.ts cook --profile vita60`); `shot --profile vita60` draws one on this machine. `build` compiles the interface as tools/ui.ts does: it needs `bun install` in vendor/pocketjs.
 // The site and the captures stay under the ignored .pocket-build/.
 
 import { $ } from "bun";
@@ -32,7 +34,7 @@ import { POCKET3D_ICON } from "../vendor/pocketjs/tools/pocket3d-icon.ts";
 import { CUT_SIZES, writePacks } from "../vendor/pocketjs/tools/pocket3d-packs.ts";
 import { stagePocket3dWeb } from "../vendor/pocketjs/tools/pocket3d-web.ts";
 import { FIRST, mapNamed, MAPS, packPath } from "./maps.ts";
-import { chartName, chartPacks, isChart } from "./packs.ts";
+import { chartName, chartPacks } from "./packs.ts";
 import { compileInterface, type Device } from "./ui.ts";
 
 export const ROOT = resolve(import.meta.dir, "..");
@@ -43,6 +45,9 @@ const DIST = join(BUILD, "dist");
 export const PACK = packPath(FIRST, "psp30");
 // The handhelds the page shows (`DEVICES` in wgpu/page/main.js, `SHAPES` in wgpu/src/app.rs).
 export const SHOWN = ["psp", "3ds", "vita"] as const satisfies readonly Device[];
+// The devices that draw packs of their own, and the profile those are cooked for (`OWN` is what the page's
+// `<meta name="pocket-packs-<device>">` names): every other device draws the PSP's.
+export const OWN: Partial<Record<Device, string>> = { vita: "vita60" };
 // What the host a build is deployed to allows (Pocket Studio's site deployments): the size of a file, the
 // files and the bytes of a deployment, and the top-level names it keeps for itself.
 const HOST = { file: 32 << 20, files: 4000, bytes: 1 << 30, reserved: ["play", "runtime"] };
@@ -67,11 +72,22 @@ export function packs(first = pack): { id: string; file: string; name: string }[
   });
 }
 
-/** The page with the other maps' packs named (`<meta name="pocket-packs">`: `<map>=<pack>` with spaces between). */
-export function namePacks(page: string, named: { id: string; pack: string }[]): string {
-  const meta = /<meta name="pocket-packs" content="[^"]*">/;
-  if (!meta.test(page)) throw new Error(`wgpu/page/index.html has no <meta name="pocket-packs">`);
-  return page.replace(meta, `<meta name="pocket-packs" content="${named.map((each) => `${each.id}=${each.pack}`).join(" ")}">`);
+/** The packs a device has of its own on the site: every map's that is cooked for its profile, the first map's too. */
+export function ownPacks(device: Device): { id: string; file: string; name: string }[] {
+  const profile = OWN[device];
+  if (!profile) return [];
+  return MAPS.flatMap((map) => (existsSync(packPath(map.id, profile)) ? [{ id: map.id, file: packPath(map.id, profile), name: `${device}/${map.id === FIRST ? "duty" : map.id}.pack` }] : []));
+}
+
+/**
+ * The page with packs named: the other maps' (`<meta name="pocket-packs">`: `<map>=<pack>` with spaces
+ * between), or every map's of a device that has its own (`<meta name="pocket-packs-<device>">`).
+ */
+export function namePacks(page: string, named: { id: string; pack: string }[], device?: Device): string {
+  const name = device ? `pocket-packs-${device}` : "pocket-packs";
+  const meta = new RegExp(`<meta name="${name}" content="[^"]*">`);
+  if (!meta.test(page)) throw new Error(`wgpu/page/index.html has no <meta name="${name}">`);
+  return page.replace(meta, `<meta name="${name}" content="${named.map((each) => `${each.id}=${each.pack}`).join(" ")}">`);
 }
 
 /** The wasm module, its JavaScript side and the page, as one directory a static server can serve. */
@@ -85,8 +101,10 @@ export async function build() {
   mkdirSync(join(SITE, "pkg"), { recursive: true });
   await $`wasm-bindgen --target web --no-typescript --out-dir ${join(SITE, "pkg")} ${join(CRATE, "target/wasm32-unknown-unknown/release/duty_wgpu.wasm")}`;
   cpSync(join(CRATE, "page/main.js"), join(SITE, "main.js"));
-  // The page names the packs the server here answers: every cooked map's.
-  writeFileSync(join(SITE, "index.html"), namePacks(readFileSync(join(CRATE, "page/index.html"), "utf8"), packs().slice(1).map((each) => ({ id: each.id, pack: each.name }))));
+  // The page names the packs the server here answers: every cooked map's, and those of a device that has its own.
+  let page = namePacks(readFileSync(join(CRATE, "page/index.html"), "utf8"), packs().slice(1).map((each) => ({ id: each.id, pack: each.name })));
+  for (const device of SHOWN) if (OWN[device]) page = namePacks(page, ownPacks(device).map((each) => ({ id: each.id, pack: each.name })), device);
+  writeFileSync(join(SITE, "index.html"), page);
   // What the page loads from PocketJS's browser kernel (vendor/pocketjs/devices/web/pocket-web-wgpu), as
   // PocketJS stages it: the page's modules, the Pocket3D title card, the realm of the interface's guest
   // with the UI core, and the host helpers of the framework. Then the icon of the tab.
@@ -136,11 +154,21 @@ async function dist(pieceBytes: number) {
   // manifest that lists them, named by its own (vendor/pocketjs/tools/pocket3d-packs.ts). A section two
   // maps share is one file, and a pack cooked again leaves the pieces it did not change where they are.
   // A map's pack is the manifest's place and the map's name after `#` (pocket_web_wgpu::source).
-  const cut = writePacks(join(DIST, "pack"), [...packs().map((each) => ({ name: each.id, file: each.file })), ...chartPacks("psp30", packs().map((each) => each.id))], { min: Math.max(64 << 10, pieceBytes >> 3), max: pieceBytes, bits: Math.max(12, Math.round(Math.log2(pieceBytes)) - 2) });
+  // A device's own packs stand in the same list under `<map>-<device>`, each with its picture as
+  // `<map>-<device>-map`: what two profiles' packs share (the sounds, the walk grid) is one file.
+  const owned = SHOWN.flatMap((device) => {
+    const profile = OWN[device];
+    if (!profile) return [];
+    const theirs = ownPacks(device);
+    return [...theirs.map((each) => ({ name: `${each.id}-${device}`, file: each.file })), ...chartPacks(profile, theirs.map((each) => each.id)).map((chart) => ({ ...chart, name: chart.name.replace(/-map$/, `-${device}-map`) }))];
+  });
+  const cut = writePacks(join(DIST, "pack"), [...packs().map((each) => ({ name: each.id, file: each.file })), ...chartPacks("psp30", packs().map((each) => each.id)), ...owned], { min: Math.max(64 << 10, pieceBytes >> 3), max: pieceBytes, bits: Math.max(12, Math.round(Math.log2(pieceBytes)) - 2) });
   const place = (name: string) => `pack/${cut.manifest}#${name}`;
   const manifest = place(cut.packs[0]!.name);
   // The page names its build and its packs.
-  let page = namePacks(readFileSync(join(SITE, "index.html"), "utf8"), cut.packs.slice(1).filter((each) => !isChart(each.name)).map((each) => ({ id: each.name, pack: place(each.name) })));
+  const mapsOf = new Set(packs().map((each) => each.id));
+  let page = namePacks(readFileSync(join(SITE, "index.html"), "utf8"), cut.packs.slice(1).filter((each) => mapsOf.has(each.name)).map((each) => ({ id: each.name, pack: place(each.name) })));
+  for (const device of SHOWN) if (OWN[device]) page = namePacks(page, ownPacks(device).map((each) => ({ id: each.id, pack: place(`${each.id}-${device}`) })), device);
   for (const [from, to] of [[`<meta name="pocket-pack" content="duty.pack">`, `<meta name="pocket-pack" content="${manifest}">`], [`src="main.js"`, `src="app/${id}/main.js"`], [`href="pocket3d-stage.css"`, `href="app/${id}/pocket3d-stage.css"`], [`href="pocket3d-player.css"`, `href="app/${id}/pocket3d-player.css"`]] as const) {
     if (!page.includes(from)) throw new Error(`wgpu/page/index.html has no ${from}`);
     page = page.replace(from, to);
@@ -216,6 +244,17 @@ export function serve(port: number) {
     const of = packs().find((each) => chartName(each.id) === chart.name)!;
     served.set(`/${of.name.replace(/\.pack$/, ".chart")}`, chart.file);
   }
+  // A device's own packs, under its name, each with its picture beside it.
+  for (const device of SHOWN) {
+    const profile = OWN[device];
+    if (!profile) continue;
+    const theirs = ownPacks(device);
+    for (const each of theirs) served.set(`/${each.name}`, each.file);
+    for (const chart of chartPacks(profile, theirs.map((each) => each.id))) {
+      const of = theirs.find((each) => chartName(each.id) === chart.name)!;
+      served.set(`/${of.name.replace(/\.pack$/, ".chart")}`, chart.file);
+    }
+  }
   return Bun.serve({
     port,
     hostname: "127.0.0.1",
@@ -282,10 +321,13 @@ if (command === "build") {
   needPack();
   // (--map: a frame of another map's pack)
   const map = mapNamed(option("--map", FIRST)).id;
-  const from = packs().find((each) => each.id === map)?.file;
-  if (!from) throw new Error(`${packPath(map, "psp30")} is missing: bun tools/duty.ts export --map ${map}, then bun tools/duty.ts cook --map ${map}`);
+  // (--profile: the pack of a device that draws its own, on that device's screen)
+  const profile = option("--profile", "psp30");
+  const device = SHOWN.find((each) => OWN[each] === profile);
+  const from = profile === "psp30" ? packs().find((each) => each.id === map)?.file : existsSync(packPath(map, profile)) ? packPath(map, profile) : undefined;
+  if (!from) throw new Error(`${packPath(map, profile)} is missing: bun tools/duty.ts export --map ${map}, then bun tools/duty.ts cook --map ${map} --profile ${profile}`);
   const out = resolve(option("--out", join(validation(`shot-${stamp()}`), "frame.png")));
-  const passed = [...["--size", "--frames", "--words", "--status", "--shape"].flatMap((flag) => (option(flag) ? [flag, option(flag)] : [])), ...options("--cue").flatMap((cue) => ["--cue", cue]), "--map", map];
+  const passed = [...["--size", "--frames", "--words", "--status", "--shape"].flatMap((flag) => (option(flag) ? [flag, option(flag)] : flag === "--shape" && device ? [flag, device] : [])), ...options("--cue").flatMap((cue) => ["--cue", cue]), "--map", map];
   console.log(JSON.stringify(await shot(out, passed, from), null, 1));
   console.log(out);
 } else if (command === "check") {
@@ -331,7 +373,9 @@ if (command === "build") {
     }
   };
 
-  const visit = async (address: string, context?: Awaited<ReturnType<typeof browser.newContext>>) => {
+  // (a visit that names no device is a PSP's: what the page opens as by itself is checked on its own, `own: true`)
+  const visit = async (address: string, context?: Awaited<ReturnType<typeof browser.newContext>>, own = false) => {
+    if (!own && !/[?&]device=/.test(address)) address += `${address.includes("?") ? "&" : "?"}device=psp`;
     const page: Page = await (context ?? browser).newPage({ viewport: { width: 1280, height: 800 } });
     const problems: string[] = [];
     // (the deployable directory's host answers no /app.json: the browser writes that one reply to the
@@ -711,6 +755,14 @@ if (command === "build") {
       expect(`vita: the renderer draws the screen's 960 by 544 (${JSON.stringify(shape)})`, shape.name === "vita" && shape.width === 960 && shape.height === 544);
       const screens = (await p.page.evaluate(`[...document.querySelectorAll("[data-pocket-screen]:not([hidden])")].map((c) => [c.dataset.pocketScreen, c.width, c.height])`)) as [string, number, number][];
       expect(`vita: the shell holds one screen (${JSON.stringify(screens)})`, JSON.stringify(screens) === JSON.stringify([["upper", 960, 544]]));
+      // Where the PS Vita's own pack is cooked, that is the pack read, and it is drawn as that console draws it.
+      const mine = ownPacks("vita");
+      const first = (await p.status());
+      if (mine.length > 0) {
+        expect(`vita: the pack read is the PS Vita's own (${first.pack.bytes} bytes, drawn ${JSON.stringify(first.drawn)})`, first.pack.bytes === statSync(mine[0]!.file).size && first.drawn.as === "vita" && first.drawn.samples === 4 && first.drawn.blocks !== "decoded");
+        expect(`vita: the map list offers the maps that have a pack of its own (${first.maps})`, JSON.stringify(first.maps) === JSON.stringify(mine.map((each) => each.id)));
+      }
+      report.vita = { pack: first.pack.bytes, drawn: first.drawn, gpuBytes: first.gpuBytes, firstWorldMs: await p.page.evaluate("pocketDuty.firstWorld") };
       await p.save("vita-title");
       await p.say("ui=start");
       await p.mode("play");
@@ -729,8 +781,42 @@ if (command === "build") {
       const said = (await p.page.evaluate(`document.getElementById("pocket-simulated").textContent`)) as string;
       expect(`vita: the mark says the picture is simulated ("${said}")`, said === "Your browser draws this picture. A real PS Vita draws Pocket Duty with its own hardware, so it looks and runs differently there.");
       await p.page.mouse.move(4, 400);
+      if (mine.length > 0) {
+        // A PSP chosen in the bar while the match runs: the held map is read again from the PSP's pack (the
+        // loading words, no reload of the page) and a match begins on it; the PS Vita chosen again reads its own.
+        const from = performance.now();
+        await p.page.evaluate(`pocketDuty.present("psp")`);
+        await p.page.waitForFunction(`pocketDuty.device() === "psp" && pocketDuty.interface() && (() => { const s = JSON.parse(pocketDuty.duty.status()); return s.stage === "running" && s.mode === "play" && s.drawn.as === "psp"; })()`, undefined, { timeout: 90_000 });
+        const psp = await p.status();
+        expect(`vita: a PSP chosen in the bar reads the PSP's pack of the held map (${psp.map}, ${psp.pack.bytes} bytes, drawn ${JSON.stringify(psp.drawn)}) and a match runs on it (${psp.mode})`, psp.map === first.map && psp.pack.bytes === statSync(offered[0]!.file).size && psp.drawn.samples === 1 && psp.shape.name === "psp");
+        await p.save("vita-then-psp");
+        await p.page.evaluate(`pocketDuty.present("vita")`);
+        await p.page.waitForFunction(`pocketDuty.device() === "vita" && pocketDuty.interface() && (() => { const s = JSON.parse(pocketDuty.duty.status()); return s.stage === "running" && s.mode === "play" && s.drawn.as === "vita"; })()`, undefined, { timeout: 120_000 });
+        const again = await p.status();
+        expect(`vita: and the PS Vita again reads its own (${again.pack.bytes} bytes)`, again.pack.bytes === first.pack.bytes && again.shape.name === "vita");
+        report.vita.changes = { toPspAndBackMs: Math.round(performance.now() - from) };
+        await p.save("vita-again");
+      }
       expect(`vita: no error on the page (${p.problems.join("; ")})`, p.problems.length === 0);
       await p.page.close();
+    }
+
+    // ---- what the page opens as by itself: the PS Vita on a computer where it has that device's packs,
+    // the PSP on a phone
+    {
+      const mine = ownPacks("vita");
+      const p = await visit("?sound=off", undefined, true);
+      await p.page.waitForFunction("window.pocketDuty?.device", undefined, { timeout: 60_000 });
+      const computer = (await p.page.evaluate("pocketDuty.device()")) as string;
+      expect(`with no device in the address a computer's page opens as ${mine.length > 0 ? "a PS Vita" : "a PSP"} (${computer})`, computer === (mine.length > 0 ? "vita" : "psp"));
+      await p.page.close();
+      const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, hasTouch: true, isMobile: true });
+      const q = await visit("?sound=off", phone, true);
+      await q.page.waitForFunction("window.pocketDuty?.device", undefined, { timeout: 60_000 });
+      const small = (await q.page.evaluate("pocketDuty.device()")) as string;
+      expect(`and a phone's opens as a PSP (${small})`, small === "psp");
+      await phone.close();
+      report.opensAs = { computer, phone: small };
     }
 
     // ---- the player around the game, in three windows: the PSP in its shell, the mark that says the

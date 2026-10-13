@@ -145,6 +145,17 @@ impl Duty {
         self.app.entered()
     }
 
+    /// The held map is to be read again, from the pack of the device the page now shows: the world goes and
+    /// the loading screen stands until `enter`; `map_wanted` names the map on the next frame.
+    pub fn repack(&mut self) {
+        self.app.repack();
+    }
+
+    /// Whether this tab's GPU reads pictures in blocks as they are: the PS Vita's pack is read where it does.
+    pub fn reads_blocks(&self) -> bool {
+        self.app.reads_blocks()
+    }
+
     /// The start failed: the interface says why.
     pub fn fail(&mut self, why: &str) {
         self.app.fail(why);
