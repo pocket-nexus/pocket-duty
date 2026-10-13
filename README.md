@@ -238,6 +238,10 @@ Console (a PSP with 64 MB, over PSPLINK, 2026-10-13):
 | A frame of the first match, on average | match 2.4 ms, choosing the draws 7.5 ms, the list 11.2 ms, the interface 2.9 ms (a turn is 9.7 ms, 9 a second), waiting for the GE 2.9 ms |
 | The GE, from the list's first word to its last pixel | 27 ms on average in that match: 19 000 triangles of the street, 6 soldiers, the weapon and the interface |
 | Memory | 38.9 MB of the program's 50.8 MB after the match, 38.2 MB at its start |
+| `run --standalone --boot "title=0 changes=20 held=4096"`: twenty changes of map in the running program, files beside the PRX, 4 MiB kept from it | **no restart; the arena's free bytes (4 846 880 and 4 859 168) and its largest free block (3 344 912) are the same from the third change to the twentieth**; a change takes 0.85 s to Twin Yards and 1.65 s to Market Street; 33.5 to 33.6 ms a frame in the 120 frames after each; no open off the main thread |
+| The same started on Twin Yards (six changes), and from `host0:/duty/` with nothing kept back (two) | level from the third change (9 053 440 and 9 041 152 free); 13.2 MB free with nothing kept back |
+
+That first run started on a PSPLINK session that had been up for a day and had 44.7 MB free at its start; after a reset the same words start with 48.9 MB free, and with nothing kept back 53.1 MB. A start from the XMB has not been measured with this program.
 
 The first run on the console took 35.7 ms a frame with one frame in six late. What changed is in "The frame" above.
 
