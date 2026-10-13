@@ -178,8 +178,43 @@ export function buildPlace(A, rng, place) {
           const [p, q] = side > 0 ? [lb, la] : [la, lb];
           run(g.wall ?? keys.wall, p, q, Math.min(ya, yb) - 0.8, wallTop, T, { off: T / 2, more });
           if (g.crown !== false) crown(p, q, wallTop, T, { off: T / 2, more });
+          // The windows of the houses behind the wall: small, arched, shuttered, one to so many metres.
+          const length = Math.hypot(q[0] - p[0], q[1] - p[1]), every = place.LOOK?.windows?.every ?? 0;
+          if (every && g.windows !== false && !g.roof && length >= every * 0.8 && wallTop - Math.max(ya, yb) >= 4) {
+            const count = Math.max(1, Math.floor(length / every)), sill = Math.max(ya, yb) + 2.3;
+            for (let w = 0; w < count; w++) {
+              const at = ((w + 0.5) / count) * length;
+              const piece = (key, from, to, y0, y1, t, masks) => run(key, [p[0] + ((q[0] - p[0]) / length) * (at + from), p[1] + ((q[1] - p[1]) / length) * (at + from)], [p[0] + ((q[0] - p[0]) / length) * (at + to), p[1] + ((q[1] - p[1]) / length) * (at + to)], y0, y1, t, { off: -t / 2, collide: false, masks });
+              piece('window_void', -0.45, 0.45, sill, sill + 1.25, 0.05, [0.2, 0.9, 0.8]);
+              piece('window_void', -0.3, 0.3, sill + 1.25, sill + 1.45, 0.05, [0.2, 0.9, 0.8]);
+              piece(keys.woodDark, -0.92, -0.48, sill, sill + 1.25, 0.06, [0.7, 0.6, 0.3]);
+              piece(keys.woodDark, 0.48, 0.92, sill, sill + 1.25, 0.06, [0.7, 0.6, 0.3]);
+              piece(keys.cap, -0.6, 0.6, sill - 0.1, sill, 0.18, [0.8, 0.4, 0.15]);
+            }
+          }
         }
         k = end;
+      }
+    }
+    // Steps drawn over a slope: the floor under them stays the slope a walker and the walk grid take.
+    if (g.steps && typeof g.y !== 'number') {
+      const [fe, fn, fy] = g.y.from, [te, tn, ty] = g.y.to;
+      const le = te - fe, ln = tn - fn, length = Math.hypot(le, ln), ue = le / length, un = ln / length;
+      // The floor's width across the slope's line, from its corners.
+      let w0 = Infinity, w1 = -Infinity;
+      for (const [e, n] of g.at) {
+        const across = -(e - fe) * un + (n - fn) * ue;
+        w0 = Math.min(w0, across);
+        w1 = Math.max(w1, across);
+      }
+      const count = Math.max(2, Math.ceil(Math.abs(ty - fy) / 0.2));
+      for (let k = 0; k < count; k++) {
+        // (each tread is level with the slope at its upper edge)
+        const s0 = (k / count) * length, s1 = ((k + 1) / count) * length;
+        const yTop = fy + (ty - fy) * ((ty > fy ? k + 1 : k) / count);
+        const centre = (d) => [fe + ue * d - un * ((w0 + w1) / 2), fn + un * d + ue * ((w0 + w1) / 2)];
+        const [ae, an] = centre(s0), [be, bn] = centre(s1);
+        run(g.key ?? keys.ground, [ae, -an], [be, -bn], yTop - 0.45, yTop, w1 - w0, { collide: false, masks: [0.6, 0.6, 0.3] });
       }
     }
     // A roof over the floor: a covered way through a block, the block's top level with the walls'.
