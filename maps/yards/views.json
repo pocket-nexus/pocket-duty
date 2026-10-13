@@ -3,10 +3,10 @@
   { "name": "high-start", "pos": [-11, -54, 8.2], "look": [10, -53, 4], "fov": 70 },
   { "name": "long-lane", "pos": [25.5, -12, 4.95], "look": [46, 10, 5], "fov": 70 },
   { "name": "east-site", "pos": [46.5, 19, 4.95], "look": [36, 31, 6.4], "fov": 70 },
-  { "name": "short-stair", "pos": [5.2, 3.4, 4.95], "look": [18, 9.5, 5.4], "fov": 70 },
+  { "name": "short-stair", "pos": [21.5, 6, 4.95], "look": [17, 11.5, 5.6], "fov": 75 },
   { "name": "middle-lane", "pos": [0, -19, 4.95], "look": [0, 17, 1.5], "fov": 65 },
   { "name": "covered-way", "pos": [-35, -28, 4.95], "look": [-35, -15, 5], "fov": 70 },
   { "name": "west-site", "pos": [-34, 17, 4.95], "look": [-33, 36, 4.6], "fov": 75 },
-  { "name": "low-start", "pos": [13.5, 27.5, 1.7], "look": [0, 18, 2.2], "fov": 70 },
+  { "name": "low-start", "pos": [3, 23.5, 1.7], "look": [-0.5, 15, 1.9], "fov": 75 },
   { "name": "pit", "pos": [44, -8, 4.95], "look": [45.5, -30, 0], "fov": 70 }
 ]
