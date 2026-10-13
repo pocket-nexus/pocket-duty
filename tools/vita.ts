@@ -211,6 +211,9 @@ export function ctl(words: string, from: string[] = argv): void {
   const c = context(from);
   mkdirSync(c.game, { recursive: true });
   writeFileSync(`${c.game}/control.txt`, `${words}\n#${Date.now()}\n`);
+  // The game looks at the file four times a second and takes what it holds then: words written again
+  // sooner than that take the place of these.
+  Bun.sleepSync(600);
 }
 
 /** The running process's status receipt, straight from the share: the game's own part is under `engine`. */
@@ -358,6 +361,10 @@ export async function packageVpk(from: string[] = argv, programs = true): Promis
  * The package in Vita3K, in a VitaFS of its own. The game is told to write its status to its data folder
  * (`report=1` in `ux0:data/pocket-duty/boot.txt`), which is what this prints. On macOS Vita3K shows no picture
  * of a game's own GXM scene that can be read back; a console is where the frame is looked at.
+ *
+ * Vita3K reads its own config before the one it is given here: when that names a VitaFS that is gone
+ * ("Cannot find Vita FS path" in its log), it stops before it starts the game. This command does not write
+ * that file. Not run to a status on the machine it was written on (2026-10-13), for that reason.
  */
 async function emu(from: string[]): Promise<void> {
   const app = [process.env.VITA3K, `${home}/Applications/Vita3K.app/Contents/MacOS/Vita3K`, "/Applications/Vita3K.app/Contents/MacOS/Vita3K"].find((path) => path && existsSync(path));
