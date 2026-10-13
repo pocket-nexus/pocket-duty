@@ -98,6 +98,8 @@ pub struct Soldier {
     pub health: f32,
     pub crouched: bool,
     pub peeking: bool,
+    /// On a ladder this step: the match carries him along it, and he does not fire.
+    pub climbing: bool,
     // ---- what he knows
     awareness: f32,
     alertness: f32,
@@ -162,6 +164,7 @@ impl Soldier {
         health: 0.0,
         crouched: false,
         peeking: false,
+        climbing: false,
         awareness: 0.0,
         alertness: 0.0,
         has_target: false,
@@ -174,6 +177,7 @@ impl Soldier {
         path: Path {
             points: [V3::ZERO; crate::nav::POINTS],
             len: 0,
+            climbs: 0,
         },
         path_at: 0,
         goal: V3::ZERO,
@@ -488,6 +492,44 @@ impl Soldier {
         }
         let last = self.path_at as usize + 1 >= self.path.len as usize;
         let point = self.path.points[self.path_at as usize];
+        if self.path.climbs >> self.path_at & 1 != 0 && self.path_at > 0 {
+            // A ladder, which this game adds: from the point before it he is carried to the
+            // ladder's line, along it, and at its top onto the floor.
+            let near = self.path.points[self.path_at as usize - 1];
+            let (foot, up) = if point.y > near.y { (near, true) } else { (point, false) };
+            let level = if up { self.pos.y >= point.y - 0.02 } else { self.pos.y > near.y - 0.02 };
+            let aim = if up && level { point } else { foot };
+            let off = (aim - self.pos).flat();
+            let distance = off.len();
+            self.climbing = true;
+            self.speed = ease(self.speed, LADDER_SPEED, 7.0, DT);
+            if distance > 0.08 && (level || up) {
+                // (along the floor: to the ladder's foot, or between its top and its line)
+                let step = off * (min(distance, max(self.speed, 1.0) * DT) / distance);
+                self.pos.x += step.x;
+                self.pos.z += step.z;
+            } else if distance > 0.08 {
+                // (he came down beside its line: the rest of the way is a walk)
+                self.pos.y = point.y;
+            } else if !(up && level) {
+                self.pos.y = if up {
+                    min(point.y, self.pos.y + LADDER_SPEED * DT)
+                } else {
+                    max(point.y, self.pos.y - LADDER_SPEED * DT)
+                };
+            }
+            let wall = if up { point - near } else { near - point }.flat();
+            self.yaw = ease_angle(self.yaw, yaw_of(wall), 6.5, DT);
+            self.stuck = 0.0;
+            if (point - self.pos).len2() < 0.1 * 0.1 {
+                if last {
+                    self.going = false;
+                    return true;
+                }
+                self.path_at += 1;
+            }
+            return false;
+        }
         let to = (point - self.pos).flat();
         let distance = to.len();
         if distance < if last { 0.45 } else { 0.75 } {
@@ -517,7 +559,20 @@ impl Soldier {
         }
         // He stays on the grid's open nodes. Where the straight step meets a closed one he goes
         // along it: the step's part across the grid's lines first, the other if that is closed too.
-        let open = |x: f32, z: f32| a.level.node(x, z).is_some_and(|n| a.level.open(n));
+        // Where a floor stands over a floor, the node is the one at his height, and he steps
+        // only onto what is within a step of his own: not off a bridge's side.
+        let (level, y) = (a.level, self.pos.y);
+        let here = level.node_at(self.pos.x, self.pos.z, y);
+        let storeyed = |node: u32| level.flags[level.cell_of(node) as usize] & crate::level::OVER != 0;
+        let open = |x: f32, z: f32| {
+            level.node_at(x, z, y).is_some_and(|n| {
+                level.open(n)
+                    && match here {
+                        Some(h) if h != n && (storeyed(h) || storeyed(n)) => level.passable(h, n),
+                        _ => true,
+                    }
+            })
+        };
         let ways = if abs(step.x) > abs(step.z) {
             [(step.x, step.z), (step.x, 0.0), (0.0, step.z)]
         } else {
@@ -565,8 +620,21 @@ impl Soldier {
         self.shown = max(0.0, self.shown - DT);
         if self.state == State::Dead {
             self.dead_time += DT;
+            if self.climbing {
+                // He fell on a ladder: he comes down to the floor under him.
+                let under = a.level.node(self.pos.x, self.pos.z).map_or(self.pos.y, |cell| {
+                    core::iter::once(cell)
+                        .chain(a.level.over(cell))
+                        .map(|node| a.level.floor[node as usize] as f32 * 0.01)
+                        .filter(|floor| *floor <= self.pos.y + 0.3)
+                        .fold(f32::MIN, max)
+                });
+                self.pos.y = max(under, self.pos.y - 7.0 * DT);
+                self.climbing = self.pos.y > under;
+            }
             return act;
         }
+        self.climbing = false;
         self.state_time += DT;
         let bit = 1u16 << me;
         let eye = self.eye();
@@ -833,8 +901,8 @@ impl Soldier {
             }
             State::Dead => {}
         }
-        // His feet follow the grid's floor.
-        if let Some(node) = a.level.node(self.pos.x, self.pos.z) {
+        // His feet follow the grid's floor: of the floors at his cell, the one he is on.
+        if let Some(node) = a.level.node_at(self.pos.x, self.pos.z, self.pos.y).filter(|_| !self.climbing) {
             if a.level.open(node) {
                 self.pos.y = ease(
                     self.pos.y,
@@ -870,7 +938,7 @@ impl Soldier {
             if self.reload <= 0.0 {
                 self.ammo = MAGAZINE;
             }
-        } else if fire {
+        } else if fire && !self.climbing {
             if self.burst == 0 && self.burst_wait <= 0.0 {
                 self.burst = rng.int(3, 7);
                 self.burst_wait = rng.range(0.45, 1.35) + 0.5 * self.suppression;

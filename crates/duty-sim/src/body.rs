@@ -427,7 +427,8 @@ pub(crate) mod tests {
                 flags: &[],
                 floor: &[],
                 cover: &[],
-                spawns: &[],
+                spawns: &[],                over: &[],
+                links: &[],
             }
         }
     }

@@ -70,13 +70,15 @@ impl Kick {
     }
 }
 
-/// A climb onto a ledge: from where, to where, and how far along it is.
+/// A climb onto a ledge: from where, to where, and how far along it is. Off a floor onto a
+/// ladder under its edge it is the same carry, ending with him on that ladder.
 #[derive(Clone, Copy, Debug)]
 pub struct Climb {
     from: V3,
     to: V3,
     at: f32,
     time: f32,
+    onto: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -91,6 +93,9 @@ pub struct Player {
     slide_dir: V3,
     slide_cooldown: f32,
     pub climb: Option<Climb>,
+    /// The ladder he is on (`Level::links`), and the seconds before he takes hold of one again.
+    pub ladder: Option<u16>,
+    ladder_wait: f32,
     pub health: f32,
     pub dead: bool,
     since_hurt: f32,
@@ -133,6 +138,8 @@ impl Player {
             slide_dir: V3::ZERO,
             slide_cooldown: 0.0,
             climb: None,
+            ladder: None,
+            ladder_wait: 0.0,
             health: HEALTH,
             dead: false,
             since_hurt: 100.0,
@@ -170,6 +177,7 @@ impl Player {
             self.body.vel = v3(0.0, if self.body.grounded { 0.0 } else { self.body.vel.y - GRAVITY * DT }, 0.0);
             self.body.advance(level, near, DT);
             self.eye = ease(self.eye, 0.35, 6.0, DT);
+            self.ladder = None;
             return;
         }
         self.look(input);
@@ -178,14 +186,16 @@ impl Player {
             &mut self.jump_buffer,
             &mut self.jump_cooldown,
             &mut self.slide_cooldown,
+            &mut self.ladder_wait,
         ] {
             *timer = max(0.0, *timer - DT);
         }
         if let Some(mut climb) = self.climb {
-            // Carried along the climb: up first, then onto the ledge.
+            // Carried along the climb: up first, then onto the ledge. Onto a ladder: out first, then down.
             climb.at += DT / climb.time;
             let t = min(climb.at, 1.0);
-            let (rise, reach) = (smoothstep(0.0, 0.7, t), smoothstep(0.35, 1.0, t));
+            let (first, then) = (smoothstep(0.0, 0.7, t), smoothstep(0.35, 1.0, t));
+            let (rise, reach) = if climb.to.y >= climb.from.y { (first, then) } else { (then, first) };
             self.body.pos = v3(
                 lerp(climb.from.x, climb.to.x, reach),
                 lerp(climb.from.y, climb.to.y, rise),
@@ -194,8 +204,9 @@ impl Player {
             self.body.vel = V3::ZERO;
             self.climb = (t < 1.0).then_some(climb);
             if t >= 1.0 {
-                self.body.grounded = true;
-                self.body.vel = heading(self.yaw) * 1.8;
+                self.body.grounded = climb.onto.is_none();
+                self.body.vel = if climb.onto.is_none() { heading(self.yaw) * 1.8 } else { V3::ZERO };
+                self.ladder = climb.onto;
             }
             self.settle();
             return;
@@ -215,6 +226,11 @@ impl Player {
         let raw = sqrt(input.mx * input.mx + input.my * input.my);
         let wish_len = min(1.0, sqrt(sx * sx + sz * sz));
         let wish = (forward * sz + right * sx).norm();
+        // ---- a ladder: he hangs on it, and the stick toward its wall is up
+        if self.hang(level, near, pressed, wish * wish_len) {
+            self.settle();
+            return;
+        }
         let grounded = self.body.grounded;
         let speed = self.speed();
 
@@ -495,7 +511,88 @@ impl Player {
                 0.82,
                 saturate((top - feet.y - 0.72) / (MANTLE_MAX - 0.72)),
             ),
+            onto: None,
         })
+    }
+
+    /// A ladder, which this game adds (`Level::links`). He takes hold of one within reach of its
+    /// line by pushing at its wall, or by stepping off the floor over it; from that floor, where
+    /// something stands on the edge, pushing at it carries him over and onto the ladder. On it the
+    /// stick toward the wall is up and away from it is down, the jump lets go, its foot is left
+    /// by walking, and near its top he is carried onto the floor. Returns whether the ladder had
+    /// this step.
+    fn hang(&mut self, level: &Level, near: &mut Near, pressed: u32, wish: V3) -> bool {
+        let feet = self.body.pos;
+        let ends = |link: &crate::level::Link| (link.foot(), link.top(), (link.top() - link.foot()).flat().norm_or(V3::ZERO));
+        let held = self.ladder.map(|i| i as usize).filter(|i| *i < level.links.len());
+        self.ladder = None;
+        if held.is_none() && self.ladder_wait > 0.0 {
+            return false;
+        }
+        let found = held.or_else(|| {
+            level.links.iter().position(|link| {
+                let (foot, top, wall) = ends(link);
+                let falling = !self.body.grounded && self.body.vel.y < 0.0 && feet.y > foot.y + LADDER_HEAD;
+                feet.y > foot.y - 0.2
+                    && (foot - feet).flat().len() < LADDER_REACH
+                    && (falling && feet.y < top.y || wish.dot(wall) > 0.3 && feet.y < top.y - LADDER_HEAD)
+            })
+        });
+        let Some(index) = found else {
+            // On the floor at a ladder's top, pushing out at what stands on the edge.
+            let over = level.links.iter().position(|link| {
+                let (_, top, wall) = ends(link);
+                self.body.grounded
+                    && self.body.blocked
+                    && abs(feet.y - top.y) < 0.3
+                    && (top - feet).flat().len() < 0.8
+                    && wish.dot(wall) < -0.5
+            });
+            if let Some(index) = over {
+                let (foot, top, _) = ends(&level.links[index]);
+                self.climb = Some(Climb {
+                    from: feet,
+                    to: v3(foot.x, top.y - LADDER_HEAD - 0.3, foot.z),
+                    at: 0.0,
+                    time: 0.5,
+                    onto: Some(index as u16),
+                });
+                self.set_stance(false);
+            }
+            return over.is_some();
+        };
+        let (foot, top, wall) = ends(&level.links[index]);
+        let (push, off) = (wish.dot(wall), (foot - feet).flat());
+        if pressed & btn::JUMP != 0 || off.len() > LADDER_REACH + 0.35 {
+            // Let go: off it backwards, and no hold on it again for a moment.
+            self.ladder_wait = 0.5;
+            self.body.vel = wall * -2.2;
+            return false;
+        }
+        if self.body.grounded && push <= 0.3 && feet.y < foot.y + 0.3 {
+            return false;
+        }
+        if push > 0.3 && feet.y >= top.y - LADDER_HEAD - 0.02 {
+            self.climb = Some(Climb { from: feet, to: top, at: 0.0, time: 0.4, onto: None });
+            return true;
+        }
+        self.ladder = Some(index as u16);
+        self.sprinting = false;
+        self.sliding = 0.0;
+        let rate = if push > 0.3 {
+            LADDER_SPEED
+        } else if push < -0.3 {
+            -LADDER_SPEED
+        } else {
+            0.0
+        };
+        // (up no further than where the carry onto the floor takes him)
+        let rate = if rate > 0.0 { min(rate, max(0.0, top.y - LADDER_HEAD - feet.y) / DT) } else { rate };
+        let pull = off * min(6.0, 1.5 / max(off.len(), 1e-3));
+        self.body.vel = v3(pull.x, rate, pull.z);
+        self.body.grounded = false;
+        self.body.advance(level, near, DT);
+        true
     }
 
     /// Takes `amount` of damage that came from `from`.
@@ -672,6 +769,55 @@ mod tests {
         // With the stick let go the slide runs out and leaves him crouched.
         run(&mut p, &level, Input::default(), 1.2, &mut events);
         assert!(p.sliding <= 0.0 && p.crouched);
+    }
+
+    #[test]
+    fn a_ladder_is_climbed_and_come_down() {
+        // A block 3 m tall from x = 4, with and without a rail of a metre on its edge, and a ladder
+        // up its face: its line 0.2 m off the face, its top 0.75 m in.
+        for rail in [false, true] {
+            let mut boxes = alloc::vec![([-20.0, -1.0, -20.0], [20.0, 0.0, 20.0]), ([4.0, 0.0, -3.0], [9.0, 3.0, 3.0])];
+            if rail {
+                boxes.push(([4.0, 3.0, -3.0], [4.16, 4.0, 3.0]));
+            }
+            let boxes = crate::body::tests::Boxes::new(&boxes);
+            let links = [crate::level::Link { foot: [3.8, 0.0, 0.0], top: [4.55, 3.0, 0.0], nodes: [crate::level::NONE; 2] }];
+            let level = Level { links: &links, ..boxes.level() };
+            let mut events = Events::default();
+            let mut near = Near::new();
+            // Facing +X, the stick ahead: to the wall, up the ladder, onto the block.
+            let mut p = Player::new(v3(2.0, 0.0, 0.1), -PI * 0.5);
+            let (mut hung, mut fastest) = (false, 0.0f32);
+            for _ in 0..240 {
+                let before = p.body.pos.y;
+                p.step(&level, &mut near, &Input { my: 0.6, ..Default::default() }, &mut events);
+                hung |= p.ladder.is_some();
+                fastest = max(fastest, (p.body.pos.y - before) / DT);
+                if hung && p.body.grounded && p.climb.is_none() && p.body.pos.y > 2.9 {
+                    break;
+                }
+            }
+            assert!(hung && p.ladder.is_none() && p.climb.is_none(), "rail {rail}: {:?}", p.body.pos);
+            assert!(p.body.grounded && abs(p.body.pos.y - 3.0) < 0.05 && p.body.pos.x > 4.4, "rail {rail}: {:?}", p.body.pos);
+            assert!(fastest < 6.0, "rail {rail}: {fastest} m/s up");
+            // Back to its top, facing -X, the stick ahead: onto the ladder, down it, and off at its foot.
+            p.body.pos = v3(4.9, 3.0, 0.0);
+            p.body.vel = V3::ZERO;
+            p.yaw = PI * 0.5;
+            let (mut hung, mut fastest) = (false, 0.0f32);
+            for _ in 0..300 {
+                let before = p.body.pos.y;
+                p.step(&level, &mut near, &Input { my: 0.6, ..Default::default() }, &mut events);
+                hung |= p.ladder.is_some();
+                if p.ladder.is_some() {
+                    fastest = max(fastest, (before - p.body.pos.y) / DT);
+                }
+            }
+            assert!(hung && p.ladder.is_none(), "rail {rail}: {:?}", p.body.pos);
+            assert!(p.body.grounded && abs(p.body.pos.y) < 0.05 && p.body.pos.x < 3.0, "rail {rail}: {:?}", p.body.pos);
+            // (a fall of 3 m ends at 11 m/s; the last step onto the ground is a little more than the ladder's)
+            assert!(fastest < 6.0, "rail {rail}: {fastest} m/s down the ladder");
+        }
     }
 
     #[test]

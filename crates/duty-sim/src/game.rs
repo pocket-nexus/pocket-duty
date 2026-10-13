@@ -774,7 +774,8 @@ mod tests {
                 flags: &self.flags,
                 floor: &self.floor,
                 cover: &self.cover,
-                spawns: &self.spawns,
+                spawns: &self.spawns,                over: &[],
+                links: &[],
             }
         }
     }
