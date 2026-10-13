@@ -12,7 +12,10 @@
 //!
 //! A search can visit thousands of nodes, and a step of the game has room for
 //! a few hundred: one search runs at a time, a slice a step, and the soldiers
-//! wait their turn for a moment.
+//! wait their turn for a moment. A search opens a node once, so on a grid whose
+//! open nodes hang together it ends at its goal; it gives up after `LIMIT`
+//! nodes, which no way on the places so far comes near. The way it finds is
+//! pulled straight in the steps after, a few points a step.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -21,9 +24,20 @@ use crate::level::Level;
 use crate::math::*;
 
 /// Points a way holds at most.
-pub const POINTS: usize = 16;
-/// Nodes a search may open before it gives up (`nav.js:233`).
-const LIMIT: u32 = 6000;
+pub const POINTS: usize = 32;
+/// Sixteenths of the distance left that a search's estimate is (`estimate`): 16 is the distance
+/// itself, and more leans the search toward the goal.
+const LEAN: u32 = 32;
+/// Nodes a search may open before it gives up: 134 steps of the game, a little over two seconds
+/// in which nobody else is answered. Twice what the longest way on the eight places opens (8 119
+/// of the street's 29 776 open nodes, between two nodes drawn from one seed).
+const LIMIT: u32 = 16_000;
+/// Nodes of a way a point may pass over: a straight walk is looked for this far ahead.
+const AHEAD: usize = 24;
+/// A step that pulls a way straight makes a point for this many nodes it might have opened.
+const PULL: u32 = 24;
+/// Nodes of a found way that are kept for the pull: what its points can pass over.
+const HELD: usize = POINTS * AHEAD + 1;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Path {
@@ -31,7 +45,7 @@ pub struct Path {
     pub len: u8,
     /// A bit a point: he is carried to it from the point before it, along a ladder when the
     /// point is a ladder's end, and along the floor from that end to the node by it.
-    pub climbs: u16,
+    pub climbs: u32,
 }
 
 impl Default for Path {
@@ -54,6 +68,7 @@ struct Step {
     crouch: u32,
     at: (i32, i32),
     goal: (i32, i32),
+    costs: Costs,
 }
 
 struct Search {
@@ -61,22 +76,57 @@ struct Search {
     from: u32,
     to: u32,
     opened: u32,
+    /// Once the goal is reached: the node of `Pathfinder::way` the way's last point stands at,
+    /// and the points so far (`pull`); and whether `way` stops short of the goal.
+    pulled: Option<(usize, Path)>,
+    short: bool,
+}
+
+/// A step straight to the next cell and one to a cell across a corner, in eighths of a metre.
+#[derive(Clone, Copy)]
+struct Costs {
+    straight: u32,
+    across: u32,
+}
+
+impl Costs {
+    fn of(level: &Level) -> Costs {
+        let straight = (level.nav.cell * 8.0) as u32;
+        Costs { straight, across: straight * 181 / 128 }
+    }
 }
 
 pub struct Pathfinder {
     /// Per node: the cost to reach it in eighths of a metre, the node before it, and the search
-    /// that last touched it.
+    /// that last touched it: `epoch` for a node a way has reached, `epoch + 1` once the search has
+    /// opened it (its cost is then settled and no later way to it is taken).
     cost: Vec<u16>,
     before: Vec<u16>,
     mark: Vec<u16>,
     epoch: u16,
-    /// The open nodes, the cheapest estimate first: (estimate, node).
+    /// The reached nodes, the cheapest estimate first: (estimate, node). A node a cheaper way
+    /// reaches again has an entry for each; the dearer ones are passed over when they come up.
     heap: Vec<(u32, u16)>,
     search: Option<Search>,
+    /// The nodes of the way the search in hand found, from its start on: to its goal, or `HELD`
+    /// of them.
+    way: Vec<u16>,
+    /// Empty on a grid whose open nodes hang together, as a cooked pack's do. After a search
+    /// that opened every node it could reach and did not come to its goal: a number a node for
+    /// the part of the grid it stands in, 0 where no such search has been. A way between two
+    /// parts is then not there, and no node is opened again to learn it.
+    part: Vec<u8>,
+    parts: u8,
     /// Who waits: (owner, from, to).
     waiting: Vec<(u8, u32, u32)>,
     /// Ways asked for, found, not there, and given up after `LIMIT` nodes.
     pub counts: [u32; 4],
+    /// Nodes the searches opened in all, and the most one opened.
+    pub opened: (u64, u32),
+    /// Ways with more corners than a way has points: they end at the last corner they hold.
+    pub cut: u32,
+    /// Sixteenths of the distance left that the estimate is (`LEAN`).
+    pub lean: u32,
 }
 
 impl Pathfinder {
@@ -87,10 +137,26 @@ impl Pathfinder {
             mark: vec![0; nodes],
             epoch: 0,
             heap: Vec::with_capacity(1024),
+            way: Vec::with_capacity(HELD),
+            part: Vec::new(),
+            parts: 0,
             search: None,
             counts: [0; 4],
             waiting: Vec::with_capacity(16),
+            opened: (0, 0),
+            cut: 0,
+            lean: LEAN,
         }
+    }
+
+    /// Bytes the pathfinder holds: six a node, the heap as far as a search has grown it, the nodes
+    /// of the way in hand, and the parts where a search found the grid in more than one.
+    pub fn bytes(&self) -> usize {
+        use core::mem::size_of;
+        (self.cost.capacity() + self.before.capacity() + self.mark.capacity() + self.way.capacity()) * 2
+            + self.heap.capacity() * size_of::<(u32, u16)>()
+            + self.waiting.capacity() * size_of::<(u8, u32, u32)>()
+            + self.part.capacity()
     }
 
     /// Asks for a way; a later ask by the same owner takes the earlier one's place.
@@ -151,13 +217,24 @@ impl Pathfinder {
         Some(top)
     }
 
-    /// The distance left from a cell to the goal's as the grid allows it at best, in eighths of a
-    /// metre, a little long so the search leans toward the goal (`nav.js:260`).
-    #[inline]
-    fn estimate(level: &Level, at: (i32, i32), goal: (i32, i32)) -> u32 {
+    /// The distance left from a cell to the goal's as the steps' own costs count it at best
+    /// (across corners while both columns and rows are left, then straight), in eighths of a
+    /// metre. It never runs over what the way costs, so a node the search opens is reached by its
+    /// cheapest way and is opened once. (The reference's runs 6% over a metre's length and this
+    /// game's steps were counted shorter than a metre's: 13% over a straight step and 20% over
+    /// one across, so a search opened a node again for every cheaper way found to it later.)
+    #[inline(always)]
+    fn estimate(&self, costs: Costs, at: (i32, i32), goal: (i32, i32)) -> u32 {
         let (dx, dz) = ((at.0 - goal.0).unsigned_abs(), (at.1 - goal.1).unsigned_abs());
         let (long, short) = (dx.max(dz), dx.min(dz));
-        ((long as f32 + short as f32 * 0.414) * level.nav.cell * 8.0 * 1.06) as u32
+        ((long - short) * costs.straight + short * costs.across) * self.lean / 16
+    }
+
+    /// A reached node's place in the heap: by its cost and the estimate from it, and of two alike
+    /// the one farther along its way first.
+    #[inline(always)]
+    fn key(cost: u32, estimate: u32) -> u32 {
+        (cost + estimate) << 15 | (0x7fff - (cost >> 1))
     }
 
     /// A node's column and row on the grid.
@@ -170,6 +247,11 @@ impl Pathfinder {
     /// Works on the search in hand for `budget` nodes. Returns a way when one is done: the owner
     /// and the way (empty when there is none).
     pub fn step(&mut self, level: &Level, budget: u32) -> Option<(u8, Path)> {
+        // A way that is found is pulled straight a few points a step, and no node is opened in
+        // those steps: the step that ends a search is no longer than another.
+        if self.search.as_ref().is_some_and(|s| s.pulled.is_some()) {
+            return self.pull(level, (budget / PULL).max(1));
+        }
         // A place of one level, with no ladder, is searched by a loop that asks neither of a node.
         if level.over.is_empty() && level.links.is_empty() {
             self.search::<false>(level, budget)
@@ -184,21 +266,32 @@ impl Pathfinder {
                 return None;
             }
             let (owner, from, to) = self.waiting.remove(0);
-            self.epoch = self.epoch.wrapping_add(1);
+            // (two marks a search: reached, and opened)
+            self.epoch = if self.epoch >= u16::MAX - 3 { 0 } else { self.epoch + 2 };
             if self.epoch == 0 {
                 self.mark.fill(0);
-                self.epoch = 1;
+                self.epoch = 2;
             }
             self.heap.clear();
-            self.mark[from as usize] = self.epoch;
-            self.cost[from as usize] = 0;
-            self.before[from as usize] = from as u16;
-            self.push(Self::estimate(level, Self::place(level, from), Self::place(level, to)), from as u16);
+            // A way from or to a closed node is not there, and one between two parts of the grid
+            // that an earlier search found apart: no node is opened to learn either.
+            let apart = !self.part.is_empty() && {
+                let (a, b) = (self.part[from as usize], self.part[to as usize]);
+                a != b && (a != 0 || b != 0)
+            };
+            if level.open(from) && level.open(to) && !apart {
+                self.mark[from as usize] = self.epoch;
+                self.cost[from as usize] = 0;
+                self.before[from as usize] = from as u16;
+                self.push(Self::key(0, self.estimate(Costs::of(level), Self::place(level, from), Self::place(level, to))), from as u16);
+            }
             self.search = Some(Search {
                 owner,
                 from,
                 to,
                 opened: 0,
+                pulled: None,
+                short: false,
             });
         }
         let (owner, from, to) = {
@@ -206,28 +299,69 @@ impl Pathfinder {
             (s.owner, s.from, s.to)
         };
         let nx = level.nav.nx as i32;
-        let step_cost = (level.nav.cell * 8.0) as u32;
+        let costs = Costs::of(level);
+        let step_cost = costs.straight;
         let goal = Self::place(level, to);
-        for _ in 0..budget {
+        let settled = self.epoch + 1;
+        // A step opens `budget` nodes. An entry passed over is an eighth of one: it is taken off
+        // the heap and nothing is asked of the grid.
+        let mut left = budget * 8;
+        while left > 0 {
             let Some((_, node)) = self.pop() else {
-                self.search = None;
+                // Every node the start reaches is opened and the goal is none of them: they are
+                // a part of the grid by themselves.
+                if self.search.as_ref().is_some_and(|s| s.opened > 0) && self.parts < u8::MAX {
+                    self.parts += 1;
+                    if self.part.is_empty() {
+                        self.part = vec![0; self.mark.len()];
+                    }
+                    for (part, mark) in self.part.iter_mut().zip(&self.mark) {
+                        if *mark == settled {
+                            *part = self.parts;
+                        }
+                    }
+                }
+                self.done();
                 self.counts[2] += 1;
                 return Some((owner, Path::default()));
             };
             let node = node as u32;
-            if node == to {
-                let path = self.trace(level, from, to);
-                self.search = None;
-                self.counts[1] += 1;
-                return Some((owner, path));
+            // (an entry of a node a cheaper way reached since: that way's entry came up before)
+            if self.mark[node as usize] == settled {
+                left -= 1;
+                continue;
             }
-            let opened = {
-                let s = self.search.as_mut().unwrap();
-                s.opened += 1;
-                s.opened
-            };
-            if opened > LIMIT {
-                self.search = None;
+            left = left.saturating_sub(8);
+            if node == to {
+                // The way's nodes, back from the goal: the ones from its start on, as many as a
+                // way's points can pass over. The steps after this one pull them straight.
+                let (mut length, mut at) = (1, to);
+                while at != from && length < self.before.len() {
+                    length += 1;
+                    at = self.before[at as usize] as u32;
+                }
+                let held = length.min(HELD);
+                self.way.clear();
+                self.way.resize(held, 0);
+                let (mut k, mut at) = (length, to);
+                while k > 0 {
+                    k -= 1;
+                    if k < held {
+                        self.way[k] = at as u16;
+                    }
+                    at = self.before[at as usize] as u32;
+                }
+                let search = self.search.as_mut().unwrap();
+                search.short = held < length;
+                search.pulled = Some((0, Path::default()));
+                return None;
+            }
+            self.mark[node as usize] = settled;
+            self.opened.0 += 1;
+            let search = self.search.as_mut().unwrap();
+            search.opened += 1;
+            if search.opened > LIMIT {
+                self.done();
                 self.counts[3] += 1;
                 return Some((owner, Path::default()));
             }
@@ -251,11 +385,12 @@ impl Pathfinder {
                 let beside = (nj * nx + ni) as u32;
                 let step = Step {
                     from: node,
-                    here: here + if di != 0 && dj != 0 { step_cost * 181 / 128 } else { step_cost },
+                    here: here + if di != 0 && dj != 0 { costs.across } else { step_cost },
                     sides: (di != 0 && dj != 0).then_some(((j * nx + ni) as u32, (nj * nx + i) as u32)),
                     crouch: step_cost * 8 / 5,
                     at: (ni, nj),
                     goal,
+                    costs,
                 };
                 self.visit::<STOREYS>(level, step, beside);
                 if STOREYS && level.flags[beside as usize] & crate::level::OVER != 0 {
@@ -266,7 +401,7 @@ impl Pathfinder {
             if let Some((next, _)) = level.ladder(node).filter(|_| STOREYS) {
                 let rise = (level.floor[node as usize] as i32 - level.floor[next as usize] as i32)
                     .unsigned_abs();
-                self.reach(level, node, next, here + step_cost + rise * 2 / 5, Self::place(level, next), goal);
+                self.reach(costs, node, next, here + step_cost + rise * 2 / 5, Self::place(level, next), goal);
             }
         }
         None
@@ -293,7 +428,7 @@ impl Pathfinder {
         if level.flags[next as usize] & 3 == 2 {
             cost += step.crouch;
         }
-        self.reach(level, step.from, next, cost, step.at, step.goal);
+        self.reach(step.costs, step.from, next, cost, step.at, step.goal);
     }
 
     /// The same to the nodes over a cell's first.
@@ -304,74 +439,100 @@ impl Pathfinder {
         }
     }
 
-    /// Notes a cheaper way to a node, which stands at the cell `at`, and opens it.
+    /// Notes a cheaper way to a node, which stands at the cell `at`, and puts it among the reached.
     #[inline(always)]
-    fn reach(&mut self, level: &Level, from: u32, next: u32, cost: u32, at: (i32, i32), goal: (i32, i32)) {
+    fn reach(&mut self, costs: Costs, from: u32, next: u32, cost: u32, at: (i32, i32), goal: (i32, i32)) {
         if cost > u16::MAX as u32 {
             return;
         }
-        if self.mark[next as usize] != self.epoch || cost < self.cost[next as usize] as u32 {
+        let mark = self.mark[next as usize];
+        // (an opened node's cost is settled)
+        if mark == self.epoch + 1 {
+            return;
+        }
+        if mark != self.epoch || cost < self.cost[next as usize] as u32 {
             self.mark[next as usize] = self.epoch;
             self.cost[next as usize] = cost as u16;
             self.before[next as usize] = from as u16;
-            self.push(cost + Self::estimate(level, at, goal), next as u16);
+            self.push(Self::key(cost, self.estimate(costs, at, goal)), next as u16);
         }
     }
 
-    /// The way back from the goal, pulled straight: from each point the farthest later one a
-    /// soldier can walk straight to.
-    fn trace(&self, level: &Level, from: u32, to: u32) -> Path {
-        let mut nodes: Vec<u32> = Vec::with_capacity(128);
-        let mut at = to;
-        while at != from && nodes.len() < 4096 {
-            nodes.push(at);
-            at = self.before[at as usize] as u32;
+    /// Ends the search in hand and counts what it opened.
+    fn done(&mut self) {
+        if let Some(search) = self.search.take() {
+            self.opened.1 = self.opened.1.max(search.opened);
         }
-        nodes.push(from);
-        nodes.reverse();
-        let mut path = Path::default();
-        let mut i = 0;
+    }
+
+    /// Pulls the way in hand straight, `points` of it a step: from each point the farthest later
+    /// node a soldier can walk straight to. Returns the way when its goal or its last point is
+    /// reached.
+    fn pull(&mut self, level: &Level, points: u32) -> Option<(u8, Path)> {
+        let (owner, to, short, (mut i, mut path)) = {
+            let s = self.search.as_ref().unwrap();
+            (s.owner, s.to, s.short, s.pulled.unwrap())
+        };
+        let nodes = &self.way;
+        let node = |k: usize| nodes[k] as u32;
+        let mut left = points;
         while i + 1 < nodes.len() && (path.len as usize) < POINTS {
+            if left == 0 {
+                self.search.as_mut().unwrap().pulled = Some((i, path));
+                return None;
+            }
+            left -= 1;
             // A ladder is two points after the node at its near end: the ladder's own far end,
             // and the node there. He is carried to both, the second along the floor: a ladder's
             // own ends stand by a wall, where the grid may be closed.
             if let Some((other, link)) = level
-                .ladder(nodes[i])
-                .filter(|(other, _)| *other == nodes[i + 1] && !level.passable(nodes[i], *other))
+                .ladder(node(i))
+                .filter(|(other, _)| *other == node(i + 1) && !level.passable(node(i), *other))
             {
                 if path.len as usize + 2 > POINTS {
                     break;
                 }
-                path.points[path.len as usize] = if link.nodes[0] == nodes[i] { link.top() } else { link.foot() };
+                path.points[path.len as usize] = if link.nodes[0] == node(i) { link.top() } else { link.foot() };
                 path.points[path.len as usize + 1] = level.node_pos(other);
                 path.climbs |= 0b11 << path.len;
                 path.len += 2;
                 i += 1;
                 continue;
             }
-            // The farthest of the next nodes in a straight walk, looking a few at a time.
+            // The farthest of the next nodes in a straight walk. Along a way the straight walks
+            // from a node are open as far as some node and closed past it, so that node is looked
+            // for by halves, between the next one and the one `AHEAD`.
+            let reach = (i + AHEAD).min(nodes.len() - 1);
             let mut next = i + 1;
-            let mut probe = (i + 24).min(nodes.len() - 1);
-            while probe > i + 1 {
-                if level.walkable(nodes[i], nodes[probe]) {
-                    next = probe;
-                    break;
+            if reach > next {
+                if level.walkable(node(i), node(reach)) {
+                    next = reach;
+                } else {
+                    let mut past = reach;
+                    while past - next > 1 {
+                        let middle = (next + past) / 2;
+                        if level.walkable(node(i), node(middle)) {
+                            next = middle;
+                        } else {
+                            past = middle;
+                        }
+                    }
                 }
-                probe = i + 1 + (probe - i - 1) / 2;
             }
-            path.points[path.len as usize] = level.node_pos(nodes[next]);
+            path.points[path.len as usize] = level.node_pos(node(next));
             path.len += 1;
             i = next;
         }
-        // A way longer than the points hold ends at its goal all the same.
-        if path.len > 0 {
-            path.points[path.len as usize - 1] = if i + 1 >= nodes.len() {
-                level.node_pos(to)
-            } else {
-                path.points[path.len as usize - 1]
-            };
+        // A way with more corners than it has points ends at the last corner it holds: whoever
+        // walks it asks again from there.
+        let whole = i + 1 >= nodes.len() && !short;
+        if whole && path.len > 0 {
+            path.points[path.len as usize - 1] = level.node_pos(to);
         }
-        path
+        self.done();
+        self.counts[1] += 1;
+        self.cut += !whole as u32;
+        Some((owner, path))
     }
 }
 
@@ -524,29 +685,109 @@ mod tests {
         }
     }
 
+    /// A level of one floor over a test grid.
+    fn flat<'a>(nav: crate::level::NavHeader, flags: &'a [u8], floor: &'a [i16]) -> Level<'a> {
+        Level { solid: Bvh { nodes: &[], tris: &[], verts: &[] }, nav, flags, floor, cover: &[], spawns: &[], over: &[], links: &[] }
+    }
+
     #[test]
-    fn a_closed_goal_has_no_way() {
+    fn a_way_that_is_not_there_is_searched_for_once() {
+        // Two rooms of twelve nodes with no door between them.
         let (nav, flags, floor) = grid(&["....#....", "....#....", "....#...."], 0.8);
-        let level = Level {
-            solid: Bvh {
-                nodes: &[],
-                tris: &[],
-                verts: &[],
-            },
-            nav,
-            flags: &flags,
-            floor: &floor,
-            cover: &[],
-            spawns: &[],
-            over: &[],
-            links: &[],
-        };
+        let level = flat(nav, &flags, &floor);
         let mut finder = Pathfinder::new(flags.len());
         finder.ask(0, 0, 8);
-        let done = (0..50)
-            .find_map(|_| finder.step(&level, 50))
-            .expect("an answer");
+        let done = (0..50).find_map(|_| finder.step(&level, 5)).expect("an answer");
         assert_eq!(done.1.len, 0);
+        // The search opened every node of the first room, and none of them twice.
+        assert_eq!((finder.opened, finder.counts), ((12, 12), [1, 0, 1, 0]));
+        // Asked again, from either room: the answer comes in one step and no node is opened.
+        for (from, to) in [(0, 8), (10, 17), (8, 0), (26, 9)] {
+            finder.ask(0, from, to);
+            assert_eq!(finder.step(&level, 5).expect("an answer at once").1.len, 0);
+        }
+        assert_eq!((finder.opened, finder.counts), ((12, 12), [5, 0, 5, 0]));
+        // A way inside either room is found as before.
+        for (from, to) in [(0, 21), (5, 26)] {
+            finder.ask(0, from, to);
+            assert!((0..50).find_map(|_| finder.step(&level, 5)).expect("an answer").1.len > 0);
+        }
+        // A closed node has no way to it, and none is looked for.
+        let opened = finder.opened.0;
+        finder.ask(0, 0, 4);
+        assert_eq!(finder.step(&level, 5).expect("an answer at once").1.len, 0);
+        assert_eq!(finder.opened.0, opened);
+    }
+
+    #[test]
+    fn a_way_across_a_large_place_is_found_in_steps_of_the_budget() {
+        // 61 corridors of 120 nodes, each joined to the next at one end: the way from the first to the
+        // last passes every one of them, 7 380 nodes, more than a search once opened before it gave up.
+        let rows: Vec<String> = (0..121)
+            .map(|r| match r % 4 {
+                1 => format!("{}.", "#".repeat(119)),
+                3 => format!(".{}", "#".repeat(119)),
+                _ => ".".repeat(120),
+            })
+            .collect();
+        let rows: Vec<&str> = rows.iter().map(|r| r.as_str()).collect();
+        let (nav, flags, floor) = grid(&rows, 0.8);
+        let level = flat(nav, &flags, &floor);
+        let open = flags.iter().filter(|f| **f != 0).count() as u32;
+        let (from, to) = (0u32, 120 * 120);
+        let mut finder = Pathfinder::new(flags.len());
+        finder.ask(0, from, to);
+        let mut steps = 0;
+        let way = loop {
+            steps += 1;
+            assert!(steps < 200, "no answer in 200 steps");
+            if let Some((_, way)) = finder.step(&level, 120) {
+                break way;
+            }
+        };
+        assert_eq!(finder.counts, [1, 1, 0, 0]);
+        // Every node on the way is opened, each once, and a step opens 120 at most.
+        assert!(finder.opened.1 > 7000 && finder.opened.1 <= open, "{} of {open} nodes opened", finder.opened.1);
+        assert!(steps * 120 >= finder.opened.1, "{} nodes in {steps} steps", finder.opened.1);
+        // The way has 120 corners and a way holds `POINTS`: it ends at the last corner it holds, every
+        // leg of it a straight walk, and whoever walks it asks again from there until he is at the goal.
+        assert_eq!((way.len as usize, finder.cut), (POINTS, 1));
+        let (mut at, mut asked, mut way) = (from, 1, way);
+        loop {
+            for p in &way.points[..way.len as usize] {
+                let next = level.node(p.x, p.z).unwrap();
+                assert!(level.walkable(at, next), "{at} to {next}");
+                at = next;
+            }
+            if at == to {
+                break;
+            }
+            asked += 1;
+            assert!(asked <= 20, "the goal is not reached in twenty ways");
+            finder.ask(0, at, to);
+            way = (0..200).find_map(|_| finder.step(&level, 120)).expect("an answer").1;
+        }
+        assert_eq!(finder.counts, [asked, asked, 0, 0]);
+    }
+
+    #[test]
+    fn the_estimate_never_runs_over_the_way() {
+        // Across an open floor the way is the estimate itself, so the search opens the nodes along it
+        // and their neighbours and no others; with an estimate that ran over, it took the first way
+        // it met. Twenty columns and five rows away: fifteen steps straight and five across.
+        let rows = ["........................"; 12];
+        let (nav, flags, floor) = grid(&rows, 0.8);
+        let level = flat(nav, &flags, &floor);
+        let mut finder = Pathfinder::new(flags.len());
+        finder.lean = 16;
+        let (from, to) = (2 * 24 + 1, 7 * 24 + 21);
+        let costs = Costs::of(&level);
+        assert_eq!(finder.estimate(costs, Pathfinder::place(&level, from), Pathfinder::place(&level, to)), 15 * costs.straight + 5 * costs.across);
+        finder.ask(0, from, to);
+        let way = (0..50).find_map(|_| finder.step(&level, 120)).expect("an answer").1;
+        assert_eq!(way.len, 1, "a straight walk");
+        assert_eq!(finder.cost[to as usize] as u32, 15 * costs.straight + 5 * costs.across);
+        assert!(finder.opened.1 <= 120, "{} nodes opened for a way of 20", finder.opened.1);
     }
 
     /// Two banks 3.2 m over a way between them, a bridge from bank to bank over the way (row 2),
@@ -625,12 +866,12 @@ mod tests {
         let level = plan.level();
         let (foot, top) = (level.node_pos(plan.at(3, 1, 0.0)), level.node_pos(plan.at(4, 1, 3.2)));
         let up = plan.way(low, high);
-        // (a node on the way to the foot's, the foot's node, the ladder's top, the top's node, the goal)
-        assert_eq!((up.len, up.climbs), (5, 0b01100), "{:?}", &up.points[..up.len as usize]);
-        assert_eq!((up.points[1], up.points[2], up.points[3], up.points[4]), (foot, top, top, level.node_pos(high)));
+        // (the foot's node, the ladder's top, the top's node, the goal)
+        assert_eq!((up.len, up.climbs), (4, 0b0110), "{:?}", &up.points[..up.len as usize]);
+        assert_eq!((up.points[0], up.points[1], up.points[2], up.points[3]), (foot, top, top, level.node_pos(high)));
         let down = plan.way(high, low);
-        assert_eq!((down.len, down.climbs), (5, 0b01100), "{:?}", &down.points[..down.len as usize]);
-        assert_eq!((down.points[1], down.points[2], down.points[3], down.points[4]), (top, foot, foot, level.node_pos(low)));
+        assert_eq!((down.len, down.climbs), (4, 0b0110), "{:?}", &down.points[..down.len as usize]);
+        assert_eq!((down.points[0], down.points[1], down.points[2], down.points[3]), (top, foot, foot, level.node_pos(low)));
         // A way from one end of a ladder to the other is the ladder alone.
         let short = plan.way(plan.at(3, 1, 0.0), plan.at(4, 1, 3.2));
         assert_eq!((short.len, short.climbs, short.points[0], short.points[1]), (2, 0b11, top, top));
