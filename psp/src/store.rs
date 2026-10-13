@@ -296,17 +296,17 @@ impl PackFile {
         let mut head = [0u32; 4];
         file.read(0, head.as_mut_ptr().cast(), 16)?;
         if head[0] != duty_pack::MAGIC {
-            return Err("duty.pack is not a pack");
+            return Err("the map's pack is not a pack");
         }
         if head[1] != duty_pack::VERSION {
-            return Err("duty.pack has another version");
+            return Err("the map's pack has another version");
         }
         let n = head[2] as usize;
         if n > 64 {
-            return Err("duty.pack section table");
+            return Err("the map's pack has no section table");
         }
         let mut table = alloc::vec![0u32; n * 4];
-        file.read(16, table.as_mut_ptr().cast(), n * 16).map_err(|_| "duty.pack section table")?;
+        file.read(16, table.as_mut_ptr().cast(), n * 16).map_err(|_| "the map's pack has no section table")?;
         file.sections = (0..n).map(|i| Section { tag: table[i * 4], offset: table[i * 4 + 1], size: table[i * 4 + 2] }).collect();
         // The mailbox is there when the computer's share has the game's directory, wherever the pack came from.
         let probe = sceIoOpen(b"host0:/duty/boot.txt\0".as_ptr(), IoOpenFlags::RD_ONLY, 0);
