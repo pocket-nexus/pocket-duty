@@ -1,6 +1,6 @@
 /**
  * DEPOT: its look. The place's family of surfaces and colours, made by our code: brick walls gone dark,
- * dark block, cast concrete, tarmac, paving, sheet in zinc and in three paints, under an evening sky.
+ * dark block, cast concrete, tarmac, paving, sheet in zinc and in three paints, under the sky of a little before sunset.
  *
  * Three surfaces are this map's own: `bond`, `blocks` and `tarmac`. The others are the kit's
  * (web/src/pocket/placelook.js) and the reference's library.
@@ -86,7 +86,7 @@ export const LOOK = {
     dp_block: { of: 'blocks', tint: 0xdcdcde },
     dp_band: { of: 'blocks', tint: 0x9a9796 },
     dp_concrete: { of: 'concrete', tint: 0x9a958d },
-    dp_tarmac: { of: 'tarmac', tint: 0xe6e6ea, surface: 'concrete' },
+    dp_tarmac: { of: 'tarmac', tint: 0xb2b2ba, surface: 'concrete' },
     dp_pave: { of: 'concrete_floor', tint: 0x8f8880, surface: 'concrete' },
     dp_deck: { of: 'metal_painted', tint: 0x5c5f5e },
     dp_steel: { of: 'metal_painted', tint: 0x3f4447 },
@@ -100,10 +100,10 @@ export const LOOK = {
     dp_wood_dark: { of: 'boards', tint: 0x6c5a45 },
   },
   keys: { ground: 'dp_tarmac', side: 'dp_concrete', wall: 'dp_brick', band: 'dp_band', cap: 'dp_concrete', lid: 'dp_lid', wood: 'dp_wood', woodDark: 'dp_wood_dark', iron: 'dp_steel', mark: 'dp_can_ochre', apron: 'dp_tarmac' },
-  // No shuttered windows along these walls.
-  windows: { every: 0 },
-  sky: { hour: 17.4, weather: { coverage: 0.4, turbidity: 3.4 } },
+  // A small window to so many metres of a block's wall.
+  windows: { every: 11 },
+  sky: { hour: 19, weather: { coverage: 0.4, turbidity: 3.4 } },
   // The cook's light for this place: an evening sky's fill, little back from dark ground, strong lamps
   // that hang high.
-  light: { sky: [1.0, 1.05, 1.2], bounce: [0.22, 0.2, 0.2], lamp: [44, 28, 13], reach: 18 },
+  light: { sky: [0.85, 0.95, 1.25], bounce: [0.22, 0.2, 0.2], lamp: [44, 28, 13], reach: 18 },
 };

@@ -30,7 +30,7 @@
 export const PLACE = {
   id: 'depot',
   title: 'Depot',
-  turn: 2.2,
+  turn: -0.94,
   wall: 9,
   // [east, north, facing in degrees from north toward east, tag]. The first is the player's.
   starts: [
@@ -45,7 +45,7 @@ export const PLACE = {
     [39.8, 22, 0, 'alley'],
     [28.5, 41, 200, 'north dock'],
     [33, 38, 220, 'north dock'],
-    [25.5, 33.5, 180, 'north dock'],
+    [25.3, 34.5, 180, 'north dock'],
     [32.5, 45.5, 250, 'back walk'],
     [14.7, 49, 180, 'stair foot'],
   ],
@@ -74,8 +74,10 @@ const roof = (at, y) => ({ at, y, over: true, key: ROOFING, rail: 0.3, railKey: 
  * under each in this order.
  */
 export const GROUND = [
+  // ------------------------------------------------------------------ the roof of the hall's taller part: nobody walks it
+  { at: [[0.6, 30.6], [23.5, 30.6], [23.5, 43.9], [30, 43.9], [30, 47.1], [13.1, 47.1], [13.1, 47.7], [0.6, 47.7], [0.6, 44.5], [-4.65, 44.5], [-4.65, 41.05], [-9.5, 41.05], [-9.5, 33.6], [0.6, 33.6]], y: TOP, over: true, key: ROOFING, rail: 0 },
   // ------------------------------------------------------------------ the roof a player walks, over the lane and the south dock
-  roof([[0.4, 16.5], [24.5, 16.5], [24.5, 20], [31.5, 20], [31.5, 30.95], [0.4, 30.95]], RF),
+  roof([[0.4, 16.5], [24.5, 16.5], [24.5, 20], [31.5, 20], [31.5, 30.6], [0.4, 30.6]], RF),
   // (its south edge, around the opening over the gallery)
   roof(box(0.4, 14.2, 21, 16.5), RF),
   roof(box(21, 14.2, 23.4, 15.2), RF),
@@ -88,15 +90,14 @@ export const GROUND = [
   roof(box(27.9, 14.2, 30, 15.2), BAY),
   roof([[30, 14.2], [36.9, 14.2], [34.76, 16.5], [30, 16.5]], BAY),
   // the east side, down to the stair's head in the alley
-  roof([[31.5, 20], [34.76, 16.5], [36.9, 14.2], [36.9, 30.95], [31.5, 30.95]], EAST),
-  // ------------------------------------------------------------------ the roof of the hall's taller part: nobody walks it
-  { at: [[0.6, 30.95], [23.5, 30.95], [23.5, 43.9], [30, 43.9], [30, 47.1], [13.1, 47.1], [13.1, 47.7], [0.6, 47.7], [0.6, 44.5], [-4.65, 44.5], [-4.65, 41.05], [-9.5, 41.05], [-9.5, 33.6], [0.6, 33.6]], y: TOP, over: true, key: ROOFING, rail: 0 },
+  roof([[31.5, 20], [34.76, 16.5], [36.9, 14.2], [36.9, 30.6], [31.5, 30.6]], EAST),
   // ------------------------------------------------------------------ what hangs under the roofs: two girders, the ducts
   { at: box(3.4, 20.9, 35, 21.3), y: 12.4, over: true, thick: 2.8, rail: 0, key: STEEL, side: STEEL },
   { at: box(3.4, 28.3, 30.6, 28.7), y: 12.4, over: true, thick: 2.8, rail: 0, key: STEEL, side: STEEL },
   { at: box(4.7, 35.9, 17.8, 37.1), y: 13.2, over: true, thick: 0.9, rail: 0, key: SHEET, side: SHEET },
-  { at: box(17.8, 30.95, 19.2, 43.7), y: 13.2, over: true, thick: 0.9, rail: 0, key: SHEET, side: SHEET },
-  // ------------------------------------------------------------------ the raised road's deck over the yard beyond
+  { at: box(17.8, 30.6, 19.2, 43.7), y: 13.2, over: true, thick: 0.9, rail: 0, key: SHEET, side: SHEET },
+  // ------------------------------------------------------------------ the raised road's deck over the yard beyond, the wall that crosses over the south road
+  { at: box(-30.5, -37.8, -16.7, -37.2), y: 10.5, over: true, thick: 6.3, rail: 0, key: 'dp_concrete' },
   { at: box(-26.75, -2, -17, 31.2), y: RD, over: true, thick: 0.8, rail: 0.8, key: TAR },
   // ------------------------------------------------------------------ the hall's upper storey and its galleries
   { at: box(1.2, 31.2, 7.4, 43.9), y: UP, over: true, key: DECK, railKey: STEEL },
@@ -113,13 +114,13 @@ export const GROUND = [
   // the south dock: high at the west, a ramp, low at the east, and a short ramp of ours up from the lane
   { at: box(1.2, 15, 16.3, 21.1), y: DK, key: PAVE },
   { at: box(16.3, 15, 23.5, 21.1), y: { from: [16.3, 18, DK], to: [23.5, 18, DE] }, key: PAVE },
-  { at: [[23.5, 15], [36.1, 15], [36.1, 19.5], [34.6, 19.5], [34.6, 21.1], [23.5, 21.1]], y: DE, key: PAVE },
-  { at: box(34.6, 19.5, 36.1, 21.1), y: { from: [35.3, 21.1, 0], to: [35.3, 19.5, DE] }, key: PAVE },
+  { at: [[23.5, 15], [36.1, 15], [36.1, 18.7], [33.6, 18.7], [33.6, 21.1], [23.5, 21.1]], y: DE, key: PAVE },
+  { at: box(33.6, 18.7, 36.1, 21.1), y: { from: [34.8, 21.1, 0], to: [34.8, 18.7, DE] }, key: PAVE },
   // the north dock, the same; its east end has no floor over it, so its roof is its own
   { at: box(1.2, 30.6, 16.3, 43.9), y: DK, key: PAVE },
   { at: box(16.3, 30.6, 23.5, 43.9), y: { from: [16.3, 37, DK], to: [23.5, 37, DE] }, key: PAVE },
-  { at: [[23.5, 30.6], [27.2, 30.6], [27.2, 32.2], [30.2, 32.2], [30.2, 30.6], [36.1, 30.6], [36.1, 43.9], [23.5, 43.9]], y: DE, key: PAVE, roof: UNDER - DE, crown: false },
-  { at: box(27.2, 30.6, 30.2, 32.2), y: { from: [28.7, 30.6, 0], to: [28.7, 32.2, DE] }, key: PAVE, roof: UNDER - DE, crown: false },
+  { at: [[23.5, 30.6], [27.2, 30.6], [27.2, 33], [30.2, 33], [30.2, 30.6], [36.1, 30.6], [36.1, 43.9], [23.5, 43.9]], y: DE, key: PAVE, roof: UNDER - DE, crown: false },
+  { at: box(27.2, 30.6, 30.2, 33), y: { from: [28.7, 30.6, 0], to: [28.7, 33, DE] }, key: PAVE, roof: UNDER - DE, crown: false },
   // the back walk under the north gallery, the stair at its end up to the upper storey
   { at: box(1.2, 43.9, 30, 47.1), y: DK, key: PAVE },
   { at: box(30, 43.9, 35, 47.1), y: DK, key: PAVE, roof: UNDER - DK, crown: false },
@@ -176,10 +177,10 @@ export const WALLS = [
   { line: [[0.8, 23.6], [0.8, 27.5]], y: 0, h: RF - 0.3, t: 0.8, crown: false, holes: [{ at: 1.95, w: 3.3, h: 4.2 }] },
   { line: [[36.5, 29.1], [36.5, 30.9]], y: 0, h: 9.8, t: 0.8, crown: false, holes: [{ at: 0.9, w: 1.2, h: 2.2 }] },
   // the wall of the hall's taller part, over the roof a player walks
-  { line: [[0.4, 30.75], [31.5, 30.75]], y: RF - 0.3, h: TOP - RF + 0.3, t: 0.4, low: 0, crown: false },
-  { line: [[31.5, 30.75], [36.9, 30.75]], y: 9.8, h: TOP - 9.8, t: 0.4, low: 0, crown: false },
+  { line: [[0.4, 30.4], [31.5, 30.4]], y: RF - 0.3, h: TOP - RF + 0.3, t: 0.4, low: 0, crown: false },
+  { line: [[31.5, 30.4], [36.9, 30.4]], y: 9.8, h: TOP - 9.8, t: 0.4, low: 0, crown: false },
   // the side of the roof's bay
-  { line: [[24.5, 14.2], [24.5, 20]], y: 10.1, h: RF - 10.1, t: 0.3, low: 0, crown: false },
+  { line: [[24.7, 14.2], [24.7, 20]], y: 10.1, h: RF - 10.1, t: 0.3, low: 0, crown: false },
   // the room's wall on the upper storey: its window and its door
   { line: [[1, 34.2], [1, 43.9]], y: DK, h: UNDER - DK, t: 0.4, crown: false, holes: [{ at: 1.6, w: 2.6, h: 1.6, sill: UP - DK + 1, glass: true, frame: true }, { at: 4.9, w: 1.7, h: 2.3, sill: UP - DK }] },
   // the wall between the back walk and the stair
@@ -188,8 +189,6 @@ export const WALLS = [
   // the yard's fence and its gate, standing ajar
   { line: [[-12.4, 20.8], [-12.4, 25.7]], h: 3.7, t: 0.3, key: SHEET, crown: false },
   { line: [[-12.3, 30.1], [-9.4, 25.9]], h: 3, t: 0.12, key: SHEET, crown: false },
-  // the wall that crosses over the south road
-  { line: [[-30.5, -37.5], [-16.7, -37.5]], y: 4.2, h: 6.3, t: 0.6, low: 0 },
   // the ramp's side walls
   { line: [[-17.1, -14.6], [-17.1, -9.5]], y: 0, h: 3.8, t: 0.3 },
   { line: [[-17.1, -9.5], [-17.1, -2]], y: 0, h: 7.5, t: 0.3 },
@@ -222,7 +221,7 @@ export const MASSES = [
   ...stack(box(3.6, 16.9, 10, 20), DK, 3.25, RUST),
   // the duct's trunk down to the upper storey, and its hood on the roof
   { at: box(3.3, 35.3, 4.7, 38), y: UP, top: 12.3, key: SHEET },
-  { at: box(17.8, 29.5, 19.2, 30.55), y: RF, top: 13.9, key: SHEET },
+  { at: box(17.8, 29.1, 19.2, 30.2), y: RF, top: 13.9, key: SHEET },
   // the posts under the north gallery
   { at: box(9, 43.9, 9.6, 44.5), y: DK, top: UP - 0.3, key: STEEL },
   { at: box(14.6, 43.9, 15.2, 44.5), y: DK, top: UP - 0.3, key: STEEL },
@@ -281,6 +280,6 @@ export const LAMPS = [
   [4.3, 40.5, UP - 0.3], [9, 45.5, UP - 0.3], [20, 45.5, UP - 0.3], [32.5, 45.5, 9.5],
   // the upper storey, the room, the stair: under the taller roof
   [4.3, 37, UNDER], [5, 45.5, UNDER], [16, 45.5, UNDER], [27, 45.5, UNDER], [-2, 37, UNDER], [-2.5, 42, UNDER], [-7, 37.5, UNDER], [14.7, 49, 11.8], [21.5, 49, UNDER], [28.2, 49, UNDER],
-  // outside: the alcove off the street, the room off it, the dock on the pavement
-  [38.2, -20, 3.5], [20.2, -29.5, 2.9], [-5.7, -29.5, 4.5],
+  // outside: over the side door and at the stair's foot in the alley, the alcove off the street, the room off it, the dock on the pavement
+  [39.2, 30.2, 5.2], [39.6, 21, 5.2],  [38.2, -20, 3.5], [20.2, -29.5, 2.9], [-5.7, -29.5, 4.5],
 ];
