@@ -26,6 +26,7 @@ use core::ffi::c_char;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use duty_interface::maps;
 use duty_interface::{channel, pad, parse_f32, Command, Mode, Pace, Pad, Session};
 use duty_pack::figure::{bone, Pose};
 use duty_pack::sound::{Id, Sound};
@@ -315,6 +316,11 @@ pub unsafe extern "C" fn dt_init(pack: &PackIn, clock: Option<unsafe extern "C" 
     let defs: [WeaponDef; WEAPONS] = if weapons.len() == WEAPONS { [weapons[0], weapons[1], weapons[2]] } else { weapon::reference() };
     let mut game = Game::new(level, defs, 0x5eed_1234);
     let mut session = Session::new();
+    // The map whose pack is in the package: the tools build this library with its id (`DUTY_MAP`,
+    // tools/n3ds.ts), and without one it is the first. The package holds no other pack.
+    let held = option_env!("DUTY_MAP").and_then(maps::named).unwrap_or(maps::first());
+    session.map_id = held.id;
+    session.maps = alloc::vec![held.id];
     // The map picture's corner, as the compiler laid it out about the level's origin.
     session.map = (scene.level_origin[0] - 80.0, scene.level_origin[2] - 80.0);
     session.focal = 120.0 / tan(FOV * 0.5 * (PI / 180.0));
