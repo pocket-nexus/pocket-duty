@@ -1,0 +1,12 @@
+[
+  { "name": "above", "pos": [2, -2, 260], "look": [2, 0, 0], "fov": 40 },
+  { "name": "yard", "pos": [-23, -2.5, 10.7], "look": [0, 2, 15], "fov": 75 },
+  { "name": "hall", "pos": [16, -11, 10.7], "look": [5, 8, 13], "fov": 80 },
+  { "name": "lower-site", "pos": [15.5, -7, 1.7], "look": [9, 9, 3], "fov": 80 },
+  { "name": "catwalk-below", "pos": [3.7, 15.5, 4.95], "look": [14, -6, 1], "fov": 80 },
+  { "name": "ramp-room", "pos": [4.5, 30, 10.7], "look": [12, 44, 7], "fov": 80 },
+  { "name": "west-road", "pos": [-74, -1, 10.7], "look": [-40, -4, 11], "fov": 70 },
+  { "name": "east-apron", "pos": [58, 12, 12.2], "look": [25, 6, 14], "fov": 70 },
+  { "name": "south-yard", "pos": [24, -34, 10.7], "look": [8, -12, 14], "fov": 75 },
+  { "name": "west-tunnel", "pos": [-12.5, -30, 4.95], "look": [-12.5, 0, 5], "fov": 75 }
+]
