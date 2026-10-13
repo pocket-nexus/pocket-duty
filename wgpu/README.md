@@ -1,6 +1,6 @@
 # Pocket Duty in a browser tab
 
-The game of the PSP build, drawn with [wgpu](https://wgpu.rs) 25: over WebGPU in a tab (wasm32), and over Metal on the machine that builds it, where frames go to files. It reads **the PSP's pack** (`profiles/psp30.json`) as it is: the same triangles, baked light, pictures, soldiers, sounds and walk grid. The match is `crates/duty-sim` and the flow is `crates/duty-interface`, as the PSP links them. The game's own interface (`ui/`, the bundle the PSP loads) runs over the street, and the page shows the game in a PSP's shell with its keys as the controls. `web/` is something else: the reference, Claude of Duty, which the export page runs once.
+The game of the PSP build, drawn with [wgpu](https://wgpu.rs) 25: over WebGPU in a tab (wasm32), and over Metal on the machine that builds it, where frames go to files. It reads **the PSP's pack** (`profiles/psp30.json`) as it is: the same triangles, baked light, pictures, soldiers, sounds and walk grid; as a PS Vita it reads that console's own (`profiles/vita60.json`, "As a PS Vita"). The match is `crates/duty-sim` and the flow is `crates/duty-interface`, as the PSP links them. The game's own interface (`ui/`, the bundle the PSP loads) runs over the street, and the page shows the game in a PSP's shell with its keys as the controls. `web/` is something else: the reference, Claude of Duty, which the export page runs once.
 
 | Part | What it is |
 | --- | --- |
@@ -41,6 +41,18 @@ The source has two forms:
 **A page has a pack a map** (`maps/maps.json`): `<meta name="pocket-pack">` names the first map's and `<meta name="pocket-packs">` the others', as `<map>=<pack>` with spaces between; `serve` and `dist` write both for every map that is cooked, and `?map=<id>` opens the page on one. The shell holds one world. When the interface asks for a match on another map, `App::leave` drops the world (the collision world and the walk grid the match borrowed go with it, `pack::Keep`), the loading screen names the map, `Duty::map_wanted` hands its id to the page, the page reads that pack and `Duty::enter` starts the match.
 
 `bun tools/wgpu.ts dist` writes `.pocket-build/wgpu/dist` for a host that limits a file to 32 MiB and keeps a file ten minutes in a browser's cache (Pocket Studio's site deployments): `index.html` and `icon.png`; everything else of the site under `app/<build>/`, named by a hash of its contents; `pack/<hash>.json` and the pieces, each named by its own hash. The page alone is asked for again at every visit. With pieces of 2 MiB the directory is **53 files and 33.1 MB**: 15 pieces and their manifest (30.5 MB), 35 files of the site (2.6 MB), the page and the icon. `dist` refuses a directory the host would (a file over 32 MiB, more than 4 000 files or 1 GiB, a top-level `play/` or `runtime/`). A checkout that `pocket-studio register` has linked (`.pocket-studio.json`, which Git ignores) gets the project's id and the Studio's origin written into the page (`<meta name="pocket-app">`, `<meta name="pocket-studio">`), for a host that answers no `/app.json`. The game's host on Pocket Studio answers one, and **the player's dock takes its links from it: Download to `/games/duty?get`, Remix to `/games/duty?remix`**. `pocket-studio site .pocket-build/wgpu/dist` uploads the directory.
+
+## As a PS Vita
+
+**As a PS Vita the page reads that console's own pack** (`profiles/vita60.json`) and draws it as its own renderer does (`vita/src/world.rs`, `vita/shaders/`). `<meta name="pocket-packs-vita">` names the Vita's pack of every map, the first too; `serve` and `dist` write it for every map cooked for `vita60` (`serve` under `vita/`, `dist` in the same list as `<map>-vita` with its picture as `<map>-vita-map`). The PSP and the 3DS draw the PSP's pack.
+
+- **`Renderer::new` tells the pack by its pictures**: a pack with a picture that is not a palette (`rich`) is the Vita's. Its scene target has **4 samples a pixel**, its pictures are mixed between two levels, and its street is one program (`rich_vertex`, `rich_fragment` in `shaders/world.wgsl`): the ground takes its shadow picture in the same pass, a muzzle's light falls on what is near it, and **a wall takes the sun's shadow a pixel at a time from the pack's depth picture** (`pack::SUND`): the corner carries its colour in the sun and its colour with the sun off (`pack::WSHD`), and the fragment mixes the two by its depth from the sun against the picture's.
+- **The depth picture is a texture of whole numbers of 16 bits** (`R16Uint`), mixed between its four texels in the program (`sun_reached`), as the console's GPU mixes them: WebGPU's core has no 16-bit texture a sampler filters.
+- **A picture in blocks goes to the GPU as blocks** where the adapter has `texture-compression-bc` (`Gpu::for_canvas_wanting`); elsewhere `pack::rgba` takes the blocks apart into rows of true colour.
+- **The page chooses a device's pack** (`packsFor` in `page/main.js`): the device's own where the page names one and the tab's GPU reads blocks, the PSP's otherwise (a phone's GPU reads none, and the Vita's packs are three to seven times the PSP's bytes). A device chosen in the bar whose packs are others reads the held map again (`Duty::repack`): the loading words, then the title or a new match on that map.
+- **With no `?device=` the page opens as a PS Vita** where it names the Vita's packs and the visitor has a screen of 700 pixels or more on its short side and a fine pointer and has not asked for less data; as a PSP otherwise.
+
+What differs from the console's picture: **the soldiers' shadows on the ground are not drawn** (the console draws them with a stencil); the eye's levels of detail stay at the pack's distances (the console brings them in when a frame passes 170 000 triangles); runs of a chunk are not joined across gaps.
 
 ## The interface
 
@@ -110,6 +122,21 @@ Chrome 154 (headless, WebGPU on the Apple GPU, Metal 3) on an M3 Max, the pack `
 | On a line of 16 Mbit/s: the interface up, the first frame, the first frame of the street | 1.9 to 3.9 s, 2.4 s, 16.5 s (33.3 MB received) |
 | The module; PocketJS's UI core | 665 kB (233 kB gzipped); 421 kB (156 kB gzipped) |
 | Geometry and texels on the GPU | 27.4 MB |
+
+As a PS Vita, the pack `vita60` of 0.3.1 (84.5 MB for the street), Chrome 154 on the same machine, 2026-10-14:
+
+| | |
+| --- | --- |
+| The page's frame against the console's capture at two held views of the street, outside the interface's readouts | a colour differs by 0.56 and 0.51 of 255 on average; 0.6% and 0.5% of the pixels by more than 16 (the PSP's pack at 960 × 544, which the page drew as a PS Vita before: 11.5 and 12.2; 20% and 26%) |
+| A frame's cost without the display, over 300 frames of a match | 1.37 ms: 1 274 draws, 103 000 triangles (0.58 ms as a PSP) |
+| Geometry and texels on the GPU | 78.2 MB, the surfaces as blocks |
+| From this machine's disk: the pack read, the first frame of the street | 0.32 s, 2.46 s (the title card covers the page for 2.4 s); 0.20 s and 2.45 s as a PSP |
+| On a line of 20 Mbit/s: the first frame of the street | 35.8 s, 88.9 MB received; 13.3 s and 33.4 MB as a PSP |
+| On a line of 16 Mbit/s (`check`) | 44.6 s; 16.6 s as a PSP |
+| A PSP chosen in the bar during a match and the PS Vita again, from this machine's disk | 0.25 to 0.37 s for the two reads |
+| `dist` with nine maps and both profiles | 490 files, 503 MB (the PSP's packs 98.0 MB, the Vita's 434.3 MB before what they share), the largest file 4 MiB |
+
+The first frame needs the whole pack, as on a PSP, and a host that sends the pieces as they are sends 84.5 MB for the Vita's street. Deflated the street's pack is 26.5 MB and Twin Yards' 6.2 MB of 43.5 (the depth picture, the ground's shadow and the sky are most of `TEXD` and deflate to a seventh): a host that answers `pack/*.bin` with a content encoding cuts the wait by that much, and the page needs no change for it.
 
 The check also drives the page: the title card covers the page before the game is shown; from the title into a match by the ○ key; the stick runs; a face button turns the view; L raises the sights with the stick held; R fires and a block of the mixer's output is not silence; the direction pad changes the magazine and the weapon; START stops the match under the menu; a setting changed there is in `localStorage`; the bench's player fells a soldier; a soldier fells the player, who is back after four seconds; the clock runs out to the results and the results' first row starts a match; the PSP's shell is whole in windows of 1440 × 900, 1280 × 800 and 390 × 844, and its ○ key starts a match under a pointer and under a finger; a browser without WebGPU is told so.
 
