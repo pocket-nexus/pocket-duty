@@ -18,10 +18,12 @@
 //! gives the triangles to what is near the eye.
 //!
 //! The arms that hold the weapon are a profile's choice (`figures.arms`, [`Arms`]): the export's
-//! shells as they are; those shells with the open ones (a sleeve, a glove's cuff) seen from both
+//! shells as they are; those shells with the open ones (a sleeve, a glove's palm) seen from both
 //! sides, for a device whose budget keeps a hand's forty-five shells whole; or each part drawn
 //! again as one closed skin (`skin`), for a handheld's budget, where the shells simplified apart
-//! leave slivers for fingers and a gap at the wrist.
+//! leave slivers for fingers and a gap at the wrist. Either of the last two also mends the wrist
+//! (`held_source`): the glove's cuff bands are left out and the sleeve's end is narrowed (`taper`),
+//! or both stand up from the line of the forearm and the hand where the wrist is bent.
 //!
 //! A soldier is not simplified. Its fifty shells (jacket, pouches, straps, laces) can each only
 //! shrink on its own, and at 700 triangles what collapses leave of them is slivers and limbs
@@ -1283,17 +1285,97 @@ fn skin(pos: &[V3], col: &[[u8; 3]], tris: &[[u32; 3]]) -> (Vec<V3>, Vec<[u8; 3]
     (out, colours, triangles)
 }
 
+/// Metres of a sleeve's end that come down toward its middle line, and what is left of its girth at
+/// the very end. At two thirds the sleeve's top meets the glove's back in the hip pose and aimed; at
+/// a half the glove stands a pixel over the sleeve on a PSP, and whole (1.0) the sleeve's rim stands
+/// three pixels over the glove.
+const SLEEVE_TAPER: (f32, f32) = (0.08, 0.66);
+
+/// Narrows a sleeve toward the wrist: over its last `SLEEVE_TAPER.0` metres every vertex of the
+/// forearm moves toward the sleeve's middle line, a little at first and to `SLEEVE_TAPER.1` of its
+/// distance at the end. The sleeve's line runs along the direction its vertices are spread furthest
+/// in, toward the hand; its middle is taken a centimetre at a time.
+fn taper(source: &mut Source, forearm: usize, hand: usize) {
+    let of = |which: usize| -> Vec<u32> {
+        let mut vertices: Vec<u32> = source.tris.iter().filter(|t| source.skin[t[0] as usize].0[0] as usize == which).flatten().copied().collect();
+        vertices.sort_unstable();
+        vertices.dedup();
+        vertices
+    };
+    let (sleeve, palm) = (of(forearm), of(hand));
+    if sleeve.is_empty() || palm.is_empty() {
+        return;
+    }
+    let mean = |vertices: &[u32]| -> [f64; 3] { core::array::from_fn(|k| vertices.iter().map(|&v| source.pos[v as usize][k] as f64).sum::<f64>() / vertices.len() as f64) };
+    let (middle, toward) = (mean(&sleeve), mean(&palm));
+    // The direction of the greatest spread: a few rounds of multiplying by the spread's matrix.
+    let mut spread = [[0.0f64; 3]; 3];
+    for &v in &sleeve {
+        let d: [f64; 3] = core::array::from_fn(|k| source.pos[v as usize][k] as f64 - middle[k]);
+        for i in 0..3 {
+            for j in 0..3 {
+                spread[i][j] += d[i] * d[j];
+            }
+        }
+    }
+    let mut along = [toward[0] - middle[0], toward[1] - middle[1], toward[2] - middle[2]];
+    for _ in 0..64 {
+        let next: [f64; 3] = core::array::from_fn(|i| (0..3).map(|j| spread[i][j] * along[j]).sum());
+        let length = next.iter().map(|c| c * c).sum::<f64>().sqrt().max(1e-30);
+        along = next.map(|c| c / length);
+    }
+    if (0..3).map(|k| along[k] * (toward[k] - middle[k])).sum::<f64>() < 0.0 {
+        along = along.map(|c| -c);
+    }
+    // Where each of the sleeve's vertices lies along that line.
+    let places: Vec<f64> = sleeve.iter().map(|&v| (0..3).map(|k| (source.pos[v as usize][k] as f64 - middle[k]) * along[k]).sum()).collect();
+    let end = places.iter().copied().fold(f64::MIN, f64::max);
+    let (reach, least) = (SLEEVE_TAPER.0 as f64, SLEEVE_TAPER.1 as f64);
+    // The sleeve's middle a centimetre at a time, from the taper's start to the end.
+    let slices = (reach / 0.01).ceil() as usize;
+    let mut sums = vec![([0.0f64; 3], 0usize); slices];
+    for (&v, &t) in sleeve.iter().zip(&places) {
+        let back = end - t;
+        if back < reach {
+            let slice = ((back / 0.01) as usize).min(slices - 1);
+            for k in 0..3 {
+                sums[slice].0[k] += source.pos[v as usize][k] as f64;
+            }
+            sums[slice].1 += 1;
+        }
+    }
+    let centre = |slice: usize| -> Option<[f64; 3]> { (sums[slice].1 > 0).then(|| sums[slice].0.map(|c| c / sums[slice].1 as f64)) };
+    for (&v, &t) in sleeve.iter().zip(&places) {
+        let back = end - t;
+        if back >= reach {
+            continue;
+        }
+        let slice = ((back / 0.01) as usize).min(slices - 1);
+        // (a slice with no vertex in it takes the nearest one's middle)
+        let Some(c) = (0..slices).filter_map(|d| centre(slice.saturating_sub(d)).or(centre((slice + d).min(slices - 1)))).next() else { continue };
+        // The middle line's point beside this vertex: the slice's middle, moved along the line to the vertex's place on it.
+        let c_at: f64 = (0..3).map(|k| (c[k] - middle[k]) * along[k]).sum();
+        let on_line: [f64; 3] = core::array::from_fn(|k| c[k] + along[k] * (t - c_at));
+        let share = 1.0 - back / reach;
+        let keep = 1.0 - (1.0 - least) * share * share * (3.0 - 2.0 * share);
+        for k in 0..3 {
+            source.pos[v as usize][k] = (on_line[k] + (source.pos[v as usize][k] as f64 - on_line[k]) * keep) as f32;
+        }
+    }
+}
+
 /// How the arms of a held weapon are taken from the export (a profile's `figures.arms`).
 #[derive(Clone, Copy, PartialEq)]
 enum Arms {
     /// The export's shells as they are.
     Shells,
-    /// The export's shells, the open ones seen from both sides (`"open"`): a sleeve, a glove's cuff and
-    /// its palm are open at the wrist, and the eye looks into them from the elbow's end. Seen from one
-    /// side, a cuff is a crescent with a hole behind it. For a device that draws a hand's shells whole.
+    /// The export's shells, the open ones seen from both sides (`"open"`): a sleeve and a glove's palm
+    /// are open at the wrist, and the eye looks into them from the elbow's end. For a device that
+    /// draws a hand's shells whole. The wrist is mended as for a skin.
     Open,
     /// Each part drawn again as one closed skin (`"skin"`): for a handheld's budget, where the shells
-    /// simplified apart are slivers and a gap at the wrist.
+    /// simplified apart are slivers and a gap at the wrist. The cuff's bands are left out and the
+    /// sleeve's end is narrowed first (`held_source`).
     Skin,
 }
 
@@ -1346,13 +1428,24 @@ fn held_source(dir: &Dir, meta: &Value, arms: Arms) -> Source {
         }
     }
     let mut source = Source { col: triples(dir.u8s(name("colour"))), skin: parts.iter().map(|p| ([*p, *p], 1.0)).collect(), two_sided, tris: triples(&index), pos };
+    if arms == Arms::Shells {
+        return source;
+    }
+    // The wrist. A hand grips with its wrist bent, so from the eye the forearm rises to the wrist and
+    // the hand turns down from it: the wrist is the top of that line. The export ends the sleeve there
+    // in a rim wider than the hand is thick and lays the glove's cuff about it as a band, and each is
+    // of a part that turns as one piece: both stand up from the line as a block. So the cuff's bands
+    // are left out (in a skin the rays through one would also fill its whole ring), and the sleeve's
+    // last centimetres come down toward its middle line until its end lies inside the hand's heel.
+    source.tris.retain(|t| !band[t[0] as usize]);
+    for (forearm, hand) in [(part::FOREARM_R, part::HAND_R), (part::FOREARM_L, part::HAND_L)] {
+        taper(&mut source, forearm, hand);
+    }
     if arms != Arms::Skin {
         return source;
     }
     // The arms' parts are drawn again, each as one closed skin (`skin`); the weapon's stay the export's.
-    // A band takes no part in a skin: the rays through it would fill its whole ring, and a cuff that
-    // flares from the wrist would stand on the arm as a knob as large as the hand.
-    let arms: Vec<(u8, Vec<[u32; 3]>)> = (part::UPPER_ARM_R as u8..part::WEAPON as u8).map(|p| (p, source.tris.iter().copied().filter(|t| source.skin[t[0] as usize].0[0] == p && !band[t[0] as usize]).collect())).collect();
+    let arms: Vec<(u8, Vec<[u32; 3]>)> = (part::UPPER_ARM_R as u8..part::WEAPON as u8).map(|p| (p, source.tris.iter().copied().filter(|t| source.skin[t[0] as usize].0[0] == p).collect())).collect();
     let skins: Vec<_> = arms.par_iter().filter(|(_, tris)| !tris.is_empty()).map(|(p, tris)| (*p, skin(&source.pos, &source.col, tris))).collect();
     let (skin_of, mut tris) = (&source.skin, source.tris.clone());
     tris.retain(|t| (skin_of[t[0] as usize].0[0] as usize) < part::UPPER_ARM_R);
@@ -1536,8 +1629,9 @@ pub fn cook(ir: &Path, profile: &Value) -> Result<Vec<u8>, String> {
 }
 
 /// The export's own meshes, drawn as `figure_shot` draws the cooked ones: what the lowering started from.
-pub fn source_pictures(ir: &Path, out: &Path) -> Result<(), String> {
+pub fn source_pictures(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
     let dir = Dir::open(&ir.join("figures.dir"))?;
+    let arms = Arms::of(profile);
     let shade = |c: [u8; 3]| c.map(|x| x as f32 / 255.0);
     for s in dir.meta["soldiers"].as_array().into_iter().flatten() {
         let source = body(&dir, s);
@@ -1566,6 +1660,37 @@ pub fn source_pictures(ir: &Path, out: &Path) -> Result<(), String> {
             }
         }
         canvas.image.save(&out.join(format!("{}_source.png", h["name"].as_str().unwrap_or("weapon"))))?;
+
+        // The two wrists as the profile takes the arms from the export, before anything is lowered or
+        // left out: each from the eye's side, from the left, from above and from the right, without
+        // perspective, the left wrist over the right one. The weapon's own parts are left out.
+        let source = held_source(&dir, h, arms);
+        let cell = (360, 300);
+        let mut sheet = crate::tex::Image::new(cell.0 * 4, cell.1 * 2);
+        for (row, hand) in [part::HAND_L, part::HAND_R].into_iter().enumerate() {
+            let of = |which: usize| -> Vec<V3> { source.tris.iter().filter(|t| source.skin[t[0] as usize].0[0] as usize == which).flat_map(|t| t.map(|v| source.pos[v as usize])).collect() };
+            let (palm, sleeve) = (of(hand), of(hand - 1));
+            if palm.is_empty() || sleeve.is_empty() {
+                continue;
+            }
+            let middle: V3 = core::array::from_fn(|k| sleeve.iter().map(|p| p[k]).sum::<f32>() / sleeve.len() as f32);
+            let wrist = palm.iter().copied().min_by(|a, b| dot(sub(*a, middle), sub(*a, middle)).total_cmp(&dot(sub(*b, middle), sub(*b, middle)))).unwrap_or(middle);
+            for (column, toward) in [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]].into_iter().enumerate() {
+                let view = View::flat(cell.0, cell.1, toward, wrist, 0.22);
+                let mut canvas = Canvas::new(cell.0, cell.1, [0.62, 0.64, 0.66], 2.2);
+                for t in source.tris.iter().filter(|t| source.skin[t[0] as usize].0[0] as usize >= part::UPPER_ARM_R) {
+                    let (p, c) = (t.map(|v| source.pos[v as usize]), t.map(|v| shade(source.col[v as usize])));
+                    canvas.triangle(&view, p, c);
+                    if source.two_sided[t[0] as usize] {
+                        canvas.triangle(&view, [p[0], p[2], p[1]], [c[0], c[2], c[1]]);
+                    }
+                }
+                for y in 0..cell.1 {
+                    sheet.data[(row * cell.1 + y) * cell.0 * 4 + column * cell.0..][..cell.0].copy_from_slice(&canvas.image.data[y * cell.0..(y + 1) * cell.0]);
+                }
+            }
+        }
+        sheet.save(&out.join(format!("{}_wrists_whole.png", h["name"].as_str().unwrap_or("weapon"))))?;
     }
     Ok(())
 }
