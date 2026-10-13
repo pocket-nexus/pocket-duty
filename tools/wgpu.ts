@@ -18,7 +18,7 @@
 //                                                  and, when a second map is cooked, a match on it chosen
 //                                                  from the map list → .pocket-build/validation/web/
 //
-// The site has the pack of every map that is cooked for the PSP (maps/maps.json, tools/maps.ts): the first
+// The site has the pack of every map that is cooked for the PSP (tools/maps.ts): the first
 // map's is what the page opens on, and the map list offers the others. Every command takes [--pack PATH]
 // for the first map's pack (default: .pocket-build/duty/psp30/duty.pack, which `bun tools/duty.ts cook`
 // writes). `build` compiles the interface as tools/ui.ts does: it needs `bun install` in vendor/pocketjs.

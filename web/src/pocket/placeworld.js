@@ -11,13 +11,16 @@ import { Assembler } from '../world/builder.js';
 import { registerProps } from '../world/props.js';
 import { registerDressingProps } from '../world/dressing.js';
 import { BOX_THIN, IDENT, LL } from '../world/kit.js';
-import * as place from '@map/place';
+import * as plan from '@map/place';
+import * as look from '@map/look';
 import { buildPlace } from './placekit.js';
 import { applyLook, applySky, libraryName } from './placelook.js';
 import { PALETTE } from '../world/palette.js';
 
+// The map's look is its own file (maps/<id>/look.js); a plan may still carry it.
+const place = { ...plan, LOOK: look.LOOK ?? plan.LOOK };
 // The map's surfaces are in the reference's tables before anything asks for one.
-applyLook(place.LOOK);
+applyLook(place.LOOK, look.SURFACES);
 
 export class PlaceWorldSystem extends WorldSystem {
   async init(ctx) {
@@ -60,6 +63,9 @@ export class PlaceWorldSystem extends WorldSystem {
     this.place = built;
     this.ceilings = built.ceilings;
     this.barriers = built.barriers;
+    this.stairs = built.stairs;
+    this.threads = built.threads;
+    if (built.ladders.length) this.ladders = built.ladders.map((l) => ({ foot: A.toWorld(...l.foot).toArray(), top: A.toWorld(...l.top).toArray() }));
     // Floors at any height take the ground's shadow picture, whatever their surface (crates/duty-cook).
     this.ground = { families: [...new Set(built.floors.map((key) => PALETTE[key]?.name ?? libraryName(key)))], below: top + 1 };
     // The place's own light for the cook: a warmer sky, what its sunlit ground sends back, its lamps.

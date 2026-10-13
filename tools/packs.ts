@@ -26,7 +26,7 @@ import { cookedDir, MAPS, packPath, ROOT } from "./maps.ts";
 /** Where a profile's pieces and manifests lie. */
 export const packsDir = (profile: string): string => join(ROOT, ".pocket-build/duty/packs", profile);
 
-/** The maps that are cooked for a profile, in the order of maps/maps.json. */
+/** The maps that are cooked for a profile, in the list's order (tools/maps.ts). */
 export function cooked(profile: string): { id: string; file: string }[] {
   return MAPS.map((map) => ({ id: map.id, file: packPath(map.id, profile) })).filter((each) => existsSync(each.file));
 }

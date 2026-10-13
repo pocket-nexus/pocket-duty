@@ -47,27 +47,6 @@ export const PLACE = {
   ],
 };
 
-/** The look: surfaces of the place's own family, made by our code (web/src/pocket/placelook.js). */
-export const LOOK = {
-  materials: {
-    yd_stone: { of: 'courses', tint: 0xf4eadc },
-    yd_stone_warm: { of: 'courses', tint: 0xe6cfae },
-    yd_frieze: { of: 'flutes', tint: 0xecdfcc },
-    yd_roof: { of: 'plaster', tint: 0xc9b089, scale: 3.2 },
-    yd_cobble: { of: 'cobbles', tint: 0xf2e8d8 },
-    yd_slab: { of: 'concrete_floor', tint: 0xe9cfa2, surface: 'concrete' },
-    yd_sand: { of: 'grit', tint: 0xf6dfbc },
-    yd_wood: { of: 'boards', tint: 0xeadcc4 },
-    yd_wood_dark: { of: 'boards', tint: 0xa58c6c },
-  },
-  keys: { ground: 'yd_cobble', side: 'yd_stone', wall: 'yd_stone', band: 'yd_frieze', cap: 'yd_stone_warm', lid: 'yd_roof', wood: 'yd_wood', woodDark: 'yd_wood_dark', iron: 'metal_dark', apron: 'yd_sand' },
-  // A window to so many metres of a house's wall.
-  windows: { every: 7.5 },
-  sky: { hour: 14.2, weather: { coverage: 0.1, turbidity: 2.2 } },
-  // The cook's light for this place: the sky's fill warmed, what the sunlit sand sends back, its lamps.
-  light: { sky: [1.55, 1.2, 0.85], bounce: [0.62, 0.46, 0.28], lamp: [9, 5.5, 2.4], reach: 11 },
-};
-
 const SLAB = 'yd_slab', SAND = 'yd_sand';
 const COVER = 3.2;
 // The heights most floors lie at: the common level, the west side's upper level, the east site.

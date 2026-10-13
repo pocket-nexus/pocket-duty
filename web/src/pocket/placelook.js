@@ -119,6 +119,18 @@ const GRIT = HEAD + `
   ao = 1.0 - pebble * 0.1;
 }`;
 
+/** Still water seen from above: dark, a little green, with slow ripples. */
+const WATER = HEAD + `
+  vec2 p = uv * P + uSeed * 7.7;
+  float swell = owFbm01(p * 0.75, P * 0.75, 3, 0.55);
+  float ripple = owFbm01(owWarp(p * 3.0, P * 3.0, 0.35, 2), P * 3.0, 3, 0.5);
+  h = 0.5 + (swell - 0.5) * 0.06 + (ripple - 0.5) * 0.05;
+  alb = mix(owSRGB(vec3(0.10, 0.20, 0.20)), owSRGB(vec3(0.20, 0.34, 0.32)), swell * 0.6 + ripple * 0.4);
+  rough = 0.12;
+  metal = 0.0;
+  ao = 1.0;
+}`;
+
 const stone = { parallax: 0.016, detile: 0, detail: [8, 0.9, 0.5, 22], macro: [0.085, 0.6, 0.22, 0.5], macroBig: [2.0, 0.12, 0.03, 0], weather: [0.3, 0.4, 0.5, 0.5], wearColor: 0xc4b094, dustColor: 0xb89c72, grimeColor: 0x3a3024, roughness: [0.96, -0.02, 0.26] };
 
 /** The surfaces of ours, as the reference's library lists its own: the name a palette key gives as `of`. */
@@ -126,20 +138,37 @@ export const SURFACES = {
   courses: { glsl: COURSES, surface: 'concrete', bake: { size: 1024, worldSize: 3.0, relief: 0.05, seed: 41 }, mat: { scale: 3.0, ...stone } },
   cobbles: { glsl: COBBLES, surface: 'dirt', bake: { size: 1024, worldSize: 2.4, relief: 0.07, seed: 17 }, mat: { uvMode: 'triplanar', scale: 2.4, detile: 0, detail: [8, 0.7, 0.3, 18], macro: [0.05, 0.44, 0.14, 0.35], weather: [0.15, 0, 0, 0.18], dustColor: 0xb89c72, grimeColor: 0x4c4132, roughness: [1.0, 0.0, 0.3] } },
   grit: { glsl: GRIT, surface: 'sand', bake: { size: 1024, worldSize: 2.6, relief: 0.03, seed: 53 }, mat: { uvMode: 'triplanar', scale: 2.6, detile: 0, detail: [8, 0.7, 0.3, 18], macro: [0.05, 0.44, 0.14, 0.35], weather: [0.15, 0, 0, 0.18], dustColor: 0xb89c72, grimeColor: 0x4c4132, roughness: [1.0, 0.0, 0.3] } },
+  water: { glsl: WATER, surface: 'water', bake: { size: 512, worldSize: 4.0, relief: 0.02, seed: 61 }, mat: { uvMode: 'triplanar', scale: 4.0, detile: 0, detail: [6, 0.4, 0.2, 12], macro: [0.05, 0.3, 0.1, 0.35], weather: [0, 0, 0, 0], roughness: [0.12, 0.0, 0.1] } },
   flutes: { glsl: FLUTES, surface: 'concrete', bake: { size: 1024, worldSize: 2.4, relief: 0.05, seed: 7 }, mat: { scale: 2.4, ...stone } },
   boards: { glsl: BOARDS, surface: 'wood', bake: { size: 1024, worldSize: 1.6, relief: 0.03, seed: 29 }, mat: { scale: 1.6, parallax: 0.008, detail: [10, 0.8, 0.42, 18], macro: [0.085, 0.34, 0.14, 0.5], weather: [0.3, 0.35, 0.5, 0.45], wearColor: 0xa88b62 } },
 };
 
-/** The name our surface `of` has in the reference's library. */
-export const libraryName = (of) => (of in SURFACES ? `place_${of}` : of);
+/**
+ * A surface of a map's own (maps/<id>/look.js): the body of its function, which writes `alb` (linear;
+ * `owSRGB` turns a colour as it is seen into one), `h` (height, 0…1), `rough`, `metal` and `ao` from `uv`
+ * (0…1 across a tile that repeats; `P` is the period the reference's noise takes), and what the tile is:
+ * `metres` across, `relief` in metres, the physics `surface`, and `like: 'wall'` or `'ground'` for how
+ * the reference weathers it. The reference's noise is at hand: `owFbm01`, `owWorley`, `owVoronoiEdge`,
+ * `owHash42`, `owWarp` (web/src/materials/glsl/noise.js).
+ */
+export function surface(body, { metres = 2.4, relief = 0.04, seed = 11, surface: physics = 'concrete', like = 'wall' } = {}) {
+  const mat = like === 'ground' ? { uvMode: 'triplanar', scale: metres, detile: 0, detail: [8, 0.7, 0.3, 18], macro: [0.05, 0.44, 0.14, 0.35], weather: [0.15, 0, 0, 0.18], dustColor: 0xb89c72, grimeColor: 0x4c4132, roughness: [1.0, 0.0, 0.3] } : { scale: metres, ...stone };
+  return { glsl: `${HEAD}${body}\n}`, surface: physics, bake: { size: 1024, worldSize: metres, relief, seed }, mat };
+}
+
+/** The name a surface `of` has in the reference's library: ours and a map's own stand under `place_`. */
+export const libraryName = (of) => (LIBRARY[`place_${of}`] ? `place_${of}` : of);
 
 /**
- * Puts a place's look into the reference's tables. `look.materials`: palette keys of the map, each
- * `{ of, tint, scale?, weather?, surface? }` where `of` is a surface of ours or of the reference's library.
+ * Puts a place's look into the reference's tables. `own`: the map's own surfaces by name (`surface()`).
+ * `look.materials`: palette keys of the map, each `{ of, tint, scale?, weather?, surface? }` where `of` is
+ * a surface of the map's own, of the kit's, or of the reference's library.
  * Returns the library names of the keys, for the floors' families.
  */
-export function applyLook(look = {}) {
-  for (const [name, def] of Object.entries(SURFACES)) LIBRARY[`place_${name}`] ??= def;
+export function applyLook(look, own = {}) {
+  look ??= {};
+  // The kit's surfaces, which every map has; then the map's own, which stand before them by name.
+  for (const [name, def] of Object.entries({ ...SURFACES, ...own })) LIBRARY[`place_${name}`] = def;
   for (const [key, m] of Object.entries(look.materials ?? {})) {
     const name = libraryName(m.of);
     if (!LIBRARY[name]) throw new Error(`LOOK.materials.${key}: no surface "${m.of}"`);

@@ -1,7 +1,8 @@
-//! Writes the maps' table (`maps/maps.json`, the one list of them) as Rust for `src/maps.rs`.
+//! Writes the maps' table as Rust for `src/maps.rs`: the reference's street (`maps/street.json`), then
+//! every directory under `maps/` that has a `map.json`. No file lists the maps.
 //!
-//! The file is ours and flat: an array of objects whose values are short strings and `true`. It is read
-//! with a scanner of a few lines, so a device's build needs no JSON crate.
+//! The files are ours and flat: objects whose values are short strings and a number. They are read with
+//! a scanner of a few lines, so a device's build needs no JSON crate.
 
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -14,20 +15,32 @@ fn value<'a>(object: &'a str, key: &str) -> Option<&'a str> {
 }
 
 fn main() {
-    let list = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../maps/maps.json");
-    println!("cargo:rerun-if-changed={}", list.display());
-    let text = std::fs::read_to_string(&list).unwrap_or_else(|e| panic!("{}: {e}", list.display()));
-    let mut out = String::from("/// The maps, in the order `maps/maps.json` lists them. The first is the reference's own street.\npub const MAPS: &[Map] = &[\n");
-    let mut count = 0;
-    for object in text.split('{').skip(1) {
-        let object = object.split('}').next().unwrap();
-        let (id, title) = (value(object, "id").expect("a map's id"), value(object, "title").expect("a map's title"));
-        assert!(!id.is_empty() && id.len() <= 24 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'), "maps.json: {id} is not a map's id");
-        assert!(!title.contains('\\'), "maps.json: a title is plain text");
-        writeln!(out, "    Map {{ id: {id:?}, title: {title:?} }},").unwrap();
-        count += 1;
+    let maps = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../maps");
+    // (a map added or taken away is a change of the directory itself)
+    println!("cargo:rerun-if-changed={}", maps.display());
+    let read = |path: &PathBuf| {
+        println!("cargo:rerun-if-changed={}", path.display());
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    };
+    // The reference's street first; then a directory a map, by its `order` and then its name.
+    let street = read(&maps.join("street.json"));
+    let mut listed = vec![(-1i64, value(&street, "id").expect("the street's id").to_string(), value(&street, "title").expect("the street's title").to_string())];
+    for entry in std::fs::read_dir(&maps).expect("maps/").flatten() {
+        let file = entry.path().join("map.json");
+        if !file.exists() {
+            continue;
+        }
+        let text = read(&file);
+        let order = text.find("\"order\"").and_then(|at| text[at + 7..].trim_start().strip_prefix(':')).and_then(|rest| rest.trim_start().split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()).unwrap_or(1000);
+        listed.push((order, entry.file_name().to_string_lossy().into_owned(), value(&text, "title").expect("a map's title").to_string()));
     }
-    assert!(count > 0, "maps.json lists no map");
+    listed.sort();
+    let mut out = String::from("/// The maps: the reference's own street, then `maps/<id>/` by its `map.json`.\npub const MAPS: &[Map] = &[\n");
+    for (_, id, title) in &listed {
+        assert!(!id.is_empty() && id.len() <= 24 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'), "maps/: {id} is not a map's id");
+        assert!(!title.contains('\\'), "maps/: a title is plain text");
+        writeln!(out, "    Map {{ id: {id:?}, title: {title:?} }},").unwrap();
+    }
     out.push_str("];\n");
     std::fs::write(PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("maps.rs"), out).unwrap();
 }

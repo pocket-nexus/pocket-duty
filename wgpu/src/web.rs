@@ -30,7 +30,7 @@ pub fn shapes() -> String {
     format!("[{}]", SHAPES.iter().map(describe).collect::<Vec<_>>().join(","))
 }
 
-/// The maps, in the order of `maps/maps.json`, as a JSON array of `{"id", "title"}`. The first is the one
+/// The maps, in the list's order (`duty_interface::maps`), as a JSON array of `{"id", "title"}`. The first is the one
 /// every page has a pack for.
 #[wasm_bindgen]
 pub fn maps() -> String {

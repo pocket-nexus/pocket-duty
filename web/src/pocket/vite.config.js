@@ -7,8 +7,8 @@
 //    `web/src/world/{ground,dressing,index}.js` import `./layout.js`, and here that name resolves to
 //    `maps/<DUTY_MAP>/layout.js` (a map in the reference's terms), or, for a place of ours
 //    (`maps/<DUTY_MAP>/place.js`), to a street of no length (`./nolayout.js`). The reference's files
-//    stay as they are on disk. The page's own modules name the map's file as `@map/layout` or
-//    `@map/place`.
+//    stay as they are on disk. The page's own modules name the map's files as `@map/layout`,
+//    `@map/place` and `@map/look` (the map's own look: `maps/<DUTY_MAP>/look.js`).
 import { mergeConfig } from 'vite';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -21,6 +21,7 @@ const repository = resolve(web, '..');
 const map = process.env.DUTY_MAP || '';
 if (map && !/^[a-z][a-z0-9-]*$/.test(map)) throw new Error(`DUTY_MAP: "${map}" is not a map's name`);
 const placeFile = map ? resolve(repository, 'maps', map, 'place.js') : '';
+const lookFile = map ? resolve(repository, 'maps', map, 'look.js') : '';
 const place = placeFile && existsSync(placeFile) ? placeFile : resolve(here, 'noplace.js');
 const layout = place === placeFile ? resolve(here, 'nolayout.js') : map ? resolve(repository, 'maps', map, 'layout.js') : resolve(web, 'src/world/layout.js');
 const world = resolve(web, 'src/world').replace(/\\/g, '/') + '/';
@@ -35,6 +36,7 @@ export default mergeConfig(reference, {
       resolveId(source, importer) {
         if (source === '@map/layout') return layout;
         if (source === '@map/place') return place;
+        if (source === '@map/look') return lookFile && existsSync(lookFile) ? lookFile : resolve(here, 'noplace.js');
         if (map && source === './layout.js' && importer && importer.replace(/\\/g, '/').split('?')[0].startsWith(world)) return layout;
         return null;
       },

@@ -232,7 +232,7 @@ impl Pathfinder {
                     } else {
                         step_cost
                     } + rise * 22 / 125;
-                if level.flags[next as usize] == 2 {
+                if level.flags[next as usize] & 3 == 2 {
                     cost += step_cost * 8 / 5;
                 }
                 if cost > u16::MAX as u32 {

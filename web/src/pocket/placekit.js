@@ -81,7 +81,7 @@ export function buildPlace(A, rng, place) {
   const plan = place.PLACE;
   const keys = { ground: 'sand', side: 'plaster_sand', wall: 'plaster_sand', band: 'concrete', cap: 'concrete', wood: 'wood', woodDark: 'wood_dark', iron: 'metal_dark', ...(place.LOOK?.keys ?? {}) };
   const grounds = place.GROUND ?? [];
-  const ceilings = [], barriers = [];
+  const ceilings = [], barriers = [], threads = [], stairs = [], ladders = [];
   const wallH = plan.wall ?? 5.5;
   const T = 0.6;
 
@@ -91,6 +91,15 @@ export function buildPlace(A, rng, place) {
     return y;
   };
   const standAt = (e, n, y) => y ?? groundAt(e, n) ?? 0;
+  /** Whether one of the plan's houses stands at a point: its own faces and roof are there. */
+  const houseAt = (e, n) => {
+    for (const h of place.HOUSES ?? []) {
+      const c = Math.cos((h.turn ?? 0) * RAD), si = Math.sin((h.turn ?? 0) * RAD), de = e - h.at[0], dn = n - h.at[1];
+      // (the house's own axes: its width along the east turned by `turn`, its depth along the north)
+      if (Math.abs(de * c - dn * si) <= h.size[0] / 2 + 0.35 && Math.abs(de * si + dn * c) <= h.size[1] / 2 + 0.35) return true;
+    }
+    return false;
+  };
   /** The top of the block of houses the plan states at a point (`BLOCKS`), or null. */
   const blockTop = (e, n) => {
     let top = null;
@@ -158,7 +167,7 @@ export function buildPlace(A, rng, place) {
         let other = contains(g.at, qe, qn) ? mine : null;
         for (const o of grounds) if (o !== g && contains(o.at, qe, qn)) other = Math.max(other ?? -Infinity, heightOf(o, qe, qn));
         // (a free edge's wall rises to the block that stands beyond it, where the plan states one)
-        beyond.push(other === null ? `free${blockTop(qe + out[0] * 0.5, qn + out[1] * 0.5) ?? ''}` : other >= mine - 0.06 ? 'joined' : other);
+        beyond.push(other === null ? (houseAt(qe + out[0] * 0.4, qn + out[1] * 0.4) ? 'joined' : `free${blockTop(qe + out[0] * 0.5, qn + out[1] * 0.5) ?? ''}`) : other >= mine - 0.06 ? 'joined' : other);
       }
       for (let k = 0; k < count; ) {
         const what = typeof beyond[k] === 'number' ? 'drop' : beyond[k];
@@ -219,14 +228,18 @@ export function buildPlace(A, rng, place) {
         w1 = Math.max(w1, across);
       }
       const count = Math.max(2, Math.ceil(Math.abs(ty - fy) / 0.2));
+      // Steeper than a soldier's step from node to node (0.45 m in 0.8 m): the treads carry the
+      // player, who steps up them, and the walk grid is told it is a stair.
+      const steep = Math.abs(ty - fy) / length > 0.45 / 0.8;
       for (let k = 0; k < count; k++) {
         // (each tread is level with the slope at its upper edge)
         const s0 = (k / count) * length, s1 = ((k + 1) / count) * length;
         const yTop = fy + (ty - fy) * ((ty > fy ? k + 1 : k) / count);
         const centre = (d) => [fe + ue * d - un * ((w0 + w1) / 2), fn + un * d + ue * ((w0 + w1) / 2)];
         const [ae, an] = centre(s0), [be, bn] = centre(s1);
-        run(g.key ?? keys.ground, [ae, -an], [be, -bn], yTop - 0.45, yTop, w1 - w0, { collide: false, masks: [0.6, 0.6, 0.3] });
+        run(g.key ?? keys.ground, [ae, -an], [be, -bn], yTop - 0.45, yTop, w1 - w0, { collide: steep, masks: [0.6, 0.6, 0.3] });
       }
+      if (steep) stairs.push(g.at.map(([e, n]) => [e, -n]));
     }
     // A roof over the floor: a covered way through a block, the block's top level with the walls'.
     if (g.roof) {
@@ -255,6 +268,11 @@ export function buildPlace(A, rng, place) {
         let best = null;
         for (const g of grounds) if (contains(g.at, e, n) && (best === null || heightOf(g, e, n) > heightOf(best, e, n))) best = g;
         if (!best) {
+          // (a house has its own roof)
+          if (houseAt(e, n)) {
+            floor[j * nx + i] = 1;
+            continue;
+          }
           // (a block the plan states has its own top; the others take the nearest floor's walls')
           const stated = blockTop(e, n);
           if (stated !== null) lid[j * nx + i] = Math.round(stated * 4) / 4, blocked.push(j * nx + i);
@@ -324,6 +342,22 @@ export function buildPlace(A, rng, place) {
       A.add(w.key ?? keys.wall, panel, pm, { masks: [0.5, 0.7, 0.4] });
       panel.dispose();
       for (const part of solidSlabs(len, h + sink, holes)) A.slabBox(A.surfaceOf(w.key ?? keys.wall), pm, part.x, part.y, part.w, part.h, t);
+      // A hole's frame of boards, and its glass: a pane a player does not pass.
+      for (const o of s === 0 ? (w.holes ?? []) : []) {
+        if (!o.frame && !o.glass) continue;
+        const sill = y + (o.sill ?? 0), from = o.at - o.w / 2, to = o.at + o.w / 2, f = 0.09;
+        const pointAt = (d) => [a[0] + (dx / len) * d, a[1] + (dz / len) * d];
+        const bar = (key, d0, d1, y0, y1, depth, collide = false) => run(key, pointAt(d0), pointAt(d1), y0, y1, depth, { collide, masks: [0.7, 0.6, 0.3] });
+        if (o.frame) {
+          const key = o.frame === true ? keys.woodDark : o.frame;
+          bar(key, from, from + f, sill, sill + o.h, t + 0.08);
+          bar(key, to - f, to, sill, sill + o.h, t + 0.08);
+          bar(key, from, to, sill + o.h - f, sill + o.h, t + 0.08);
+          if ((o.sill ?? 0) > 0) bar(keys.cap, from - 0.08, to + 0.08, sill - 0.06, sill + 0.04, t + 0.22);
+          if (o.glass && o.w > 1.3) bar(key, o.at - f / 2, o.at + f / 2, sill, sill + o.h, t * 0.5);
+        }
+        if (o.glass) bar('window_glass', from + f, to - f, sill + 0.02, sill + o.h - f, 0.03, true);
+      }
       if (w.crown !== false && h > 2.2) crown(a, b, y + h, t);
       // For the walk grid: the wall closes it, but for its doorways, which are ground under a lintel.
       const along = (d) => [a[0] + (dx / len) * d, a[1] + (dz / len) * d];
@@ -334,6 +368,10 @@ export function buildPlace(A, rng, place) {
         const nx = (-dz / len) * (t / 2 + 0.03), nz = (dx / len) * (t / 2 + 0.03);
         const p = along(o.at - o.w / 2), q = along(o.at + o.w / 2);
         ceilings.push({ poly: [[p[0] + nx, p[1] + nz], [q[0] + nx, q[1] + nz], [q[0] - nx, q[1] - nz], [p[0] - nx, p[1] - nz]], y: y + (o.sill ?? 0) + o.h * (o.arch ? 0.8 : 1) });
+        // A doorway narrower than three cells may hold no open cell once its jambs are closed: a line
+        // through its middle stays open, so a soldier's way goes through the door.
+        const c = along(o.at), reach = t / 2 + 1.0;
+        threads.push({ a: [c[0] - (dz / len) * reach, c[1] + (dx / len) * reach], b: [c[0] + (dz / len) * reach, c[1] - (dx / len) * reach] });
         from = o.at + o.w / 2;
       }
       if (len > from + 0.05 && (w.low ?? h) > 0.5) barriers.push({ a: along(from), b: along(len), t });
@@ -367,11 +405,23 @@ export function buildPlace(A, rng, place) {
     const y = standAt(e, n, d.y), w = d.w ?? 3.2, h = d.h ?? 3.2, open = (d.open ?? 105) * RAD;
     // `facing`: the way the doorway looks, in degrees from north toward east. The leaves swing that way.
     const f = [Math.sin(d.facing * RAD), -Math.cos(d.facing * RAD)], u = [-f[1], f[0]];
-    for (const s of [-1, 1]) {
+    if (d.kind === 'roller') {
+      // A roller door of corrugated sheet, raised so far (`raised`, 0 shut … 1 open): what hangs
+      // stops a player, and a walker passes under it when 2 m are clear.
+      const raised = Math.min(1, Math.max(0, d.raised ?? 0.7)), p = [e - u[0] * (w / 2), -n - u[1] * (w / 2)], q = [e + u[0] * (w / 2), -n + u[1] * (w / 2)];
+      run(d.key ?? 'corrugated', p, q, y + h * raised, y + h, 0.08, { masks: [0.8, 0.6, 0.3] });
+      run(keys.iron, p, q, y + h, y + h + 0.3, 0.3, { collide: false, masks: [0.9, 0.5, 0.2] });
+      if (h * raised >= 2) ceilings.push({ poly: [[p[0] + f[0] * 0.3, p[1] + f[1] * 0.3], [q[0] + f[0] * 0.3, q[1] + f[1] * 0.3], [q[0] - f[0] * 0.3, q[1] - f[1] * 0.3], [p[0] - f[0] * 0.3, p[1] - f[1] * 0.3]], y: y + h * raised });
+      else barriers.push({ a: p, b: q, t: 0.1 });
+      continue;
+    }
+    // (one leaf hangs at the side `hinge` names: -1 or 1)
+    for (const s of d.leaves === 1 ? [d.hinge ?? -1] : [-1, 1]) {
+      const span = d.leaves === 1 ? w : w / 2;
       const hinge = [e + u[0] * s * (w / 2), -n + u[1] * s * (w / 2)];
       const dir = [-u[0] * s * Math.cos(open) + f[0] * Math.sin(open), -u[1] * s * Math.cos(open) + f[1] * Math.sin(open)];
-      const end = [hinge[0] + dir[0] * (w / 2), hinge[1] + dir[1] * (w / 2)];
-      run(keys.wood, hinge, end, y + 0.04, y + h, 0.09, { masks: [0.6, 0.6, 0.3] });
+      const end = [hinge[0] + dir[0] * span, hinge[1] + dir[1] * span];
+      run(d.key ?? keys.wood, hinge, end, y + 0.04, y + h, 0.09, { masks: [0.6, 0.6, 0.3] });
       for (const at of [0.14, 0.5, 0.86]) run(keys.iron, hinge, end, y + h * at - 0.05, y + h * at + 0.05, 0.13, { collide: false, masks: [0.9, 0.5, 0.2] });
       barriers.push({ a: hinge, b: end, t: 0.09 });
     }
@@ -395,6 +445,34 @@ export function buildPlace(A, rng, place) {
       part(keys.woodDark, sx * (s / 2 - b * 0.3), s / 2, 0, s * 1.24, b * 0.9, b * 0.6, Math.PI / 2, sx * Math.PI / 4);
     }
     A.box('wood', e, y + s / 2, -n, s, s, s, -turn * RAD);
+  }
+
+  // ------------------------------------------------------------------ water, ladders, marks
+  // Water is a surface at a height over the floor that is its bed: it carries no one and stops no one.
+  for (const w of place.WATER ?? []) {
+    const geo = new THREE.ShapeGeometry(new THREE.Shape(w.at.map(([e, n]) => new THREE.Vector2(e, n)))).toNonIndexed();
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(0, w.y, 0);
+    fillMasks(geo, 0.1, 0.2, 0.1);
+    A.add(w.key ?? keys.water ?? 'window_glass', geo, null, { masks: [0.1, 0.2, 0.1] });
+    geo.dispose();
+  }
+  // A ladder: two rails and its rungs against what it climbs, facing `facing`. It is drawn and listed
+  // (`ladders`); the match has no ladder yet, so a player climbs only what his own climb reaches (1.85 m).
+  for (const l of place.LADDERS ?? []) {
+    const [e, n] = l.at, y = standAt(e, n, l.y), f = [Math.sin(l.facing * RAD), -Math.cos(l.facing * RAD)], u = [-f[1], f[0]], half = (l.w ?? 0.5) / 2;
+    for (const s of [-1, 1]) {
+      const at = [e + u[0] * s * half, -n + u[1] * s * half];
+      run(keys.iron, [at[0] - f[0] * 0.03, at[1] - f[1] * 0.03], [at[0] + f[0] * 0.03, at[1] + f[1] * 0.03], y, y + l.h + 0.9, 0.06, { collide: false, masks: [0.9, 0.5, 0.2] });
+    }
+    for (let k = 1; k * 0.3 < l.h + 0.6; k++) run(keys.iron, [e - u[0] * half, -n - u[1] * half], [e + u[0] * half, -n + u[1] * half], y + k * 0.3 - 0.02, y + k * 0.3 + 0.02, 0.04, { collide: false, masks: [0.9, 0.5, 0.2] });
+    ladders.push({ foot: [e, y, -n], top: [e - f[0] * 0.6, y + l.h, -n - f[1] * 0.6] });
+  }
+  // A site's mark, of our own: a square of painted bars on the floor with a bar across it.
+  for (const m of place.MARKS ?? []) {
+    const [e, n] = m.at, y = standAt(e, n, m.y) + 0.02, r = (m.size ?? 4) / 2, key = m.key ?? keys.mark ?? keys.cap;
+    const bar = (a, b) => run(key, [e + a[0], -n - a[1]], [e + b[0], -n - b[1]], y, y + 0.02, 0.22, { collide: false, masks: [0.3, 0.4, 0.2] });
+    bar([-r, -r], [r, -r]); bar([-r, r], [r, r]); bar([-r, -r], [-r, r]); bar([r, -r], [r, r]); bar([-r, -r], [r, r]);
   }
 
   // ------------------------------------------------------------------ lamps
@@ -426,5 +504,5 @@ export function buildPlace(A, rng, place) {
     }
   }
 
-  return { groundAt, ceilings, barriers, lamps, extent: { e0, n0, e1, n1, top, low }, floors: [...floors] };
+  return { groundAt, ceilings, barriers, threads, stairs, ladders, lamps, extent: { e0, n0, e1, n1, top, low }, floors: [...floors] };
 }
