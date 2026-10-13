@@ -87,6 +87,10 @@ pub struct Session {
     /// The held map from above, when the device read one beside the map's pack ([`Chart`]): the
     /// device sets it with `map_id`.
     pub chart: Option<Chart>,
+    /// A second stick, -1…1, right and up positive, on a device that has one (the PS Vita's right
+    /// stick): the device sets it each frame. It looks, and the pad's own stick then walks,
+    /// whatever the layout; the layout still says what the four buttons do.
+    pub second: Option<(f32, f32)>,
 }
 
 /// What asking for a match on a map comes to: nothing, a new match on the map that is held, or
@@ -106,7 +110,7 @@ impl Default for Session {
 
 impl Session {
     pub fn new() -> Session {
-        Session { mode: Mode::Title, idle: false, stats: false, look: 1, invert: false, assist: true, layout: 0, skill: 1, listed: None, seconds: 0.0, wakes: Vec::new(), feed: Vec::new(), lines: 0, banner: (0, "", ""), prev_held: u32::MAX, tapped: 0, frames: 0, map: (0.0, 0.0), focal: 213.0, map_id: MAPS[0].id, maps: alloc::vec![MAPS[0].id], wanted: None, chart: None }
+        Session { mode: Mode::Title, idle: false, stats: false, look: 1, invert: false, assist: true, layout: 0, skill: 1, listed: None, seconds: 0.0, wakes: Vec::new(), feed: Vec::new(), lines: 0, banner: (0, "", ""), prev_held: u32::MAX, tapped: 0, frames: 0, map: (0.0, 0.0), focal: 213.0, map_id: MAPS[0].id, maps: alloc::vec![MAPS[0].id], wanted: None, chart: None, second: None }
     }
 
     /// What a row of the map list comes to. A list is up (no match runs under a map that goes), and
@@ -224,7 +228,19 @@ impl Session {
         let held = |bit: u32| pad.held & bit != 0;
         let axis = |plus: u32, minus: u32| (held(plus) as i32 - held(minus) as i32) as f32;
         let faces = (axis(pad::EAST, pad::WEST), axis(pad::NORTH, pad::SOUTH));
-        let ((mx, my), (lx, ly)) = if self.layout == 0 { ((pad.sx, pad.sy), faces) } else { (faces, (pad.sx, pad.sy)) };
+        let ((mx, my), (lx, ly)) = match self.second {
+            // Two sticks: the first walks, the second looks, and the buttons add to the one the layout names.
+            Some((rx, ry)) => {
+                let sum = |a: f32, b: f32| (a + b).clamp(-1.0, 1.0);
+                if self.layout == 0 {
+                    ((pad.sx, pad.sy), (sum(rx, faces.0), sum(ry, faces.1)))
+                } else {
+                    ((sum(pad.sx, faces.0), sum(pad.sy, faces.1)), (rx, ry))
+                }
+            }
+            None if self.layout == 0 => ((pad.sx, pad.sy), faces),
+            None => (faces, (pad.sx, pad.sy)),
+        };
         let mut buttons = 0;
         for (from, to) in [(pad::R, btn::FIRE), (pad::L, btn::ADS), (pad::UP, btn::JUMP), (pad::DOWN, btn::CROUCH), (pad::LEFT, btn::RELOAD), (pad::RIGHT, btn::NEXT), (pad::SELECT, btn::MODE)] {
             if held(from) {
@@ -466,6 +482,27 @@ mod tests {
         session.tap("mode");
         assert_eq!(core::mem::take(&mut session.tapped), btn::MODE);
         assert_eq!(session.tapped, 0);
+    }
+
+    #[test]
+    fn a_second_stick_looks_and_leaves_the_first_to_walk() {
+        let mut session = Session::new();
+        let pad = Pad { held: pad::EAST, sx: 0.5, sy: -0.25 };
+        // One stick, the buttons look: the stick walks.
+        let one = session.input(&pad);
+        assert_eq!((one.mx, one.my, one.lx, one.ly), (0.5, -0.25, 1.0, 0.0));
+        // A second stick looks with the buttons, and no further than a stick goes.
+        session.second = Some((0.25, 0.75));
+        let two = session.input(&pad);
+        assert_eq!((two.mx, two.my, two.lx, two.ly), (0.5, -0.25, 1.0, 0.75));
+        // The other layout hands the buttons to the walk; the second stick still looks.
+        session.layout = 1;
+        let other = session.input(&pad);
+        assert_eq!((other.mx, other.my, other.lx, other.ly), (1.0, -0.25, 0.25, 0.75));
+        // With one stick that layout has the stick look.
+        session.second = None;
+        let alone = session.input(&pad);
+        assert_eq!((alone.mx, alone.lx, alone.ly), (1.0, 0.5, -0.25));
     }
 
     #[test]

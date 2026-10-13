@@ -1,0 +1,31 @@
+// A chunk of the street. A position is whole steps of the pack's lattice from the centre of the chunk's cell;
+// uClip takes them to the screen (the view, the centre and the step folded into one matrix, once a chunk).
+// A vertex's colour is the light the compiler baked there, for a texel of one half.
+//   uPlace  xyz: the cell's centre; w: metres a step
+//   uUv     xy: the scale of the texture coordinates, over 32768; zw: their offset
+//   uSun    the two rows that take a place's x and z to the ground's shadow picture
+//   uHaze   x: where the haze starts, metres; y: 1 / (the metres it takes to be whole); z: 1 when on
+
+void main(
+    float4 aPosition,
+    float2 aUv,
+    float4 aColor,
+    uniform float4x4 uClip,
+    uniform float4 uPlace,
+    uniform float4 uUv,
+    uniform float4 uSun[2],
+    uniform float4 uHaze,
+    out float4 oPosition : POSITION,
+    out float2 oUv : TEXCOORD0,
+    out float2 oSun : TEXCOORD1,
+    out float3 oAt : TEXCOORD2,
+    out float4 oColor : COLOR0)
+{
+    oPosition = mul(uClip, float4(aPosition.xyz, 1.0));
+    oUv = aUv * uUv.xy + uUv.zw;
+    float3 at = uPlace.xyz + aPosition.xyz * uPlace.w;
+    oSun = float2(at.x * uSun[0].x + at.z * uSun[0].y + uSun[0].z, at.x * uSun[1].x + at.z * uSun[1].y + uSun[1].z);
+    oAt = at;
+    // (alpha: how much of the surface the haze leaves)
+    oColor = float4(aColor.rgb, 1.0 - saturate((oPosition.w - uHaze.x) * uHaze.y) * uHaze.z);
+}

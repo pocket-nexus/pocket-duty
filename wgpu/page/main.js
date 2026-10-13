@@ -12,7 +12,7 @@
 //
 // The address chooses the pack and what a development host would say:
 //
-//   ?device=psp|3ds             the handheld the page opens as (the bar chooses another at any time)
+//   ?device=psp|3ds|vita             the handheld the page opens as (the bar chooses another at any time)
 //   ?pack=URL                   the first map's pack (the PSP's): its file, on a server that answers
 //                               byte ranges, or the manifest of the packs in pieces and the map (`….packs#yards`). Without it,
 //                               the page's own (<meta name="pocket-pack">)
@@ -37,6 +37,7 @@ import init, { Duty, maps, shapes, sound_rate } from "./pkg/duty_wgpu.js";
 const DEVICES = [
   { id: "psp", label: "PSP", sticks: 1 },
   { id: "3ds", label: "Nintendo 3DS", sticks: 1 },
+  { id: "vita", label: "PS Vita", sticks: 2 },
 ];
 // Where the interface's settings are kept between visits (a PSP keeps them in a file beside the pack).
 const KEPT = "pocket-duty.interface";
@@ -56,7 +57,7 @@ const player = createPlayer({
   devices: DEVICES,
   device: device.id,
   // (the targets `bun tools/release.ts` builds a package for)
-  runsOn: ["psp", "3ds"],
+  runsOn: ["psp", "3ds", "vita"],
   pick: (id) => present(DEVICES.find((d) => d.id === id)),
 });
 const { canvas, stage, controls } = player;

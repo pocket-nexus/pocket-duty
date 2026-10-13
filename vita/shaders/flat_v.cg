@@ -1,0 +1,17 @@
+// What is drawn about the eye with no light of its own: the sky's band and its cap, the effects' squares, the
+// muzzle's flash. Positions are counted from the eye; uClip is the view turned (and, for the flash, the held
+// weapon's own frustum).
+
+void main(
+    float2 aUv,
+    float4 aColor,
+    float3 aPosition,
+    uniform float4x4 uClip,
+    out float4 oPosition : POSITION,
+    out float2 oUv : TEXCOORD0,
+    out float4 oColor : COLOR0)
+{
+    oPosition = mul(uClip, float4(aPosition, 1.0));
+    oUv = aUv;
+    oColor = aColor;
+}

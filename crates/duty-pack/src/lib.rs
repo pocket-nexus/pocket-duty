@@ -130,6 +130,9 @@ pub mod texture {
     pub const RGB565: u8 = 1;
     pub const RGBA5551: u8 = 2;
     pub const A8: u8 = 3;
+    /// Four bytes a texel (red, green, blue, alpha), rows from the top one, no tiles and no
+    /// palette: a device that holds true colour (the PS Vita). The levels go down to one texel.
+    pub const RGBA8: u8 = 4;
     /// Palette entry 0 is clear: the device tests alpha.
     pub const CUTOUT: u16 = 1;
     /// Coordinates outside 0…1 take the edge's texel.
@@ -157,6 +160,7 @@ impl Texture {
         match self.format {
             texture::T8 => (1, texture::PALETTE_BYTES),
             texture::A8 => (1, 0),
+            texture::RGBA8 => (4, 0),
             _ => (2, 0),
         }
     }
@@ -164,10 +168,12 @@ impl Texture {
     /// Bytes of level `l`, and where it starts from `offset`.
     pub fn level(&self, l: u32) -> (usize, usize) {
         let (texel, mut at) = self.layout();
+        // (a level of a picture that is not square keeps one texel along its shorter side)
+        let side = |s: u16, k: u32| (s as usize >> k).max(1);
         for k in 0..l {
-            at += (((self.width as usize >> k) * (self.height as usize >> k)) * texel + 15) & !15;
+            at += (side(self.width, k) * side(self.height, k) * texel + 15) & !15;
         }
-        (at, (self.width as usize >> l) * (self.height as usize >> l) * texel)
+        (at, side(self.width, l) * side(self.height, l) * texel)
     }
 
     /// The texel at (`x`, `y`) of level `l`, counted from the picture's top left: red, green, blue
@@ -180,6 +186,10 @@ impl Texture {
             // Swizzled: blocks of 16 bytes by 8 rows.
             let index = texels[base + at + ((y / 8) * (width / 16) + x / 16) * 128 + (y % 8) * 16 + x % 16] as usize;
             let c = &texels[base + index * 4..base + index * 4 + 4];
+            return [c[0], c[1], c[2], c[3]];
+        }
+        if self.format == texture::RGBA8 {
+            let c = &texels[base + at + (y * width + x) * 4..][..4];
             return [c[0], c[1], c[2], c[3]];
         }
         // Tiles of 8 × 8, a tile's texels in Z order: the bits of x and y in turn, x the lower.

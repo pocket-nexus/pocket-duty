@@ -94,12 +94,18 @@ pub struct Shape {
     /// Whether the device's display has 16-bit colours (the PSP's, with the GE's dither). A 3DS draws its
     /// upper screen into eight bits a channel.
     pub sixteen: bool,
+    /// Whether the device has a second stick, which looks (`Session::second`): the PS Vita's right one.
+    pub second: bool,
 }
 
 /// The screens the game runs on, with the turns a second each one's host gives the interface (`TURNS` in
 /// `psp/src/interface.rs`, `rate` in `n3ds/src/guest.c`). A 3DS's is its upper screen: the lower one is the
 /// interface's alone, and the page draws it.
-pub const SHAPES: [Shape; 2] = [Shape { name: "psp", width: 480, height: 272, turns: 30, sixteen: true }, Shape { name: "3ds", width: 400, height: 240, turns: 30, sixteen: false }];
+pub const SHAPES: [Shape; 3] = [
+    Shape { name: "psp", width: 480, height: 272, turns: 30, sixteen: true, second: false },
+    Shape { name: "3ds", width: 400, height: 240, turns: 30, sixteen: false, second: false },
+    Shape { name: "vita", width: 960, height: 544, turns: 30, sixteen: false, second: true },
+];
 
 impl Shape {
     pub fn named(name: &str) -> Option<Shape> {
@@ -737,6 +743,8 @@ impl App {
             return ticks;
         }
         let mut pad = self.shape.pad(held);
+        // A device with two sticks looks with the second (`vita/src/main.rs`).
+        self.session.second = self.shape.second.then(|| (clamp(held.right[0], -1.0, 1.0), clamp(held.right[1], -1.0, 1.0)));
         if self.set.pad.1 > 0 {
             self.set.pad.1 -= 1;
             pad = self.set.pad.0;

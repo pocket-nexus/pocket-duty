@@ -96,12 +96,17 @@ pub fn level_size(record: &Texture, level: u32) -> (u32, u32) {
 /// One level of a picture as rows of RGBA, the top row first. `texels` is the pack's `TEXD` section.
 ///
 /// The pack holds a level as the GE reads it: one byte a texel, in tiles of 16 texels by 8 rows,
-/// each byte the number of one of the palette's 256 colours.
+/// each byte the number of one of the palette's 256 colours. A true-colour pack (the PS Vita's,
+/// `texture::RGBA8`) holds the rows themselves.
 pub fn rgba(record: &Texture, texels: &[u8], level: u32) -> Result<Vec<u8>, String> {
     let (w, h) = level_size(record, level);
     let (w, h) = (w as usize, h as usize);
     let base = record.offset as usize;
     let (at, _) = record.level(level);
+    if record.format == pack::texture::RGBA8 {
+        // (a true-colour level is rows already)
+        return Ok(texels.get(base + at..base + at + w * h * 4).ok_or("a picture's texels are cut short")?.to_vec());
+    }
     let (stride, rows) = ((w + 15) & !15, (h + 7) & !7);
     let palette = texels.get(base..base + pack::texture::PALETTE_BYTES).ok_or("a picture's palette is cut short")?;
     let tiles = texels.get(base + at..base + at + stride * rows).ok_or("a picture's texels are cut short")?;

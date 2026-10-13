@@ -1,0 +1,49 @@
+// A soldier or the held weapon: each vertex follows up to four bones of its draw, by weights over 128.
+//   uBones  four bones, three rows each: a bone's matrix takes a bind-pose position to the figure's place,
+//           counted from the eye
+//   uLight  [0] xyz: towards the sun; [1] rgb: the sun's colour where the figure stands; [2] xyz: up;
+//           [3] rgb: the sky's colour
+//   SHADE   the figure's shadow: every vertex goes along the sun's rays to the ground under the figure
+//           (uGround x: its height, counted from the eye; y: how dark the shadow is)
+
+void main(
+    float4 aWeights,
+    float4 aColor,
+    float3 aNormal,
+    float3 aPosition,
+    uniform float4x4 uClip,
+    uniform float4 uBones[12],
+    uniform float4 uLight[4],
+#ifdef SHADE
+    uniform float4 uGround,
+#endif
+    out float4 oPosition : POSITION,
+    out float4 oColor : COLOR0)
+{
+    float4 share = aWeights * (1.0 / 128.0);
+    float4 p = float4(aPosition, 1.0);
+    float3 at = share.x * float3(dot(uBones[0], p), dot(uBones[1], p), dot(uBones[2], p))
+        + share.y * float3(dot(uBones[3], p), dot(uBones[4], p), dot(uBones[5], p))
+        + share.z * float3(dot(uBones[6], p), dot(uBones[7], p), dot(uBones[8], p))
+        + share.w * float3(dot(uBones[9], p), dot(uBones[10], p), dot(uBones[11], p));
+#ifdef SHADE
+    // Down the sun's ray to the ground, and a finger's breadth above it.
+    float3 sun = uLight[0].xyz;
+    at -= sun * ((at.y - uGround.x) / max(sun.y, 0.05));
+    at.y = uGround.x + 0.025;
+    oPosition = mul(uClip, float4(at, 1.0));
+    oColor = float4(0.0, 0.0, 0.0, uGround.y);
+#else
+    float3 n = aNormal;
+    float3 facing = share.x * float3(dot(uBones[0].xyz, n), dot(uBones[1].xyz, n), dot(uBones[2].xyz, n))
+        + share.y * float3(dot(uBones[3].xyz, n), dot(uBones[4].xyz, n), dot(uBones[5].xyz, n))
+        + share.z * float3(dot(uBones[6].xyz, n), dot(uBones[7].xyz, n), dot(uBones[8].xyz, n))
+        + share.w * float3(dot(uBones[9].xyz, n), dot(uBones[10].xyz, n), dot(uBones[11].xyz, n));
+    facing = normalize(facing);
+    oPosition = mul(uClip, float4(at, 1.0));
+    // The sky's fill comes from above more than from the sides: 0.55 of it from everywhere and 0.6 of it more on
+    // what faces up, so that a figure in the shade still has a form.
+    float3 light = uLight[3].rgb * 0.55 + uLight[1].rgb * max(dot(facing, uLight[0].xyz), 0.0) + uLight[3].rgb * 0.6 * max(dot(facing, uLight[2].xyz), 0.0);
+    oColor = float4(min(aColor.rgb * light, 1.0), 1.0);
+#endif
+}
