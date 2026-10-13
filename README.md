@@ -190,6 +190,7 @@ vendor/pocketjs      PocketJS and Pocket3D
 - **The guard band.** The GE drops a triangle with a vertex outside its 4096-pixel space. A triangle reaches from the view to outside the band only when its longest edge is more than half its distance from the eye. Of the large triangles of a cluster whose box is not inside the band, the ones that near are tested, and cut on the CPU when the GE cannot take them.
 - **A budget of 22 500 triangles and of 24.5 ms** a frame: over either, the levels of detail move in. A triangle of a soldier or of the held weapon counts for one and a half.
 - Soldiers and the held weapon are skinned by the GE with four bones a batch, and lit by the sun, where the ground's shadow picture says it reaches, and the sky. A soldier more than 16 m off is drawn from a model of 406 triangles in place of 696.
+- **The arms that hold the weapon are drawn again for a handheld** (`figures.arms: "skin"` in `psp30` and `n3ds30`). The export builds a hand of some 45 closed shells that pass through one another, and its sleeve, its palm and its cuff are open at the wrist. Simplified apart at 260 triangles an arm, the shells left slivers for fingers, a row of spikes for a cuff and a gap between the sleeve and the palm. The cook takes each part's solid on a grid of 2 mm instead (a ray along each axis counts the faces it enters by and leaves by; two axes of three decide), closes creases narrower than 8 mm, and simplifies the surface of that: a hand is one closed glove with its fingers together, and the sleeve's solid and the hand's overlap at the wrist in every pose. The cuff's band is left out of the solid, where it would stand on the arm as a knob as large as the hand.
 
 What the console's parts cost decides how the frame is written (`probe=1` in `boot.txt` times them):
 
@@ -225,6 +226,7 @@ What the console's parts cost decides how the frame is written (`probe=1` in `bo
 | The nearest level reaches | 9 m | **96 m** |
 | A triangle across a shadow's edge is cut to | 1 m | **35 cm** |
 | The figures' budgets: a soldier, the held weapon, an arm | 700, 1 100 and 260 triangles | **6 000, 9 000 and 2 200** |
+| The arms that hold the weapon (`figures.arms`) | each part drawn again as one closed skin | the export's shells, the open ones (sleeve, palm, cuff) drawn from both sides |
 | The street's pack, Twin Yards' | 29.1 MiB, 8.9 MiB | **93.0 MiB, 49.7 MiB** |
 | Triangles in a frame of a match | 19 000 | **100 000, 140 000 at most** |
 

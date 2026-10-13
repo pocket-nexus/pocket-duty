@@ -15,6 +15,9 @@
 //!                        moments of RELOAD_TAC
 //!   <weapon>_more.png    aimed, and moments of RELOAD_EMPTY, DRAW and HOLSTER
 //!   <weapon>_close.png   at rest at twice the size
+//!   <weapon>_hands.png   at the size of the profile's screen: at the hip, aimed, carried in a sprint
+//!                        and at three moments of RELOAD_TAC, each over its two hands four times as large
+//!   <weapon>_reload.png  twelve moments of RELOAD_TAC at that size, and <weapon>_draw.png of DRAW
 //!   <name>_source.png    the export's own mesh, drawn the same way: what the compiler started from
 //!
 //! A held weapon's colours are near black, so its pictures multiply them by 2.2.
@@ -333,6 +336,78 @@ fn held_sheets(figures: &Figures, weapon: u32, id: u32) -> Result<[Image; 2], St
     Ok([draw(&first), draw(&second)])
 }
 
+/// The hands on the weapon as a player sees them, at the size of a device's screen: at the hip, aimed,
+/// carried in a sprint and at three moments of RELOAD_TAC. Under each picture, the left hand and the
+/// right one four times as large.
+fn held_hands(figures: &Figures, weapon: u32, id: u32, size: (usize, usize)) -> Result<Image, String> {
+    let model = figures.model(id).ok_or("the section lacks a held weapon")?;
+    let info = figures.info(id).ok_or("the section lacks a held weapon's points")?;
+    let rest = vec![figure::UNMOVED; part::WEAPON];
+    let at = |share: f32| -> Vec<Pose> {
+        let c = clip::held(weapon, clip::RELOAD_TAC);
+        let frames = figures.clip(c).map_or(1, |r| r.clip.frames);
+        frame(figures, c, ((frames - 1) as f32 * share).round() as u32).unwrap_or(rest.clone())
+    };
+    let moments = [rest.clone(), vec![carried(info.ads_turn, info.ads_offset); part::WEAPON], vec![carried(info.sprint_turn, info.sprint_offset); part::WEAPON], at(0.25), at(0.5), at(0.78)];
+    let (w, h) = size;
+    let mut sheet = Sheet::new(3, 2, (w, h * 2));
+    for (i, poses) in moments.iter().enumerate() {
+        // (the game narrows the held weapon's view as it comes to the sights)
+        let view = View::eye(w, h, if i == 1 { 60.0 * 0.86 } else { 60.0 });
+        let mut canvas = Canvas::new(w, h, [0.62, 0.64, 0.66], 2.2);
+        canvas.model(&view, &model, poses);
+        let mut cell = Image::new(w, h * 2);
+        cell.data.fill([0.2, 0.2, 0.22, 1.0]);
+        for y in 0..h {
+            cell.data[y * w..(y + 1) * w].copy_from_slice(&canvas.image.data[y * w..(y + 1) * w]);
+        }
+        for (k, hand) in [part::HAND_L, part::HAND_R].into_iter().enumerate() {
+            // Where the hand is on the picture: the middle of what is drawn of it, or of its forearm.
+            let middle = [hand, hand - 1].into_iter().find_map(|which| {
+                let mut sum = [0.0f32; 2];
+                let mut n = 0.0;
+                for batch in model.batches().filter(|b| b.batch.bones[0] as usize == which) {
+                    for v in (0..batch.batch.vertices as usize).filter_map(|i| batch.vertex(i)) {
+                        let local = view.local(batch.place(&v, poses));
+                        if -local[2] > view.near {
+                            let q = view.project(local);
+                            sum = [sum[0] + q[0], sum[1] + q[1]];
+                            n += 1.0;
+                        }
+                    }
+                }
+                (n > 0.0).then(|| [sum[0] / n, sum[1] / n])
+            });
+            let Some(middle) = middle else { continue };
+            let (cw, ch) = (w / 8, h / 4);
+            let x0 = (middle[0] as isize - cw as isize / 2).clamp(0, (w - cw) as isize) as usize;
+            let y0 = (middle[1] as isize - ch as isize / 2).clamp(0, (h - ch) as isize) as usize;
+            for y in 0..ch * 4 {
+                for x in 0..cw * 4 {
+                    cell.data[(h + y) * w + k * (w / 2) + x] = canvas.image.data[(y0 + y / 4) * w + x0 + x / 4];
+                }
+            }
+        }
+        sheet.put(i % 3, i / 3, &cell);
+    }
+    Ok(sheet.image)
+}
+
+/// Twelve moments of one of a held weapon's clips, evenly apart, at the size of a device's screen.
+fn held_strip(figures: &Figures, weapon: u32, id: u32, size: (usize, usize), which: u32) -> Result<Image, String> {
+    let model = figures.model(id).ok_or("the section lacks a held weapon")?;
+    let c = clip::held(weapon, which);
+    let frames = figures.clip(c).map_or(1, |r| r.clip.frames);
+    let mut sheet = Sheet::new(4, 3, size);
+    for i in 0..12 {
+        let poses = frame(figures, c, ((frames - 1) as f32 * (i as f32 + 0.5) / 12.0).round() as u32).unwrap_or(vec![figure::UNMOVED; part::WEAPON]);
+        let mut canvas = Canvas::new(size.0, size.1, [0.62, 0.64, 0.66], 2.2);
+        canvas.model(&View::eye(size.0, size.1, 60.0), &model, &poses);
+        sheet.put(i % 4, i / 4, &canvas.image);
+    }
+    Ok(sheet.image)
+}
+
 /// The held weapon at rest from the eye at twice the handheld's size, to tell its faces apart.
 fn held_close(figures: &Figures, id: u32) -> Result<Image, String> {
     let model = figures.model(id).ok_or("the section lacks a held weapon")?;
@@ -351,6 +426,12 @@ pub fn run(ir: &Path, out: &Path, profile: &str) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::write(out.join("figures.bin"), &bytes).map_err(|e| e.to_string())?;
     let figures = Figures::parse(&bytes).ok_or("the section does not read back")?;
+    // The screen the profile's device draws a held weapon on.
+    let screen = match profile["target"].as_str() {
+        Some("3ds") => (400, 240),
+        Some("vita") => (960, 544),
+        _ => (480, 272),
+    };
     for (name, id) in SOLDIERS {
         let [first, second] = soldier_sheets(&figures, id)?;
         first.save(&dir.join(format!("{name}.png")))?;
@@ -362,6 +443,9 @@ pub fn run(ir: &Path, out: &Path, profile: &str) -> Result<(), String> {
         first.save(&dir.join(format!("{name}.png")))?;
         second.save(&dir.join(format!("{name}_more.png")))?;
         held_close(&figures, *id)?.save(&dir.join(format!("{name}_close.png")))?;
+        held_hands(&figures, weapon as u32, *id, screen)?.save(&dir.join(format!("{name}_hands.png")))?;
+        held_strip(&figures, weapon as u32, *id, screen, clip::RELOAD_TAC)?.save(&dir.join(format!("{name}_reload.png")))?;
+        held_strip(&figures, weapon as u32, *id, screen, clip::DRAW)?.save(&dir.join(format!("{name}_draw.png")))?;
     }
     crate::figures::source_pictures(ir, &dir)?;
     println!("figures: {} KiB in {}, pictures in {}", bytes.len() / 1024, out.join("figures.bin").display(), dir.display());

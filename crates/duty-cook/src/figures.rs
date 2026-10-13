@@ -17,6 +17,12 @@
 //! a space where equal sizes are equal sizes on the screen in the hip pose (`on_screen`), which
 //! gives the triangles to what is near the eye.
 //!
+//! The arms that hold the weapon are a profile's choice (`figures.arms`, [`Arms`]): the export's
+//! shells as they are; those shells with the open ones (a sleeve, a glove's cuff) seen from both
+//! sides, for a device whose budget keeps a hand's forty-five shells whole; or each part drawn
+//! again as one closed skin (`skin`), for a handheld's budget, where the shells simplified apart
+//! leave slivers for fingers and a gap at the wrist.
+//!
 //! A soldier is not simplified. Its fifty shells (jacket, pouches, straps, laces) can each only
 //! shrink on its own, and at 700 triangles what collapses leave of them is slivers and limbs
 //! three faces round. A soldier is drawn again instead (`swept`): rings of points are taken around
@@ -1025,24 +1031,347 @@ fn on_screen(p: V3) -> V3 {
     }
 }
 
-fn held_source(dir: &Dir, meta: &Value) -> Source {
+/// The side of a cell of the grid an arm's part is drawn again on, in metres.
+const SKIN_CELL: f32 = 0.002;
+/// Cells a part's solid grows by before it shrinks by as many: a crease narrower than twice this
+/// (between two fingers, under a cuff's rim) closes.
+const SKIN_CLOSE: usize = 2;
+
+/// A part of an arm drawn again as one closed skin.
+///
+/// The export builds a hand of some forty-five closed shells that pass through one another (a palm
+/// of two layers, a cuff's rings, three joints a finger with a pad on each) and a sleeve that runs
+/// under the cuff. Simplified as they are, each shell can only shrink on its own: at a handheld's
+/// budget what is left of a finger is a sliver, a cuff's ring is a row of spikes, and the sleeve's
+/// end and the palm draw back from one another until the wrist is a gap. So the part's solid is
+/// taken instead: the cells of a grid that lie inside any of its shells (a ray along each axis
+/// counts the faces it enters by and leaves by; two axes of three decide, which tolerates a shell
+/// that is not quite shut), its narrow creases closed, and the surface of that as one mesh, smoothed.
+/// A hand comes out as a glove with its fingers together, and a simplifier takes a closed surface
+/// down to a few planes without tearing it. The solids of a hand and its forearm overlap as the
+/// export's do, so the wrist stays shut in every pose.
+///
+/// Returns positions, colours (each the colour of the export's nearest vertex) and triangles.
+fn skin(pos: &[V3], col: &[[u8; 3]], tris: &[[u32; 3]]) -> (Vec<V3>, Vec<[u8; 3]>, Vec<[u32; 3]>) {
+    const PAD: usize = SKIN_CLOSE + 2;
+    let mut lo = [f32::MAX; 3];
+    let mut hi = [f32::MIN; 3];
+    for &v in tris.iter().flatten() {
+        for k in 0..3 {
+            lo[k] = lo[k].min(pos[v as usize][k]);
+            hi[k] = hi[k].max(pos[v as usize][k]);
+        }
+    }
+    let origin = lo.map(|c| c - PAD as f32 * SKIN_CELL);
+    let n: [usize; 3] = core::array::from_fn(|k| ((hi[k] - lo[k]) / SKIN_CELL).ceil() as usize + 2 * PAD + 1);
+    let at = |c: [usize; 3]| (c[2] * n[1] + c[1]) * n[0] + c[0];
+
+    // Inside or outside, by a ray along each axis.
+    let mut votes = vec![0u8; n[0] * n[1] * n[2]];
+    for axis in 0..3 {
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        let mut columns: Vec<Vec<(f32, i8)>> = vec![Vec::new(); n[u] * n[v]];
+        for t in tris {
+            let q: [V3; 3] = t.map(|i| core::array::from_fn(|k| (pos[i as usize][k] - origin[k]) / SKIN_CELL));
+            let area = (q[1][u] - q[0][u]) * (q[2][v] - q[0][v]) - (q[1][v] - q[0][v]) * (q[2][u] - q[0][u]);
+            if area.abs() < 1e-9 {
+                continue;
+            }
+            // A face that looks back along the ray is one the ray enters by.
+            let sign = if area > 0.0 { -1i8 } else { 1 };
+            let span = |k: usize, most: usize| {
+                let (a, b) = (q.iter().map(|c| c[k]).fold(f32::MAX, f32::min), q.iter().map(|c| c[k]).fold(f32::MIN, f32::max));
+                ((a - 0.5).floor().max(0.0) as usize, ((b - 0.5).ceil().max(0.0) as usize).min(most - 1))
+            };
+            let ((u0, u1), (v0, v1)) = (span(u, n[u]), span(v, n[v]));
+            for iv in v0..=v1 {
+                for iu in u0..=u1 {
+                    // (a column's ray runs a hair off its middle, so it meets no edge two faces share)
+                    let (cu, cv) = (iu as f32 + 0.5 + 1.3e-4, iv as f32 + 0.5 + 2.9e-4);
+                    let w0 = ((q[1][u] - cu) * (q[2][v] - cv) - (q[1][v] - cv) * (q[2][u] - cu)) / area;
+                    let w1 = ((q[2][u] - cu) * (q[0][v] - cv) - (q[2][v] - cv) * (q[0][u] - cu)) / area;
+                    let w2 = 1.0 - w0 - w1;
+                    if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                        continue;
+                    }
+                    columns[iv * n[u] + iu].push((w0 * q[0][axis] + w1 * q[1][axis] + w2 * q[2][axis], sign));
+                }
+            }
+        }
+        for (c, list) in columns.iter_mut().enumerate() {
+            list.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (mut winding, mut next) = (0i32, 0);
+            let mut cell = [0usize; 3];
+            cell[u] = c % n[u];
+            cell[v] = c / n[u];
+            for along in 0..n[axis] {
+                while next < list.len() && list[next].0 < along as f32 + 0.5 {
+                    winding += list[next].1 as i32;
+                    next += 1;
+                }
+                if winding != 0 {
+                    cell[axis] = along;
+                    votes[at(cell)] += 1;
+                }
+            }
+        }
+    }
+    let mut solid: Vec<bool> = votes.iter().map(|v| *v >= 2).collect();
+
+    // Creases close: the solid grows by a cell at a time, then shrinks by as many.
+    let grown = |from: &[bool], want: bool| -> Vec<bool> {
+        let mut to = from.to_vec();
+        for z in 1..n[2] - 1 {
+            for y in 1..n[1] - 1 {
+                for x in 1..n[0] - 1 {
+                    let i = at([x, y, z]);
+                    if from[i] != want && (from[i - 1] == want || from[i + 1] == want || from[i - n[0]] == want || from[i + n[0]] == want || from[i - n[0] * n[1]] == want || from[i + n[0] * n[1]] == want) {
+                        to[i] = want;
+                    }
+                }
+            }
+        }
+        to
+    };
+    for want in [true, false] {
+        for _ in 0..SKIN_CLOSE {
+            solid = grown(&solid, want);
+        }
+    }
+    // A crumb apart from the rest (a stitch, a buckle's pin) is left out.
+    let mut piece = vec![u32::MAX; solid.len()];
+    let mut sizes: Vec<usize> = Vec::new();
+    for start in 0..solid.len() {
+        if !solid[start] || piece[start] != u32::MAX {
+            continue;
+        }
+        let (id, mut stack, mut size) = (sizes.len() as u32, vec![start], 0);
+        piece[start] = id;
+        while let Some(i) = stack.pop() {
+            size += 1;
+            let (x, y, z) = (i % n[0], i / n[0] % n[1], i / (n[0] * n[1]));
+            let mut step = |ok: bool, j: usize| {
+                if ok && solid[j] && piece[j] == u32::MAX {
+                    piece[j] = id;
+                    stack.push(j);
+                }
+            };
+            step(x > 0, i.wrapping_sub(1));
+            step(x + 1 < n[0], i + 1);
+            step(y > 0, i.wrapping_sub(n[0]));
+            step(y + 1 < n[1], i + n[0]);
+            step(z > 0, i.wrapping_sub(n[0] * n[1]));
+            step(z + 1 < n[2], i + n[0] * n[1]);
+        }
+        sizes.push(size);
+    }
+    let whole: usize = sizes.iter().sum();
+    for i in 0..solid.len() {
+        if solid[i] && sizes[piece[i] as usize] * 50 < whole {
+            solid[i] = false;
+        }
+    }
+
+    // The solid's surface: a square where a cell of it meets one outside it, wound to face out.
+    let mut corner: HashMap<[u32; 3], u32> = HashMap::new();
+    let mut out: Vec<V3> = Vec::new();
+    let mut squares: Vec<[u32; 4]> = Vec::new();
+    for z in 1..n[2] - 1 {
+        for y in 1..n[1] - 1 {
+            for x in 1..n[0] - 1 {
+                if !solid[at([x, y, z])] {
+                    continue;
+                }
+                let cell = [x, y, z];
+                for axis in 0..3 {
+                    let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+                    for up in [false, true] {
+                        let mut beside = cell;
+                        beside[axis] = if up { cell[axis] + 1 } else { cell[axis] - 1 };
+                        if solid[at(beside)] {
+                            continue;
+                        }
+                        let order: [(usize, usize); 4] = if up { [(0, 0), (1, 0), (1, 1), (0, 1)] } else { [(0, 0), (0, 1), (1, 1), (1, 0)] };
+                        squares.push(order.map(|(du, dv)| {
+                            let mut c = [cell[0] as u32, cell[1] as u32, cell[2] as u32];
+                            c[axis] += up as u32;
+                            c[u] += du as u32;
+                            c[v] += dv as u32;
+                            *corner.entry(c).or_insert_with(|| {
+                                out.push(core::array::from_fn(|k| origin[k] + c[k] as f32 * SKIN_CELL));
+                                out.len() as u32 - 1
+                            })
+                        }));
+                    }
+                }
+            }
+        }
+    }
+    // The steps of the grid are smoothed away: each corner moves toward the middle of its
+    // neighbours and then a little further back, which keeps the solid's size.
+    let mut beside: Vec<Vec<u32>> = vec![Vec::new(); out.len()];
+    for q in &squares {
+        for k in 0..4 {
+            let (a, b) = (q[k], q[(k + 1) % 4]);
+            if !beside[a as usize].contains(&b) {
+                beside[a as usize].push(b);
+            }
+            if !beside[b as usize].contains(&a) {
+                beside[b as usize].push(a);
+            }
+        }
+    }
+    for round in 0..12 {
+        let pull = if round % 2 == 0 { 0.5 } else { -0.53 };
+        let moved: Vec<V3> = (0..out.len())
+            .map(|i| {
+                let near = &beside[i];
+                let mut mean = [0.0f32; 3];
+                for &j in near {
+                    for k in 0..3 {
+                        mean[k] += out[j as usize][k] / near.len() as f32;
+                    }
+                }
+                core::array::from_fn(|k| out[i][k] + (mean[k] - out[i][k]) * pull)
+            })
+            .collect();
+        out = moved;
+    }
+
+    // Each corner takes the colour of the export's nearest vertex.
+    const BIN: f32 = 0.006;
+    let bin = |p: V3| -> [i32; 3] { p.map(|c| (c / BIN).floor() as i32) };
+    let mut bins: HashMap<[i32; 3], Vec<u32>> = HashMap::new();
+    let mut listed = vec![false; pos.len()];
+    for &v in tris.iter().flatten() {
+        if !listed[v as usize] {
+            listed[v as usize] = true;
+            bins.entry(bin(pos[v as usize])).or_default().push(v);
+        }
+    }
+    let colours: Vec<[u8; 3]> = out
+        .iter()
+        .map(|p| {
+            let home = bin(*p);
+            let mut best: Option<(f32, u32)> = None;
+            for reach in 1..=6i32 {
+                for dz in -reach..=reach {
+                    for dy in -reach..=reach {
+                        for dx in -reach..=reach {
+                            if dx.abs().max(dy.abs()).max(dz.abs()) != reach && reach > 1 {
+                                continue;
+                            }
+                            for &v in bins.get(&[home[0] + dx, home[1] + dy, home[2] + dz]).into_iter().flatten() {
+                                let d = sub(pos[v as usize], *p);
+                                let d = dot(d, d);
+                                if best.is_none_or(|b| d < b.0) {
+                                    best = Some((d, v));
+                                }
+                            }
+                        }
+                    }
+                }
+                // (a vertex found within the ring searched is nearer than any beyond it)
+                if best.is_some_and(|b| b.0.sqrt() <= reach as f32 * BIN) {
+                    break;
+                }
+            }
+            best.map_or([128, 128, 128], |b| col[b.1 as usize])
+        })
+        .collect();
+    let triangles = squares.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect();
+    (out, colours, triangles)
+}
+
+/// How the arms of a held weapon are taken from the export (a profile's `figures.arms`).
+#[derive(Clone, Copy, PartialEq)]
+enum Arms {
+    /// The export's shells as they are.
+    Shells,
+    /// The export's shells, the open ones seen from both sides (`"open"`): a sleeve, a glove's cuff and
+    /// its palm are open at the wrist, and the eye looks into them from the elbow's end. Seen from one
+    /// side, a cuff is a crescent with a hole behind it. For a device that draws a hand's shells whole.
+    Open,
+    /// Each part drawn again as one closed skin (`"skin"`): for a handheld's budget, where the shells
+    /// simplified apart are slivers and a gap at the wrist.
+    Skin,
+}
+
+impl Arms {
+    fn of(profile: &Value) -> Arms {
+        match profile["figures"]["arms"].as_str() {
+            Some("skin") => Arms::Skin,
+            Some("open") => Arms::Open,
+            _ => Arms::Shells,
+        }
+    }
+}
+
+fn held_source(dir: &Dir, meta: &Value, arms: Arms) -> Source {
     let name = |key: &str| meta[key].as_str().expect("a held weapon names its arrays");
     let pos = triples(&dir.f32s(name("position")));
     let parts = dir.u8s(name("part"));
+    let index = dir.u32s(name("index"));
     let mut two_sided = vec![false; pos.len()];
+    // A vertex of a band about an arm: a glove's cuff, a strip of cloth open along both its rims.
+    let mut band = vec![false; pos.len()];
     for mesh in meta["meshes"].as_array().into_iter().flatten() {
-        if mesh["doubleSided"].as_bool() == Some(true) {
-            let first = mesh["first"].as_u64().unwrap_or(0) as usize;
-            two_sided[first..first + mesh["vertices"].as_u64().unwrap_or(0) as usize].fill(true);
+        let first = mesh["first"].as_u64().unwrap_or(0) as usize;
+        let vertices = first..first + mesh["vertices"].as_u64().unwrap_or(0) as usize;
+        let mut both = mesh["doubleSided"].as_bool() == Some(true);
+        if arms != Arms::Shells && mesh["part"].as_u64().unwrap_or(0) as usize >= part::UPPER_ARM_R {
+            // A shell is open when a ring of its edges has a face on one side only. (A few such edges
+            // are a seam the export's welding left in a closed shell; an opening has sixteen or more.)
+            let corners = &index[mesh["start"].as_u64().unwrap_or(0) as usize..][..mesh["indices"].as_u64().unwrap_or(0) as usize];
+            let key = |v: u32| pos[v as usize].map(|c| (c * 20000.0).round() as i32);
+            let mut edges: HashMap<([i32; 3], [i32; 3]), i32> = HashMap::new();
+            for t in corners.chunks_exact(3) {
+                for k in 0..3 {
+                    let (a, b) = (key(t[k]), key(t[(k + 1) % 3]));
+                    if a != b {
+                        *edges.entry((a, b)).or_default() += 1;
+                        *edges.entry((b, a)).or_default() -= 1;
+                    }
+                }
+            }
+            let open = edges.values().filter(|n| **n > 0).count();
+            both |= arms == Arms::Open && open >= 16;
+            // (a band is little but its two rims: a sixth of its edges or more are open ones)
+            if open >= 16 && open * 6 >= corners.len() / 3 {
+                band[vertices.clone()].fill(true);
+            }
+        }
+        if both {
+            two_sided[vertices].fill(true);
         }
     }
-    Source { col: triples(dir.u8s(name("colour"))), skin: parts.iter().map(|p| ([*p, *p], 1.0)).collect(), two_sided, tris: triples(&dir.u32s(name("index"))), pos }
+    let mut source = Source { col: triples(dir.u8s(name("colour"))), skin: parts.iter().map(|p| ([*p, *p], 1.0)).collect(), two_sided, tris: triples(&index), pos };
+    if arms != Arms::Skin {
+        return source;
+    }
+    // The arms' parts are drawn again, each as one closed skin (`skin`); the weapon's stay the export's.
+    // A band takes no part in a skin: the rays through it would fill its whole ring, and a cuff that
+    // flares from the wrist would stand on the arm as a knob as large as the hand.
+    let arms: Vec<(u8, Vec<[u32; 3]>)> = (part::UPPER_ARM_R as u8..part::WEAPON as u8).map(|p| (p, source.tris.iter().copied().filter(|t| source.skin[t[0] as usize].0[0] == p && !band[t[0] as usize]).collect())).collect();
+    let skins: Vec<_> = arms.par_iter().filter(|(_, tris)| !tris.is_empty()).map(|(p, tris)| (*p, skin(&source.pos, &source.col, tris))).collect();
+    let (skin_of, mut tris) = (&source.skin, source.tris.clone());
+    tris.retain(|t| (skin_of[t[0] as usize].0[0] as usize) < part::UPPER_ARM_R);
+    source.tris = tris;
+    for (p, (pos, col, tris)) in skins {
+        let first = source.pos.len() as u32;
+        source.skin.extend(pos.iter().map(|_| ([p, p], 1.0)));
+        source.two_sided.extend(pos.iter().map(|_| false));
+        source.pos.extend(pos);
+        source.col.extend(col);
+        source.tris.extend(tris.into_iter().map(|t| t.map(|v| v + first)));
+    }
+    source
 }
 
 const PART_NAMES: [&str; part::WEAPON] = ["body", "magazine", "bolt", "charging", "trigger", "upper arm R", "forearm R", "hand R", "upper arm L", "forearm L", "hand L"];
 
-fn held(dir: &Dir, meta: &Value, motions: &[Motion], info: &Info, budgets: [usize; 3]) -> (Built, String) {
-    let source = held_source(dir, meta);
+fn held(dir: &Dir, meta: &Value, motions: &[Motion], info: &Info, budgets: [usize; 3], arms: Arms) -> (Built, String) {
+    let source = held_source(dir, meta, arms);
     // A part is simplified alone; the weapon's parts share one budget and each arm has its own.
     let mut groups: Vec<Group> = (0..part::WEAPON).map(|p| Group { name: PART_NAMES[p].to_string(), idx: Vec::new(), class: if p < part::UPPER_ARM_R { 0 } else if p < part::UPPER_ARM_L { 1 } else { 2 } }).collect();
     for t in &source.tris {
@@ -1170,7 +1499,7 @@ fn all(ir: &Path, profile: &Value) -> Result<Option<Cooked>, String> {
         let id = h["model"].as_u64().unwrap_or(0) as u32;
         let motions: Vec<Motion> = h["clips"].as_array().into_iter().flatten().map(|c| Motion::read(&dir, c, id, part::WEAPON)).collect();
         let info = Info { model: id, muzzle: list3(&h["muzzle"]), eject: list3(&h["eject"]), eject_dir: list3(&h["ejectDir"]), bolt_travel: h["boltTravel"].as_f64().unwrap_or(0.0) as f32, ads_offset: list3(&h["adsOffset"]), ads_turn: list3(&h["adsTurn"]), sprint_offset: list3(&h["sprint"]["offset"]), sprint_turn: list3(&h["sprint"]["turn"]), ..Default::default() };
-        let (made, line) = held(&dir, h, &motions, &info, [budget(profile, "weapon", 1600), budget(profile, "arm", 350), budget(profile, "arm", 350)]);
+        let (made, line) = held(&dir, h, &motions, &info, [budget(profile, "weapon", 1600), budget(profile, "arm", 350), budget(profile, "arm", 350)], Arms::of(profile));
         cooked.models.push(made);
         cooked.lines.push(line);
         cooked.infos.push(info);
@@ -1226,7 +1555,7 @@ pub fn source_pictures(ir: &Path, out: &Path) -> Result<(), String> {
         sheet.save(&out.join(format!("{}_source.png", s["name"].as_str().unwrap_or("soldier"))))?;
     }
     for h in dir.meta["held"].as_array().into_iter().flatten() {
-        let source = held_source(&dir, h);
+        let source = held_source(&dir, h, Arms::Shells);
         let view = View::eye(480, 272, 60.0);
         let mut canvas = Canvas::new(480, 272, [0.62, 0.64, 0.66], 2.2);
         for t in &source.tris {
