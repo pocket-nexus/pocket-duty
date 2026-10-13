@@ -1,0 +1,12 @@
+[
+  { "name": "above", "pos": [0, -2, 190], "look": [0, 0, 0], "fov": 40 },
+  { "name": "low-start", "pos": [-54.8, -13.2, 3.3], "look": [-47.5, -27, 3.4], "fov": 75 },
+  { "name": "alley-yard", "pos": [-31, -24, 4.95], "look": [-22, -12, 6], "fov": 75 },
+  { "name": "bent-lane", "pos": [-7.5, -3, 7.4], "look": [-3, 12, 8.5], "fov": 70 },
+  { "name": "north-yard", "pos": [5.4, 33, 8.6], "look": [-4, 38, 8.4], "fov": 78 },
+  { "name": "cross-street", "pos": [-9.4, -19.2, 7.4], "look": [20, -18.6, 8.6], "fov": 70 },
+  { "name": "under-the-rooms", "pos": [-7.5, -36.3, 6.3], "look": [-26, -36.8, 6.6], "fov": 70 },
+  { "name": "east-porch", "pos": [50.5, -31, 9], "look": [39, -21, 9], "fov": 75 },
+  { "name": "gallery", "pos": [40.2, -38.5, 11.9], "look": [44, -22, 8.5], "fov": 80 },
+  { "name": "east-start", "pos": [47, 14, 7], "look": [55, 28, 8.5], "fov": 80 }
+]
