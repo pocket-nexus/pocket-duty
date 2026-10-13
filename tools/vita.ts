@@ -9,6 +9,7 @@
 //   bun tools/vita.ts serve                    # the USB host (PocketJS's vita:dev serve): keep it running, detached
 //   bun tools/vita.ts run [--no-build] [--boot "<words>"]
 //                                              # stage + build + the SELF into Pocket Devkit's native slot over the cable
+//   bun tools/vita.ts session                  # a session for the title on a share whose host was started for another
 //   bun tools/vita.ts status
 //   bun tools/vita.ts ctl "ui=start auto=1"   # <share>/duty/control.txt (the words are in vita/src/main.rs, `remote`:
 //                                              # `mode=title|play|menu` sets the flow, `ui=start|menu|resume|restart|title`
@@ -18,8 +19,11 @@
 //                                              # somewhere, and `sky= haze= shadows= effects= figures= shades= flash=
 //                                              # interface=` leave a part of the frame out)
 //   bun tools/vita.ts capture [--out f.png]    # the frame on the display, 960 x 544
-//   bun tools/vita.ts bench [--seconds 60]     # a match played by the bench's player: frame timings → .pocket-build/validation/vita/
-//   bun tools/vita.ts cost                     # the frame with each part left out in turn, the GPU timed: what each costs
+//   bun tools/vita.ts bench [--seconds 60] [--clock 50]
+//                                              # a match played by the bench's player (ended after --clock seconds, so
+//                                              # the results come up): frame timings → .pocket-build/validation/vita/
+//   bun tools/vita.ts cost [--view "x,y,z,yaw,pitch"] [--quick]
+//                                              # one held view with each part left out in turn, the GPU timed: what each costs
 //   bun tools/vita.ts package                  # dist/vita/pocket-duty-PKDT00001.vpk: every cooked map's pieces, the
 //                                              # interface and the programs the console compiled, no debug link
 //   bun tools/vita.ts emu [--seconds 25] [--boot "<words>"]
@@ -46,6 +50,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { resolve } from "node:path";
 import { PACKS_FILE } from "../vendor/pocketjs/tools/pocket3d-packs.ts";
 import { packageVitaVpk } from "../vendor/pocketjs/tools/vita-package.ts";
+import { VitaUsbClient } from "../vendor/pocketjs/tools/vita-dev-client.ts";
 import { prepareVitaUsb } from "../vendor/pocketjs/tools/vita-usb.ts";
 import { FIRST, mapNamed } from "./maps.ts";
 import { bringMaps, cooked, said } from "./packs.ts";
@@ -62,8 +67,12 @@ const rustup = Bun.which("rustup") ?? `${home}/.cargo/bin/rustup`;
 const BIN = "pocket-duty-vita";
 /** The toolchain PocketJS's Vita host is pinned to (vendor/pocketjs/hosts/vita/rust-toolchain.toml). */
 const TOOLCHAIN = "nightly-2026-05-28";
-/** Pocket Devkit on the development console: vitaTitleId("dev.pocket-nexus.devkit"). */
-const DEVKIT = "P25BFE5E2";
+/**
+ * Pocket Devkit on the development console: vitaTitleId("dev.pocket-nexus.devkit"). A console whose Devkit was
+ * installed before PocketJS's rename has it as P3B1D7273: `--title P3B1D7273` (or DUTY_VITA_TITLE). The USB
+ * host's log names the title the console asks for (`pocket-vita/<title>/session.json`).
+ */
+const DEVKIT = process.env.DUTY_VITA_TITLE || "P25BFE5E2";
 /** The package's own title. */
 export const TITLE = "PKDT00001";
 export const PROFILE = "vita60";
@@ -177,6 +186,19 @@ export async function stage(from: string[] = argv, boot = ""): Promise<void> {
   writeFileSync(`${c.game}/boot.txt`, `${words}\n`);
 }
 
+/**
+ * A session for the title on the share, when it has none: the console's Devkit answers the session it finds
+ * under its own title, and a host that was started for another title wrote none there. The host itself serves
+ * the whole share and is left running.
+ */
+function session(from: string[]): void {
+  const c = context(from);
+  if (!existsSync(`${c.share}/pocket-vita/${c.title}/session.json`)) {
+    new VitaUsbClient(c.share, c.title, 60_000).startSession();
+    console.log(`vita: started a session for ${c.title} on ${c.share}`);
+  }
+}
+
 /** PocketJS's wired debug tool, pointed at the chosen share. */
 async function dev(from: string[], ...args: string[]): Promise<void> {
   const c = context(from);
@@ -206,7 +228,7 @@ export function status(from: string[] = argv): any {
 }
 
 /** Waits until the game says it runs a map, and returns its status. */
-async function running(from: string[], seconds = 180): Promise<any> {
+async function running(from: string[], seconds = 600): Promise<any> {
   const until = Date.now() + seconds * 1000;
   let last = "";
   while (Date.now() < until) {
@@ -227,8 +249,12 @@ async function running(from: string[], seconds = 180): Promise<any> {
 async function bench(from: string[]): Promise<void> {
   const seconds = Number(opt("--seconds", "60", from));
   await running(from);
-  ctl("mode=play auto=1 god=1 stats=1", from);
+  // `--clock N` ends the match after N seconds, so the run goes through to the results.
+  const clock = opt("--clock", "", from);
+  ctl("ui=start auto=1 god=1 stats=1", from);
   await Bun.sleep(3000);
+  // (a match that starts sets its own clock: the word comes after it has)
+  if (clock) ctl(`clock=${clock}`, from);
   const samples: any[] = [];
   for (let at = 0; at < seconds; at++) {
     await Bun.sleep(1000);
@@ -238,7 +264,7 @@ async function bench(from: string[]): Promise<void> {
   const end = status(from).engine;
   const mean = (key: string) => samples.reduce((sum, s) => sum + s[key], 0) / samples.length;
   const record = {
-    map: end.map, seconds, frames: end.frames, late: end.late, lateBy: end.lateBy,
+    map: end.map, seconds, mode: end.mode, match: end.match, pictures: end.pictures, frames: end.frames, late: end.late, lateBy: end.lateBy,
     frameMs: mean("frameMs"), worstMs: Math.max(...samples.map((s) => s.worstMs)), tris: { mean: mean("tris"), most: Math.max(...samples.map((s) => s.tris)) }, draws: { mean: mean("draws"), most: Math.max(...samples.map((s) => s.draws)) },
     cpuMs: end.cpuMs, governor: end.governor, memory: end.memory, pack: end.pack, msaa: end.msaa, clockMhz: end.clockMhz, samples,
   };
@@ -246,46 +272,51 @@ async function bench(from: string[]): Promise<void> {
   const out = `${VALIDATION}/bench-${end.map}.json`;
   writeFileSync(out, JSON.stringify(record, null, 2) + "\n");
   console.log(`vita: ${end.map}: ${record.frameMs.toFixed(2)} ms a frame, worst ${record.worstMs.toFixed(1)}, ${end.late} late of ${end.frames} (cpu ${end.lateBy.cpu}, gpu ${end.lateBy.gpu}), ${Math.round(record.tris.mean)} triangles (most ${record.tris.most}), ${Math.round(record.draws.mean)} draws → ${out}`);
-  ctl("auto=0 mode=title", from);
+  ctl("auto=0 stats=0", from);
 }
 
 /**
- * What each part of the frame costs: the same held view with the part left out, the GPU waited for after each
- * frame and timed (`profile=1`). The view is the street from where a match starts, at the pack's own distances.
+ * What each part of the frame costs: one held view (`--view "x,y,z,yaw,pitch"`, default the street from its
+ * middle) with the part left out, the GPU waited for after each frame and timed (`profile=1`: the time from
+ * the scene's end to the GPU's word that it is drawn). The soldiers stand in a held view; the held weapon
+ * does not.
  */
 async function cost(from: string[]): Promise<void> {
   const engine = await running(from);
+  const view = opt("--view", "0,1.7,0,0,0", from);
   const read = async (words: string) => {
     ctl(words, from);
-    await Bun.sleep(4000);
+    await Bun.sleep(5000);
     const e = status(from).engine;
-    return { gpuMs: e.gpuMs as number, drawMs: e.cpuMs.draw as number, selectMs: e.cpuMs.select as number, tris: e.tris as number, draws: e.draws as number, frameMs: e.frameMs as number };
+    return { gpuMs: e.gpuMs as number, drawMs: e.cpuMs.draw as number, selectMs: e.cpuMs.select as number, tris: e.tris as number, figureTris: e.figureTris as number, draws: e.draws as number };
   };
-  ctl("mode=play god=1 govern=0 profile=1 pace=1", from);
-  await Bun.sleep(1500);
-  const whole = await read("sky=1 haze=1 shadows=1 effects=1 figures=1 shades=1 flash=1 interface=1 nearer=100 merge=600");
-  const rows: [string, any][] = [["the whole frame", whole]];
-  for (const [name, off, on] of [
-    ["the sky", "sky=0", "sky=1"],
-    ["the haze", "haze=0", "haze=1"],
-    ["the ground's shadow picture", "shadows=0", "shadows=1"],
-    ["the figures and their shadows", "figures=0", "figures=1"],
-    ["the figures' shadows", "shades=0", "shades=1"],
-    ["the effects", "effects=0", "effects=1"],
-    ["the interface", "interface=0", "interface=1"],
-    ["runs drawn one by one", "merge=0", "merge=600"],
-    ["the nearest level to 24 m, not 48", "nearer=50", "nearer=100"],
-    ["the nearest level to 12 m", "nearer=25", "nearer=100"],
+  const all = "sky=1 haze=1 shadows=1 effects=1 figures=1 shades=1 flash=1 interface=1 nearer=100 merge=150";
+  ctl(`ui=start god=1 govern=0 profile=1 pace=1 view=${view},65`, from);
+  await Bun.sleep(3000);
+  const whole = await read(all);
+  const rows: [string, Awaited<ReturnType<typeof read>>][] = [["the whole frame", whole]];
+  // (`--quick`: the whole frame alone, for a build that differs in what it was started with)
+  for (const [name, words] of has("--quick", from) ? [] : [
+    ["without the sky", "sky=0"],
+    ["without the haze", "haze=0"],
+    ["without the ground's shadow picture", "shadows=0"],
+    ["without the soldiers and their shadows", "figures=0"],
+    ["without the soldiers' shadows", "shades=0"],
+    ["without the interface", "interface=0"],
+    ["runs drawn one by one (merge=0)", "merge=0"],
+    ["runs joined across 200 triangles (merge=600)", "merge=600"],
+    ["the levels' distances halved (nearer=50)", "nearer=50"],
+    ["the levels' distances quartered (nearer=25)", "nearer=25"],
   ] as const) {
-    rows.push([`without ${name}`.replace("without runs", "with runs").replace("without the nearest", "with the nearest"), await read(off)]);
-    ctl(on, from);
-    await Bun.sleep(500);
+    rows.push([name, await read(`${all} ${words}`)]);
   }
-  ctl("govern=1 profile=0", from);
+  rows.push(["the whole frame again", await read(all)]);
+  ctl(`${all} govern=1 profile=0 view=off`, from);
   mkdirSync(VALIDATION, { recursive: true });
   const out = `${VALIDATION}/cost-${engine.map}.json`;
-  writeFileSync(out, JSON.stringify(Object.fromEntries(rows), null, 2) + "\n");
-  for (const [name, r] of rows) console.log(`${name.padEnd(42)} GPU ${r.gpuMs.toFixed(2)} ms (${(r.gpuMs - whole.gpuMs >= 0 ? "+" : "") + (r.gpuMs - whole.gpuMs).toFixed(2)}), draws ${r.drawMs.toFixed(2)} ms, ${r.tris} triangles in ${r.draws} draws`);
+  if (!has("--quick", from)) writeFileSync(out, JSON.stringify({ map: engine.map, view, pictures: engine.pictures, msaa: engine.msaa, rows: Object.fromEntries(rows) }, null, 2) + "\n");
+  const signed = (ms: number) => `${ms >= 0 ? "+" : ""}${ms.toFixed(2)}`;
+  for (const [name, r] of rows) console.log(`${name.padEnd(46)} GPU ${r.gpuMs.toFixed(2)} ms (${signed(r.gpuMs - whole.gpuMs)}), draws ${r.drawMs.toFixed(2)} ms, choice ${r.selectMs.toFixed(2)} ms, ${r.tris} + ${r.figureTris} triangles in ${r.draws} draws`);
   console.log(`vita: ${out}`);
 }
 
@@ -386,10 +417,12 @@ if (import.meta.main) {
   else if (cmd === "run") {
     await stage();
     if (!has("--no-build")) await build();
+    session(argv);
     await dev(argv, "native");
     const engine = await running(argv);
     console.log(`vita: ${engine.map} runs: ${engine.frameMs.toFixed(2)} ms a frame, ${engine.tris} triangles in ${engine.draws} draws, programs ${engine.programs.compiled} compiled and ${engine.programs.cached} from the cache`);
-  } else if (cmd === "status") console.log(JSON.stringify(status(), null, 2));
+  } else if (cmd === "session") session(argv);
+  else if (cmd === "status") console.log(JSON.stringify(status(), null, 2));
   else if (cmd === "ctl" && argv[1]) ctl(argv[1]);
   else if (cmd === "capture") await dev(argv, "capture", ...(has("--out") ? ["--out", resolve(opt("--out", ""))] : []));
   else if (cmd === "bench") await bench(argv);

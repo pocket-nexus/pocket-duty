@@ -4,7 +4,7 @@
   "cell": 8,
   "quantum": 0.0009765625,
   "drop": ["prop_pock", "prop_dust_skirt"],
-  "lod": { "error": [0.012, 0.05, 0.2], "distance": [48, 140], "largest": [6, 10, 0], "shadowEdge": [0.35, 1.0, 3], "minArea": [0, 0, 0.004] },
+  "lod": { "error": [0.012, 0.05, 0.2], "distance": [96, 280], "largest": [6, 10, 0], "shadowEdge": [0.35, 1.0, 3], "minArea": [0, 0, 0.004] },
   "sight": { "rays": 400000, "near": 3 },
   "clip": { "largeEdge": 0.9 },
   "cluster": { "triangles": 96, "cone": 0.25 },

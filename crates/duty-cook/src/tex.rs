@@ -45,6 +45,7 @@ impl Image {
 
     /// Averaged down to `width` × `height` (each a whole fraction of the picture's own).
     pub fn reduced(&self, width: usize, height: usize) -> Image {
+        assert!(width <= self.width && height <= self.height, "a picture of {} × {} is not made larger ({width} × {height})", self.width, self.height);
         let (fx, fy) = (self.width / width, self.height / height);
         let mut out = Image::new(width, height);
         for y in 0..height {

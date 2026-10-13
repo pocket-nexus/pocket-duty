@@ -1,6 +1,6 @@
 # Pocket Duty
 
-[Claude of Duty](https://github.com/mshumer/Claude-of-Duty) on the PSP and the Nintendo 3DS: the reference's market street, its soldiers and its three weapons at **30 frames a second**, at 480 × 272 through the PSP's fixed-function GE and at 400 × 240 through the 3DS's PICA200. Built on [Pocket3D](https://github.com/pocket-nexus/pocketjs) and PocketJS.
+[Claude of Duty](https://github.com/mshumer/Claude-of-Duty) on the PSP, the Nintendo 3DS and the PS Vita: the reference's market street, its soldiers and its three weapons at **30 frames a second**, at 480 × 272 through the PSP's fixed-function GE and at 400 × 240 through the 3DS's PICA200, and at **60 frames a second** at 960 × 544 with four samples a pixel through the Vita's GXM. Built on [Pocket3D](https://github.com/pocket-nexus/pocketjs) and PocketJS.
 
 Its page on Pocket Studio, [studio.pocket.nexus/games/duty](https://studio.pocket.nexus/games/duty), has recordings from a console and the package for the PSP.
 
@@ -13,7 +13,8 @@ The reference is a browser game: three.js on WebGL2, every mesh, texture, animat
 | Reference | `web/`, Claude of Duty by mshumer at `d9b237b`, MIT (`web/LICENSE`) |
 | PSP | PSP-2000 or later (the pack needs the 52 MB memory setting; a PSP-1000 has 24 MB). A whole match on a console: **29.9 frames a second, 55 frames late of 18 375** |
 | Nintendo 3DS | Old 3DS or New 3DS with the Homebrew Launcher: one `.3dsx` and the maps' packs in `packs/` beside it on the memory card. A whole match on an Old 3DS: **29.8 frames a second, 48 frames late of 17 954** |
-| Browser tab | As a PSP, 480 × 272 in the PSP display's 16-bit colours; as a Nintendo 3DS, 400 × 240 over a lower screen of 320 × 240 with its four keys. wgpu over WebGPU, the PSP's pack. Chrome 154 on an M3 Max: **60 frames a second, under 0.4 ms a frame** |
+| PS Vita | A PS Vita that runs homebrew: one `.vpk` with every map's pack, the interface and the programs inside. A match on a console: **59.9 frames a second, 1 frame late of 4 698**, with 135 000 triangles of the street in a frame |
+| Browser tab | As a PSP, 480 × 272 in the PSP display's 16-bit colours; as a Nintendo 3DS, 400 × 240 over a lower screen of 320 × 240 with its four keys; as a PS Vita, 960 × 544 with the right stick looking. wgpu over WebGPU, the PSP's pack. Chrome 154 on an M3 Max: **60 frames a second, under 0.4 ms a frame** |
 
 The consoles and the browser are measured in "What is measured".
 
@@ -30,6 +31,19 @@ bun tools/psp.ts build             # ui/ + psp/ → dist/psp/{EBOOT.PBP,duty.js,
 bun tools/psp.ts emu               # the same EBOOT in PPSSPPHeadless: a frame and its status
 bun tools/psp.ts emu --ctl "changes=20 held=4096"   # twenty changes of map in the running program, in an XMB start's memory: a line a change (changes.txt)
 bun tools/psp.ts package           # dist/psp/PSP/GAME/PocketDuty for a Memory Stick
+```
+
+The PS Vita's, with VitaSDK (`VITASDK`), `cargo-vita` and the toolchain PocketJS's Vita host pins (`nightly-2026-05-28`):
+
+```
+bun tools/duty.ts cook --profile vita60   # DutyIR → .pocket-build/duty/vita60/duty.pack (2 minutes once the sight lists are kept)
+bun tools/wgpu.ts shot --pack .pocket-build/duty/vita60/duty.pack --size 960x544 --out f.png   # a frame of that pack, drawn on this computer
+bun tools/vita.ts serve            # the USB host of Pocket Devkit, the development container on the console; keep it running
+bun tools/vita.ts run              # interface + packs → the share, vita/ → a SELF, the SELF into Devkit's native slot
+bun tools/vita.ts bench --clock 60 # a match played by the bench's player through to its results: frame times from the console
+bun tools/vita.ts cost             # one held view with each part of the frame left out in turn, the GPU timed
+bun tools/vita.ts capture --out f.png
+bun tools/vita.ts package          # dist/vita/pocket-duty-PKDT00001.vpk
 ```
 
 Those are the first map's commands, the reference's street. Another map is the same with `--map <id>` (a directory under `maps/` a map):
@@ -87,7 +101,7 @@ bun tools/psp.ts capture
 | | |
 |---|---|
 | Stick | Walk. All the way forward runs |
-| △ ○ × □ | Look |
+| △ ○ × □ | Look. On a PS Vita the right stick looks too |
 | R | Fire |
 | L | Raise the sights |
 | Up | Jump. Held against a ledge, climb |
@@ -197,6 +211,36 @@ What the console's parts cost decides how the frame is written (`probe=1` in `bo
 - **A draw is written as GPU commands.** `C3D_DrawElements` looks at all 96 uniform registers on every call: **16 microseconds a draw on an Old 3DS**, 9.4 ms for a view's draws. `render.c` writes a cell's matrix, the buffer offset and the draw registers itself and has citro3d write its state only after a texture or combiner change: **7 microseconds a draw**, 2.8 ms for the same view.
 - **Sound** is mixed by `duty-sim` at 22 050 Hz and played through `ndsp`. `ndsp` needs the DSP firmware on the card (`sdmc:/3ds/dspfirm.cdc`); without it the program plays through CSND.
 
+### The frame on a PS Vita
+
+`profiles/vita60.json` is what the Vita's pack holds more than the PSP's. `vita/` runs the same `duty-sim`, reads the pack a section at a time through `pocket3d-packs`, and draws the browser renderer's frame with GXM (`vita/src/world.rs`, `vita/src/figures.rs`, six Cg programs in `vita/shaders/`).
+
+| | `psp30` | `vita60` |
+|---|---|---|
+| Pictures | 256 colours from a palette, **128 texels a side** (64 and 32 for six families), 4 levels | **true colour, the side the reference bakes: 512** (256 for six families), every level down to one texel |
+| Texels of the surfaces' pictures | 0.22 million | **3.5 million** |
+| Sky | 4 pictures of 256 × 128: 1 024 texels round | 8 pictures of 512 × 512: **4 096 texels round** |
+| The ground's shadow picture | 512 a side: 25 cm a texel | **2 048 a side: 6 cm a texel** |
+| Triangles of the street, by level | 428 969 / 162 308 / 57 310 | **1 105 375** / 353 309 / 121 408 |
+| The nearest level reaches | 9 m | **96 m** |
+| A triangle across a shadow's edge is cut to | 1 m | **35 cm** |
+| The figures' budgets: a soldier, the held weapon, an arm | 700, 1 100 and 260 triangles | **6 000, 9 000 and 2 200** |
+| The street's pack, Twin Yards' | 29.1 MiB, 8.9 MiB | **93.0 MiB, 49.7 MiB** |
+| Triangles in a frame of a match | 19 000 | **135 000** |
+
+- **Straight into the display's surface.** vita2d starts GXM with a display surface of four samples a pixel and the street is drawn into it; no second target and no copy.
+- **The pictures are true colour** (`texture::RGBA8`, `"format": "rgba"`), mixed between two texels and between two levels. A picture of 512 a side or less goes to video memory in the GPU's own order of texels through the transfer engine; the ground's shadow picture stays as rows, because the engine refuses a copy of 2 048 a side (`0x805b0003`).
+- **A picture with holes keeps its cover.** A smaller level is a mean of texels, and the mean of a leaf is under one half everywhere. The compiler raises each level's alpha until as much of it passes the test as passes in the first level.
+- **The ground in one pass.** A ground chunk's fragment multiplies its texel by the shadow picture at the fragment's own place.
+- **A soldier's shadow.** His triangles are drawn once more with each vertex sent down the sun's ray to the height of his feet, and the stencil lets a pixel darken once.
+- **A muzzle's light.** While the player's flash shows, the street's programs add a light at the muzzle that falls off with the square of the distance (`FLASH`). The programs without it are bound in every other frame.
+- **The right stick looks** (`Session::second`); the four buttons still look or walk as the layout setting says.
+- **A budget of 170 000 triangles.** Over it, or when a frame waits more than 6 ms for the GPU to finish the frame before last, the levels' distances come in.
+- **Programs are compiled on the console** by SceShaccCg at the first start, 28 in all, and kept on the memory card under the hash of their source. A package holds them (`app0:gxp`).
+- **Another map is read in place.** The geometry's memory and the pictures' video memory go back first.
+
+Not done: the sun's shadow per pixel on walls and a place's lamps per pixel. A vertex holds one colour, the lit one; both need the compiler to hand over the colour without the sun and the lamps' list. The dust skirts and the pock marks the reference lays on walls (`prop_dust_skirt`, `prop_pock`) stay out of the pack: they need a material that blends by its texel's alpha.
+
 ### The interface
 
 Title, settings, the match's instruments, the menu and the results are one PocketJS app (`ui/`) drawn over the street. Neither console's program draws text. On a 3DS the same app has a second surface, the lower screen (`ui/app/presentations/dual.tsx`); the upper screen keeps the PSP's layout. `crates/duty-interface` sends the match's state as JSON lines and takes commands back (`ui/app/protocol.ts`).
@@ -261,18 +305,42 @@ Sound on that console plays through CSND: its card has no `dspfirm.cdc`. A perso
 
 Browser (`bun tools/wgpu.ts check`, Chrome 154 headless with WebGPU on an M3 Max, 2026-10-13): the page goes from the title card through a match played by keys to its results, with the menu, a fall and the settings on the way; **60 frames a second, under 0.4 ms a frame** with up to 37 200 triangles of the street; the tab's frame of a held eye is the build machine's own; and that frame is 2.2 of 255 a colour from the compiler's drawing of the same view. No other browser, no phone and no other GPU has drawn it, and nobody has played it by hand or listened to it.
 
+Console (a PS Vita in Pocket Devkit's native slot over USB, 2026-10-13), 960 × 544, four samples a pixel, clocks at 444 / 222 / 222 / 166 MHz:
+
+| | |
+|---|---|
+| `bench --seconds 75 --clock 60` on the street: a match played by the bench's player to its results (6 kills, 240 rounds) | **4 698 frames, 1 late**, 16.68 ms a frame, the longest interval 29.9 ms; 134 500 triangles of the street in 1 109 draws on average, 137 900 at most |
+| A frame of that match, on this thread | choosing the draws 3.4 ms, drawing 3.7 ms, the interface's draw 0.8 ms, the match 0.9 ms |
+| The same on Twin Yards, where the bench's player stays at his start | **5 036 frames, 1 late**, the longest interval 17.9 ms |
+| `cost`: a held view down the street, 116 000 triangles of the street and 11 000 of two soldiers in 800 draws | **the GPU 12.95 ms** |
+| The same view with two samples a pixel, and with one | 10.41 ms, 8.84 ms: **four samples cost 4.1 ms** |
+| A thousand triangles of the street | 0.043 ms of the GPU |
+| The interface over the frame | 1.3 to 2.3 ms of the GPU by what it shows; 0.8 ms of this thread |
+| The ground's shadow picture; the sky; the haze | 0.51 ms; 0.30 ms; under 0.02 ms |
+| Two soldiers; of that their shadows | 0.33 ms of the GPU and 0.7 ms of this thread; 0.08 ms and 0.1 ms |
+| The nearest level to 96 m in place of 48 m | 0.09 ms in that view |
+| Runs of a chunk drawn one by one, and joined across 200 triangles, against joined across 50 (the default) | the GPU 0.07 ms more and this thread 0.20 ms more; the GPU 0.48 ms more and this thread 0.11 ms less |
+| Pictures in the GPU's order of texels in place of rows | 0.16 ms less |
+| Four held views of Twin Yards | the GPU 4.1 to 5.8 ms |
+| A start | the street read in 13.9 s with 15 MB of it over the cable; Twin Yards in 16.9 s with 41 MB over the cable |
+| Memory | 49 MB of geometry and 44 MB of pictures in video memory for the street; 8 MB and 40 MB for Twin Yards |
+| Captures from the console | the title and a match on both maps, the results |
+
+A capture stops the frame it is taken in for 100 ms. The package (`.vpk`) was built and was not installed on a console.
+
 ## Releases
 
 `bun tools/release.ts` builds the package Pocket Studio takes from the checked-out commit and writes it to `dist/release/`, which Git ignores:
 
 ```
-bun tools/release.ts [--targets psp,3ds] [--out dist/release] [--no-build] [--no-cook] [--upload]
+bun tools/release.ts [--targets psp,3ds,vita] [--out dist/release] [--no-build] [--no-cook] [--upload]
 ```
 
 | Target | File | Holds |
 | --- | --- | --- |
 | `psp` | `pocket-duty-<version>-psp.zip` | `PSP/GAME/PocketDuty/` for the root of a Memory Stick: `EBOOT.PBP`, every map's pack as pieces (`pocket.packs` and the `.bin` files it lists), and the interface's `duty.js` and `duty.pak` |
 | `3ds` | `pocket-duty-<version>-3ds.zip` | `3ds/pocket-duty/` for the root of a memory card: `pocket-duty.3dsx` with the interface in its ROMFS (**3.1 MB**) and `packs/` with every map's pack as pieces |
+| `vita` | `pocket-duty-<version>-vita.vpk` | The SELF with no debug link, `packs/` with every map's pack as pieces (**141 MiB**, 48 MB in the package), the interface, and `gxp/` with the 28 programs a console compiled. Built after a development run has left the programs on the USB share (`bun tools/vita.ts run`) |
 
 A map's pack is cut into pieces named by their bytes, and one list (`pocket.packs`, PocketJS's `docs/POCKET3D-PACKS.md`) says which pieces make which map's pack. `bun tools/packs.ts cut [--profile psp30]` writes them under `.pocket-build/duty/packs/<profile>/`; `bun tools/packs.ts bring <directory>` copies the pieces a directory lacks. The browser, the PSP and the 3DS read a pack through that list. Beside each map's pack the list has `<id>-map`: the map from above, from the cook's `map.png` and `map.json` of the same profile, as 16 bytes of facts and a PocketJS image entry in the device's pixel format (`duty_interface::Chart`). The device reads it with the map's pack and hands it to the interface, so no map's picture is compiled into the interface. A `.3dsx` built without `--embed none` holds the first map's pieces in its ROMFS and runs with no card files; it is **31.4 MB**, and the paired wire installs at most 32 MiB.
 

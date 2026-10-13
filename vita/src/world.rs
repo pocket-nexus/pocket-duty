@@ -37,6 +37,8 @@ pub const HELD_DEPTH: f32 = 0.0625;
 /// The sky's band: quads across one picture and down it.
 const SKY_SEGMENTS: usize = 8;
 const SKY_ROWS: usize = 6;
+/// The longest side of a picture the transfer engine is asked to put in the GPU's own order.
+const SWIZZLED_SIDE: u32 = 512;
 /// Vertices read from the pack at a time.
 const PART: usize = 65536;
 
@@ -98,7 +100,9 @@ pub struct Look {
 }
 
 impl Look {
-    pub const DEFAULT: Look = Look { sky: true, haze: true, shadows: true, effects: true, figures: true, shades: true, flash: true, merge: 600, cull: 0 };
+    /// (two runs are joined across 50 triangles: measured on the console in a view of 137 000 triangles, the
+    /// GPU takes 0.45 ms less than across 200 and this thread's draws 0.18 ms more)
+    pub const DEFAULT: Look = Look { sky: true, haze: true, shadows: true, effects: true, figures: true, shades: true, flash: true, merge: 150, cull: 0 };
 
     pub fn cull(&self, two_sided: bool) -> Cull {
         match (two_sided, self.cull) {
@@ -421,7 +425,10 @@ impl Gfx {
                 // The picture's green: one half is all of the sun.
                 sun = (data[..(w * h * 4) as usize].chunks_exact(4).map(|p| ((p[1] as u32 * 255) / 127).min(255) as u8).collect(), w as usize, h as usize);
             }
-            let mut t = if linear { up.texture(vram, Format::Rgba8, w, h, levels, &data)? } else { swizzled(&mut staging, vram, w, h, levels, &data)? };
+            // The transfer engine refuses a copy of 2048 texels a side into the GPU's order (0x805b0003 on the
+            // console); 512 goes through. A larger picture stays as rows: the ground's shadow, which has one
+            // level and is not repeated.
+            let mut t = if linear || w.max(h) > SWIZZLED_SIDE { up.texture(vram, Format::Rgba8, w, h, levels, &data)? } else { swizzled(&mut staging, vram, w, h, levels, &data)? };
             let wrap = if r.flags & texture::CLAMP != 0 { Wrap::Clamp } else { Wrap::Repeat };
             t.set_wrap(wrap, wrap);
             // Between two texels, and between two levels: the GE and the PICA200 take the nearest level.

@@ -42,7 +42,7 @@ const SITE = join(BUILD, "site");
 const DIST = join(BUILD, "dist");
 export const PACK = packPath(FIRST, "psp30");
 // The handhelds the page shows (`DEVICES` in wgpu/page/main.js, `SHAPES` in wgpu/src/app.rs).
-export const SHOWN = ["psp", "3ds"] as const satisfies readonly Device[];
+export const SHOWN = ["psp", "3ds", "vita"] as const satisfies readonly Device[];
 // What the host a build is deployed to allows (Pocket Studio's site deployments): the size of a file, the
 // files and the bytes of a deployment, and the top-level names it keeps for itself.
 const HOST = { file: 32 << 20, files: 4000, bytes: 1 << 30, reserved: ["play", "runtime"] };
@@ -186,7 +186,7 @@ const OPENED = "/api/events/player";
 const opens: { query: string; mode: string }[] = [];
 const APP = {
   kind: "site", id: "local", slug: "duty", url: null, title: "Pocket Duty", author: "local", tagline: "A firefight on a market street.", verified: true, status: "published",
-  packages: [{ target: "psp", filename: "pocket-duty-0.1.0-psp.zip", size: 16_000_000, version: "0.1.0" }, { target: "3ds", filename: "pocket-duty-0.1.0.3dsx", size: 31_000_000, version: "0.1.0" }],
+  packages: [{ target: "psp", filename: "pocket-duty-0.1.0-psp.zip", size: 16_000_000, version: "0.1.0" }, { target: "3ds", filename: "pocket-duty-0.1.0.3dsx", size: 31_000_000, version: "0.1.0" }, { target: "vita", filename: "pocket-duty-0.1.0-vita.vpk", size: 150_000_000, version: "0.1.0" }],
   remixable: true, repository: "https://github.com/pocket-nexus/pocket-duty",
 };
 

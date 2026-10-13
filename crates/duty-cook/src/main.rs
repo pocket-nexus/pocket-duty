@@ -82,7 +82,9 @@ fn cook(ir: &Path, out: &Path, profile: &Value) -> Result<(), String> {
                 let path = ir.join(format!("tex_{}.png", m.family));
                 let side = profile["textures"]["sides"][&m.family].as_u64().unwrap_or(side_default as u64) as usize;
                 let image = if path.exists() {
-                    let mut image = tex::Image::open(&path)?.reduced(side, side);
+                    // (never larger than the reference bakes it: a profile's side is the most a picture keeps)
+                    let source = tex::Image::open(&path)?;
+                    let mut image = source.reduced(side.min(source.width), side.min(source.height));
                     // A texel of the tile's mean colour becomes one half: the vertex carries the mean, lit.
                     let mean = m.mean.map(|c| c.powf(1.0 / 2.2).max(1e-3));
                     for p in &mut image.data {

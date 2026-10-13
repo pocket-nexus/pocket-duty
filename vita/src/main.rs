@@ -1051,6 +1051,7 @@ fn main() {
                         "sky": set.look.sky, "haze": set.look.haze, "shadows": set.look.shadows, "effects": set.look.effects, "figures": set.look.figures, "shades": set.look.shades, "flash": set.look.flash},
                     "programs": {"compiled": gpu.compiled, "cached": gpu.cached},
                     "msaa": samples,
+                    "pictures": if linear { "rows" } else { "swizzled" },
                     "memory": {"geometry": w.gfx.geometry_bytes, "pictures": w.gfx.picture_bytes, "vram": w.vram.reserved(), "vertices": w.gfx.vertex_count, "indices": w.gfx.index_count},
                     "clockMhz": [scePowerGetArmClockFrequency(), scePowerGetGpuClockFrequency()],
                 });

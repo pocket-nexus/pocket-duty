@@ -3,7 +3,7 @@
 // the checked-out commit by the commands a developer runs (tools/duty.ts,
 // psp.ts, n3ds.ts).
 //
-//   bun tools/release.ts [--targets psp,3ds] [--out dist/release] [--no-build] [--no-cook] [--upload]
+//   bun tools/release.ts [--targets psp,3ds,vita] [--out dist/release] [--no-build] [--no-cook] [--upload]
 //
 // For each target it cooks the profile's pack of every map the target's package
 // holds, from that map's export (tools/maps.ts says where each lies; the first
@@ -30,7 +30,7 @@
 //
 // No package goes to Git or to a GitHub release.
 
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { deflateRawSync } from "node:zlib";
 import { cookedDir, FIRST, irDir, MAPS } from "./maps.ts";
@@ -57,16 +57,18 @@ interface Package {
 }
 
 /** Pocket Studio's ids for the devices this repository builds for. */
-const TARGETS = ["psp", "3ds"] as const;
+const TARGETS = ["psp", "3ds", "vita"] as const;
 type Target = (typeof TARGETS)[number];
 
 /**
- * What each target cooks, the maps its package holds and what the package is called. Both read a map's
- * pack from pieces beside the program: the PSP in the EBOOT's folder, the 3DS in `packs/` beside its `.3dsx`.
+ * What each target cooks, the maps its package holds and what the package is called. Each reads a map's
+ * pack from pieces beside the program: the PSP in the EBOOT's folder, the 3DS in `packs/` beside its `.3dsx`,
+ * the PS Vita in `packs/` inside its `.vpk`.
  */
 const BUILDS: Record<Target, { profile: string; maps: string[]; filename: (version: string) => string; build: (log: string, output: string) => Promise<void> }> = {
   psp: { profile: "psp30", maps: MAPS.map((map) => map.id), filename: (v) => `${NAME}-${v}-psp.zip`, build: psp },
   "3ds": { profile: "n3ds30", maps: MAPS.map((map) => map.id), filename: (v) => `${NAME}-${v}-3ds.zip`, build: n3ds },
+  vita: { profile: "vita60", maps: MAPS.map((map) => map.id), filename: (v) => `${NAME}-${v}-vita.vpk`, build: vita },
 };
 
 const sha256 = (bytes: Uint8Array | string) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
@@ -191,6 +193,16 @@ async function n3ds(log: string, output: string): Promise<void> {
   writeZip(output, [{ name: "3ds/" }, ...tree(join(card, "3ds/pocket-duty"), "3ds/pocket-duty")]);
 }
 
+/**
+ * The `.vpk` (`tools/vita.ts` `package`): the SELF without a debug link, every map's pieces, the interface and
+ * the programs. The programs are compiled on a console: a development run leaves them on the USB share
+ * (`bun tools/vita.ts run`), and the package is refused without them.
+ */
+async function vita(log: string, output: string): Promise<void> {
+  await run(log, ["bun", "tools/vita.ts", "package"]);
+  cpSync(join(ROOT, "dist/vita/pocket-duty-PKDT00001.vpk"), output);
+}
+
 /** A package is refused when it is empty or holds what only a development run uses. */
 function accept(output: string): void {
   if (statSync(output).size < 1024 * 1024) throw new Error(`${output} is ${statSync(output).size} bytes: the pack is not in it`);
@@ -267,7 +279,7 @@ const asked = option("--targets", TARGETS.join(",")).split(",").filter(Boolean);
 const unknown = asked.filter((t) => !(TARGETS as readonly string[]).includes(t));
 if (unknown.length || argv.includes("--help")) {
   if (unknown.length) console.error(`release: no build for ${unknown.join(", ")}: the targets are ${TARGETS.join(", ")}`);
-  console.log("usage: bun tools/release.ts [--targets psp,3ds] [--out dist/release] [--no-build] [--no-cook] [--upload]");
+  console.log("usage: bun tools/release.ts [--targets psp,3ds,vita] [--out dist/release] [--no-build] [--no-cook] [--upload]");
   process.exit(unknown.length ? 1 : 0);
 }
 const targets = TARGETS.filter((t) => asked.includes(t));
