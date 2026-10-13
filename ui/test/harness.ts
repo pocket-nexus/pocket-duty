@@ -13,7 +13,7 @@ import { createWasmUi } from "../../vendor/pocketjs/hosts/web/wasm-ops.js";
 import { BLIPS, FLAG, T, type Command, type HostState, type Kill, type Result } from "../app/protocol.ts";
 
 const root = resolve(import.meta.dir, "../..");
-export type Device = "psp" | "vita";
+export type Device = "psp" | "vita" | "3ds";
 
 /** The numbers of a match that has just begun. */
 function fresh(): number[] {
@@ -98,6 +98,13 @@ export class Mock {
         break;
       case "prefs": s.prefs = command.value; break;
       case "idle": this.idle = command.on; break;
+      case "tap":
+        // What the match would do with the press: the next weapon, the next fire mode, a full magazine.
+        if (s.mode !== "play") break;
+        if (command.key === "weapon") s.weapon = s.weapon === "M4A1" ? "MP7" : "M4A1";
+        else if (command.key === "mode") s.fire = s.fire === "AUTO" ? "SEMI" : "AUTO";
+        else this.set({ ammo: 30 });
+        break;
       case "wake":
         this.wakes.push({ id: command.id, due: this.seconds + command.seconds });
         this.most = Math.max(this.most, this.wakes.length);
@@ -182,20 +189,21 @@ export class Mock {
 
 export { FLAG };
 
-const VIEW: Record<Device, { w: number; h: number; density: number }> = {
+const VIEW: Record<Device, { w: number; h: number; density: number; aux?: [number, number] }> = {
   psp: { w: 480, h: 272, density: 1 },
   vita: { w: 480, h: 272, density: 2 },
+  "3ds": { w: 400, h: 240, density: 1, aux: [320, 240] },
 };
 
 export interface Rig {
   mock: Mock;
   view: (typeof VIEW)[Device];
-  /** Advance `frames`, holding `buttons`; `touch` is the contacts on the panel. */
+  /** Advance `frames`, holding `buttons`; `touch` is the contacts on the surface that takes them. */
   step(frames?: number, input?: { buttons?: number; touch?: { x: number; y: number; id?: number }[] }): void;
   /** Press and release. */
   press(buttons: number): void;
   tap(x: number, y: number): void;
-  /** The screen over `backdrop`, at the device's density. */
+  /** The screen (and the auxiliary one under it) over `backdrop`, at the device's density. */
   shot(backdrop?: string | Canvas): Promise<Canvas>;
   /** Whether a text node of the interface holds exactly `text` now. */
   shows(text: string): boolean;
@@ -210,6 +218,7 @@ export async function boot(device: Device): Promise<Rig> {
   const wasmPath = join(root, "vendor/pocketjs/hosts/web/pocketjs.wasm");
   if (!existsSync(wasmPath)) throw new Error("run `bun tools/wasm.ts` in vendor/pocketjs first");
   const wasm = await createWasmUi(readFileSync(wasmPath), { width: view.w, height: view.h, rasterDensity: view.density });
+  if (view.aux) wasm.createAuxiliarySurface(view.aux[0], view.aux[1]);
   const mock = new Mock();
   const globals = globalThis as Record<string, any>;
   const pending: string[] = [];
@@ -240,11 +249,12 @@ export async function boot(device: Device): Promise<Rig> {
   globals.__pak = pak.buffer.slice(pak.byteOffset, pak.byteOffset + pak.byteLength);
   (0, eval)(readFileSync(join(directory, "duty.js"), "utf8"));
 
-  const facts = createTouchHitFacts((x, y) => ops.hitTestBounds(x, y));
+  const facts = createTouchHitFacts((x, y) => (view.aux ? ops.hitTestBoundsAuxiliary(x, y) : ops.hitTestBounds(x, y)));
   const frame = (buttons: number, touch: { x: number; y: number; id?: number }[]) => {
     mock.tick(1 / 60);
     const packed = touch.map((t) => __packTouch(t.id ?? 1, t.x, t.y));
-    globals.frame(buttons, undefined, packed, facts(packed), packed.map(() => 0));
+    const surface = view.aux ? 1 : 0;
+    globals.frame(buttons, undefined, packed, facts(packed), packed.map(() => surface));
     for (const line of pending.splice(0)) mock.receive(JSON.parse(line));
     wasm.tick();
   };
@@ -287,7 +297,8 @@ export async function boot(device: Device): Promise<Rig> {
     async shot(backdrop) {
       const scale = view.density;
       const top = matte(() => wasm.renderScaled(scale), 1, view.w, view.h, scale);
-      const canvas = createCanvas(view.w * scale, view.h * scale);
+      const auxH = view.aux ? view.aux[1] : 0;
+      const canvas = createCanvas(view.w * scale, (view.h + auxH) * scale);
       const ctx = canvas.getContext("2d");
       ctx.fillStyle = "#000000";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -298,6 +309,10 @@ export async function boot(device: Device): Promise<Rig> {
         ctx.drawImage(image as any, (image.width - width) / 2, (image.height - height) / 2, width, height, 0, 0, view.w * scale, view.h * scale);
       }
       ctx.drawImage(top, 0, 0);
+      if (view.aux) {
+        const bottom = matte(() => wasm.renderAuxiliary(), ops.__auxiliarySurface.root, view.aux[0], view.aux[1], 1);
+        ctx.drawImage(bottom, ((view.w - view.aux[0]) / 2) * scale, view.h * scale, view.aux[0] * scale, view.aux[1] * scale);
+      }
       return canvas;
     },
     shows(text) {

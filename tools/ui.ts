@@ -4,7 +4,7 @@
  * resolves `ui/pocket.json` against the device's profile, picks the
  * presentation its modality asks for and writes the bundle and its pak.
  *
- *   bun tools/ui.ts <psp|vita>          → .pocket-build/ui/<device>/duty.{js,pak}, plan.json
+ *   bun tools/ui.ts <psp|vita|3ds>      → .pocket-build/ui/<device>/duty.{js,pak}, plan.json
  *   bun tools/ui.ts prepare             → what the interface compiles from the cooked level (ui/app/generated/)
  *   bun tools/ui.ts preview [device…]   → pictures of every screen, .pocket-build/ui/preview/
  *   bun tools/ui.ts test                → the interface driven through a mock renderer
@@ -13,8 +13,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { extractHostBuildInputs, type HostBuildInputs } from "../vendor/pocketjs/framework/src/manifest/index.ts";
 import { createCanvas, loadImage } from "../vendor/pocketjs/node_modules/@napi-rs/canvas";
+import { resolve3dsBuildPlan } from "../vendor/pocketjs/tools/3ds-profile.ts";
 
-export const DEVICES = ["psp", "vita"] as const;
+export const DEVICES = ["psp", "vita", "3ds"] as const;
 export type Device = (typeof DEVICES)[number];
 
 const root = resolve(import.meta.dir, "..");
@@ -24,6 +25,9 @@ const manifest = join(project, "pocket.json");
 const generated = join(project, "app/generated");
 /** Where the cook leaves the level from above (`map.png`) and where that picture lies in the level (`map.json`). */
 const cooked = join(root, ".pocket-build/duty/psp30");
+
+/** Devices outside PocketJS's public registry resolve through a profile kept with their tool. */
+const PRIVATE: Partial<Record<Device, (manifest: unknown) => unknown>> = { "3ds": resolve3dsBuildPlan };
 
 export interface Interface {
   /** Directory holding `duty.js`, `duty.pak` and `plan.json`. */
@@ -100,9 +104,15 @@ export async function compileInterface(device: Device): Promise<Interface> {
   await prepareInterface(device);
   const directory = join(root, ".pocket-build/ui", device);
   mkdirSync(directory, { recursive: true });
-  run(["bun", "tools/pocket.ts", "compile", "--target", device, "--manifest", manifest, "--project-root", project, "--outdir", directory]);
   const planPath = join(directory, "plan.json");
-  await Bun.write(planPath, Bun.file(join(project, ".pocket", device, "plan.json")));
+  const resolver = PRIVATE[device];
+  if (resolver) {
+    writeFileSync(planPath, JSON.stringify(resolver(await Bun.file(manifest).json()), null, 2) + "\n");
+    run(["bun", "tools/build.ts", `--plan=${planPath}`, `--project-root=${project}`, `--outdir=${directory}`]);
+  } else {
+    run(["bun", "tools/pocket.ts", "compile", "--target", device, "--manifest", manifest, "--project-root", project, "--outdir", directory]);
+    await Bun.write(planPath, Bun.file(join(project, ".pocket", device, "plan.json")));
+  }
   const plan = await Bun.file(planPath).json();
   return { directory, plan, inputs: extractHostBuildInputs(plan) };
 }

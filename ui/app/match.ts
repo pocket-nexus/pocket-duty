@@ -3,7 +3,7 @@
 // kill feed still stand, and when something on the screen is due to leave.
 import { createEffect, createMemo, createSignal, on, onCleanup, untrack, type Accessor } from "solid-js";
 import { after } from "@pocketjs/framework/clock";
-import { glyph } from "@pocketjs/framework/modality";
+import { glyph, modality } from "@pocketjs/framework/modality";
 import type { Host } from "./host.ts";
 import type { Kill, Mode, Setting } from "./protocol.ts";
 
@@ -185,16 +185,18 @@ export function clock(seconds: number): string {
 }
 
 /** What the game is, where it comes from and what it is built on. */
-export const CREDITS = [
-  "Pocket Duty is a PSP port of Claude of Duty by mshumer (MIT),",
-  "built on Pocket3D and PocketJS.",
-];
+/** Two screens: the 3DS. */
+const DUAL = modality.screens.length > 1;
+
+export const CREDITS = DUAL
+  ? ["Pocket Duty is a Nintendo 3DS port of Claude of Duty", "by mshumer (MIT), built on Pocket3D and PocketJS."]
+  : ["Pocket Duty is a PSP port of Claude of Duty by mshumer (MIT),", "built on Pocket3D and PocketJS."];
 
 /** What the soldier's buttons do. The device maps them; these lines say what it maps. */
 export function controls(): Row[] {
   const face = `${glyph("triangle")} ${glyph("circle")} ${glyph("cross")} ${glyph("square")}`;
   return [
-    { label: "Stick", value: "Move" },
+    { label: DUAL ? "Circle Pad" : "Stick", value: "Move" },
     { label: "Full forward", value: "Sprint" },
     { label: face, value: "Look" },
     { label: glyph("rtrigger"), value: "Fire" },

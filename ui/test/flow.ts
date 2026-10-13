@@ -1,6 +1,6 @@
 // Drives one device's bundle through a whole session against the mock
 // renderer and checks what it asked for.
-//   bun ui/test/flow.ts <psp|vita>     (after `bun tools/ui.ts <device>`)
+//   bun ui/test/flow.ts <psp|vita|3ds>     (after `bun tools/ui.ts <device>`)
 import assert from "node:assert/strict";
 import { BTN } from "../../vendor/pocketjs/contracts/spec/spec.ts";
 import { T, type Command } from "../app/protocol.ts";
@@ -139,6 +139,35 @@ assert.equal(mock.most, 3);
 assert.equal(mock.idle, true);
 assert.deepEqual(wakes().map((wake) => wake.id), wakes().map((_, i) => i + 1));
 assert.deepEqual(asked(), []);
+
+// The touch screen's keys, where there is one: each asks for one press, and the menu's key opens the menu.
+if (device === "3ds") {
+  // (the lower screen's column: x 244…316; keys at y 90, 127, 164, 201, each 34 tall)
+  for (const y of [107, 144, 181]) {
+    rig.tap(280, y);
+    rig.step(4);
+  }
+  assert.deepEqual(asked(), [{ type: "tap", key: "weapon" }, { type: "tap", key: "mode" }, { type: "tap", key: "reload" }]);
+  assert.ok(rig.shows("MP7") && rig.shows("SEMI"));
+  // A tap on the map asks for nothing.
+  rig.tap(120, 120);
+  rig.step(4);
+  assert.deepEqual(asked(), []);
+  rig.tap(280, 218);
+  rig.step(8);
+  assert.deepEqual(asked(), [{ type: "menu", on: true }]);
+  assert.equal(mock.state.mode, "menu");
+  // In the menu the keys of a match are gone, and the one that stands resumes it.
+  rig.tap(280, 107);
+  rig.step(4);
+  assert.deepEqual(asked(), []);
+  rig.tap(280, 218);
+  rig.step(8);
+  assert.deepEqual(asked(), [{ type: "menu", on: false }]);
+  assert.equal(mock.state.mode, "play");
+  rig.step(30);
+  assert.equal(mock.idle, true);
+}
 
 // Down: the interface hears no button at all.
 mock.die(3.4);

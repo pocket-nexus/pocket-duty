@@ -1,5 +1,6 @@
-//! Pictures for a handheld: 8-bit indices into a palette of 256 colours, every level stored
-//! swizzled as the GE reads it.
+//! Pictures for a handheld. For the PSP: 8-bit indices into a palette of 256 colours, every level
+//! stored swizzled as the GE reads it. For the 3DS, whose PICA200 has no palettes: 16 bits a
+//! texel, every level in the tiles it reads.
 
 use std::path::Path;
 
@@ -148,6 +149,21 @@ fn nearest(palette: &[[f32; 4]], p: &[f32; 4]) -> usize {
 pub struct Texels {
     pub records: Vec<Texture>,
     pub bytes: Vec<u8>,
+    /// The PICA200's layouts (`texture::RGB565` and the others) instead of the GE's palettes.
+    pub pica: bool,
+}
+
+/// `values` (one for each texel, rows from the top) in the PICA200's order: tiles of 8 × 8, the
+/// top row of tiles first, a tile's texels in Z order.
+fn tiled<T: Copy + Default>(values: &[T], width: usize, height: usize) -> Vec<T> {
+    let spread = |v: usize| (v & 1) | (v & 2) << 1 | (v & 4) << 2;
+    let mut out = vec![T::default(); width * height];
+    for y in 0..height {
+        for x in 0..width {
+            out[((y / 8) * (width / 8) + x / 8) * 64 + (spread(x % 8) | spread(y % 8) << 1)] = values[y * width + x];
+        }
+    }
+    out
 }
 
 pub struct Options {
@@ -163,6 +179,12 @@ impl Texels {
     pub fn add_ramp(&mut self, image: &Image, flags: u16) -> u32 {
         self.bytes.resize((self.bytes.len() + 15) & !15, 0);
         let offset = self.bytes.len() as u32;
+        if self.pica {
+            let alpha: Vec<u8> = image.data.iter().map(|p| (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect();
+            self.bytes.extend(tiled(&alpha, image.width, image.height));
+            self.records.push(Texture { offset, width: image.width as u16, height: image.height as u16, levels: 1, format: texture::A8, flags });
+            return self.records.len() as u32 - 1;
+        }
         for i in 0..256u32 {
             self.bytes.extend([255, 255, 255, i as u8]);
         }
@@ -180,6 +202,9 @@ impl Texels {
         while levels.len() < options.levels && levels.last().unwrap().width > 16 && levels.last().unwrap().height > 16 {
             let last = levels.last().unwrap();
             levels.push(last.reduced(last.width / 2, last.height / 2));
+        }
+        if self.pica {
+            return self.add_pica(&levels, options);
         }
         // The palette is made from the first two levels: the ones seen most.
         let mut sample: Vec<[f32; 4]> = levels.iter().take(2).flat_map(|l| l.data.iter().copied()).collect();
@@ -245,16 +270,53 @@ impl Texels {
     }
 }
 
+impl Texels {
+    /// The levels as 16-bit texels: five bits each and one of alpha where the picture has holes,
+    /// five, six and five where it has none.
+    fn add_pica(&mut self, levels: &[Image], options: &Options) -> u32 {
+        let cutout = options.flags & texture::CUTOUT != 0;
+        self.bytes.resize((self.bytes.len() + 15) & !15, 0);
+        let offset = self.bytes.len() as u32;
+        let bits: [u32; 3] = if cutout { [5, 5, 5] } else { [5, 6, 5] };
+        for level in levels {
+            let (w, h) = (level.width, level.height);
+            let mut texels = vec![0u16; w * h];
+            let mut carried = vec![[0.0f32; 3]; if options.dither { w * h } else { 0 }];
+            for y in 0..h {
+                for x in 0..w {
+                    let mut p = level.data[y * w + x];
+                    if options.dither {
+                        for k in 0..3 {
+                            p[k] += carried[y * w + x][k];
+                        }
+                    }
+                    let q: [u16; 3] = core::array::from_fn(|k| (p[k].clamp(0.0, 1.0) * ((1 << bits[k]) - 1) as f32 + 0.5) as u16);
+                    texels[y * w + x] = if cutout { q[0] << 11 | q[1] << 6 | q[2] << 1 | (p[3] >= 0.5) as u16 } else { q[0] << 11 | q[1] << 5 | q[2] };
+                    if options.dither {
+                        // Floyd and Steinberg's weights.
+                        let error: [f32; 3] = core::array::from_fn(|k| p[k] - q[k] as f32 / ((1 << bits[k]) - 1) as f32);
+                        for (dx, dy, share) in [(1i32, 0i32, 7.0 / 16.0), (-1, 1, 3.0 / 16.0), (0, 1, 5.0 / 16.0), (1, 1, 1.0 / 16.0)] {
+                            let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+                            if nx >= 0 && nx < w as i32 && ny < h as i32 {
+                                for k in 0..3 {
+                                    carried[ny as usize * w + nx as usize][k] += error[k] * share;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            self.bytes.resize((self.bytes.len() + 15) & !15, 0);
+            self.bytes.extend(tiled(&texels, w, h).iter().flat_map(|t| t.to_le_bytes()));
+        }
+        let first = &levels[0];
+        self.records.push(Texture { offset, width: first.width as u16, height: first.height as u16, levels: levels.len() as u8, format: if cutout { texture::RGBA5551 } else { texture::RGB565 }, flags: options.flags });
+        self.records.len() as u32 - 1
+    }
+}
+
 /// A texel of a picture in the pack, for drawing a frame on this computer: `(x, y)` wrap.
 pub fn fetch(record: &Texture, texels: &[u8], level: u32, x: i32, y: i32) -> [f32; 4] {
     let (w, h) = ((record.width as i32 >> level).max(1), (record.height as i32 >> level).max(1));
-    let (x, y) = (x.rem_euclid(w) as usize, y.rem_euclid(h) as usize);
-    let (at, _) = record.level(level);
-    let base = record.offset as usize;
-    // Swizzled: blocks of 16 bytes by 8 rows.
-    let row_blocks = (w as usize) / 16;
-    let block = (y / 8) * row_blocks + x / 16;
-    let index = texels[base + at + block * 128 + (y % 8) * 16 + x % 16] as usize;
-    let c = &texels[base + index * 4..base + index * 4 + 4];
-    [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, c[3] as f32 / 255.0]
+    record.texel(texels, level, x.rem_euclid(w) as usize, y.rem_euclid(h) as usize).map(|c| c as f32 / 255.0)
 }

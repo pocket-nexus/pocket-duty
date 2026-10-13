@@ -270,6 +270,9 @@ pub enum Command {
     Idle(bool),
     /// Say `id` back in [`State::woke`] in this many seconds.
     Wake { id: u32, seconds: f32 },
+    /// A key of a touch screen was tapped: "weapon" (the next one), "mode" (the fire mode) or
+    /// "reload". The match hears it as one press of the pad's button for the same thing.
+    Tap(String),
 }
 
 /// The value after `"key":` in a flat JSON object. Quoted text is skipped when looking for the
@@ -357,6 +360,7 @@ impl Command {
             "prefs" => Command::Prefs(text(line, "value")?),
             "idle" => Command::Idle(flag(line, "on")),
             "wake" => Command::Wake { id: n("id").max(0.0) as u32, seconds: n("seconds") },
+            "tap" => Command::Tap(text(line, "key")?),
             _ => return None,
         })
     }
@@ -457,6 +461,8 @@ mod tests {
         assert_eq!(parse(r#"{"type":"prefs","value":"{\"look\":1}"}"#), Command::Prefs(r#"{"look":1}"#.into()));
         assert_eq!(parse(r#"{"type":"idle","on":true}"#), Command::Idle(true));
         assert_eq!(parse(r#"{"type":"wake","id":4,"seconds":2.5}"#), Command::Wake { id: 4, seconds: 2.5 });
+        assert_eq!(parse(r#"{"type":"tap","key":"weapon"}"#), Command::Tap("weapon".into()));
+        assert_eq!(Command::parse(r#"{"type":"tap"}"#), None);
         assert_eq!(Command::parse(r#"{"type":"pocket.overlay.control","name":"x","node":3}"#), None);
     }
 

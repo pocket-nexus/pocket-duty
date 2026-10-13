@@ -1,0 +1,33 @@
+; The sky, the effects and the muzzle's flash: float vertices with a colour
+; and texture coordinates of their own.
+.fvec mvp[4]
+; u = in.u * uvs.x + uvs.y, v = in.v * uvs.z + uvs.w
+.fvec uvs
+.constf consts(0.0, 1.0, 0.0039215686, 1.0)
+.in inuv v0
+.in inclr v1
+.in inpos v2
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.out outtc1 texcoord1
+.out outtc2 texcoord2
+.entry main
+.proc main
+    mov r0.xyz, inpos.xyz
+    mov r0.w, consts.y
+    dp4 outpos.x, mvp[0], r0
+    dp4 outpos.y, mvp[1], r0
+    dp4 outpos.z, mvp[2], r0
+    dp4 outpos.w, mvp[3], r0
+    mul r1, consts.zzzz, inclr
+    mov outclr, r1
+    mul r2.xy, uvs.xz, inuv.xy
+    add r2.xy, uvs.yw, r2.xy
+    mov r2.z, consts.x
+    mov r2.w, consts.y
+    mov outtc0, r2
+    mov outtc1, r2
+    mov outtc2, r2
+    end
+.end

@@ -67,6 +67,39 @@ pub struct Sight {
     pub clusters: usize,
 }
 
+impl Sight {
+    /// A sight pass kept from an earlier cook, when the file holds one.
+    pub fn read(path: &std::path::Path) -> Option<Sight> {
+        let bytes = std::fs::read(path).ok()?;
+        let word = |i: usize| Some(u64::from_le_bytes(bytes.get(i * 8..i * 8 + 8)?.try_into().ok()?) as usize);
+        let (magic, cells, lists, bits) = (word(0)?, word(1)?, word(2)?, word(3)?);
+        let at = 56;
+        if magic != 0x5447_4953_5954_5544 || bytes.len() != at + cells * 12 + lists * 2 + bits {
+            return None;
+        }
+        let cell = |i: usize| -> ViewCell { duty_pack::read(&bytes, at + i * 12).unwrap() };
+        Some(Sight {
+            cells: (0..cells).map(cell).collect(),
+            lists: bytes[at + cells * 12..at + cells * 12 + lists * 2].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(),
+            bits: bytes[at + cells * 12 + lists * 2..].to_vec(),
+            open: word(4)?,
+            chunks: word(5)?,
+            clusters: word(6)?,
+        })
+    }
+
+    pub fn write(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let mut out = Vec::new();
+        for word in [0x5447_4953_5954_5544usize, self.cells.len(), self.lists.len(), self.bits.len(), self.open, self.chunks, self.clusters] {
+            out.extend((word as u64).to_le_bytes());
+        }
+        out.extend(duty_pack::bytes_of(&self.cells));
+        out.extend(duty_pack::bytes_of(&self.lists));
+        out.extend(&self.bits);
+        std::fs::write(path, out)
+    }
+}
+
 pub fn compute(scene: &Scene, chunks: &[Chunk], clusters: &[Cluster], vertices: &[WorldVertex], indices: &[u16], collision: &Collision, set: &Settings) -> Sight {
     // The world as the device draws it at each level of detail, each triangle tagged with its cluster.
     let mut worlds = Vec::new();

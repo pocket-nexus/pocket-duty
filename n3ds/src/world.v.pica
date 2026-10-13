@@ -1,0 +1,60 @@
+; The street. A vertex is the pack's own twelve bytes: texture coordinates,
+; the surface's colour under the baked light as five, six and five bits, and
+; its place in steps from its cell's centre. The ground's shadow picture is
+; read at the place itself; the haze is the vertex's alpha.
+.fvec mvp[4]
+; u = in.u * uvs.x + uvs.y, v = in.v * uvs.z + uvs.w
+.fvec uvs
+; the shadow picture's coordinates from the stored place
+.fvec shadow[2]
+; x: 1 / (where the haze is whole - where it starts), y: -start times that
+.fvec fog
+.constf consts(0.0, 1.0, 0.03125, 0.125)
+.constf scale(0.032258065, 0.015873016, 32.0, 8.0)
+.in inuv v0
+.in inclr v1
+.in inpos v2
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.out outtc1 texcoord1
+.out outtc2 texcoord2
+.entry main
+.proc main
+    mov r0.xyz, inpos.xyz
+    mov r0.w, consts.y
+    dp4 r1.x, mvp[0], r0
+    dp4 r1.y, mvp[1], r0
+    dp4 r1.z, mvp[2], r0
+    dp4 r1.w, mvp[3], r0
+    mov outpos, r1
+    ; what the haze leaves: 1 - clamp(w * fog.x + fog.y)
+    mul r2.x, fog.x, r1.w
+    add r2.x, fog.y, r2.x
+    max r2.x, consts.x, r2.x
+    min r2.x, consts.y, r2.x
+    add r3.w, consts.y, -r2.x
+    ; the low byte holds red and the low three bits of green, the high byte the rest of green and blue
+    mul r4.xy, consts.zw, inclr.xy
+    flr r5.xy, r4.xy
+    mul r6.xy, scale.zw, r5.xy
+    add r6.xy, inclr.xy, -r6.xy
+    mul r7.x, scale.w, r6.y
+    add r7.x, r5.x, r7.x
+    mul r3.x, scale.x, r6.x
+    mul r3.y, scale.y, r7.x
+    mul r3.z, scale.x, r5.y
+    mov outclr, r3
+    mul r8.xy, uvs.xz, inuv.xy
+    add r8.xy, uvs.yw, r8.xy
+    mov r8.z, consts.x
+    mov r8.w, consts.y
+    mov outtc0, r8
+    dp4 r9.x, shadow[0], r0
+    dp4 r9.y, shadow[1], r0
+    mov r9.z, consts.x
+    mov r9.w, consts.y
+    mov outtc1, r9
+    mov outtc2, r9
+    end
+.end

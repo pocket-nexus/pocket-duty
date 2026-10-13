@@ -1,5 +1,5 @@
 // Writes pictures of the interface on one device to .pocket-build/ui/preview/.
-//   bun ui/test/preview.ts <psp|vita>     (after `bun tools/ui.ts <device>`)
+//   bun ui/test/preview.ts <psp|vita|3ds>     (after `bun tools/ui.ts <device>`)
 //
 // Each screen is laid over a picture of the scene: a capture of the device's
 // own frame when one stands at .pocket-build/ui/backdrops/scene.png, else a
@@ -174,7 +174,7 @@ rig.step(10);
 await save("results-lost");
 
 // Every picture on one sheet, four across, at one sample a logical pixel.
-const across = 4, w = rig.view.w, h = rig.view.h, gap = 6;
+const across = 4, w = rig.view.w, h = rig.view.h + (rig.view.aux?.[1] ?? 0), gap = 6;
 const sheet = createCanvas(across * (w + gap) + gap, Math.ceil(names.length / across) * (h + gap) + gap);
 const ctx = sheet.getContext("2d");
 ctx.fillStyle = "#333333";
