@@ -10,8 +10,12 @@
 // map's is .pocket-build/duty/ir) with this commit's compiler, builds the
 // program and writes one file to --out:
 //
-//   psp   pocket-duty-<version>-psp.zip   PSP/GAME/PocketDuty/, for the root of a Memory Stick: every map's pack
-//   3ds   pocket-duty-<version>.3dsx      the first map's pack and the interface in its ROMFS
+//   psp   pocket-duty-<version>-psp.zip   PSP/GAME/PocketDuty/, for the root of a Memory Stick
+//   3ds   pocket-duty-<version>-3ds.zip   3ds/pocket-duty/, for the root of a memory card: the .3dsx (the
+//                                         interface in its ROMFS, no pack) and packs/ beside it
+//
+// Both hold every map's pack as pieces named by their bytes under one list,
+// pocket.packs (tools/packs.ts): a section two maps share is one file.
 //
 // and release.json beside them: the commit, the version (ui/pocket.json),
 // each file's size and SHA-256, the inputs and the toolchains. A target that
@@ -26,7 +30,7 @@
 //
 // No package goes to Git or to a GitHub release.
 
-import { closeSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { deflateRawSync } from "node:zlib";
 import { cookedDir, FIRST, irDir, MAPS } from "./maps.ts";
@@ -57,12 +61,12 @@ const TARGETS = ["psp", "3ds"] as const;
 type Target = (typeof TARGETS)[number];
 
 /**
- * What each target cooks, the maps its package holds and what the package is called. A PSP reads a map's
- * pack from a file beside the program; a 3DS's pack is in its one `.3dsx`, which holds the first map's.
+ * What each target cooks, the maps its package holds and what the package is called. Both read a map's
+ * pack from pieces beside the program: the PSP in the EBOOT's folder, the 3DS in `packs/` beside its `.3dsx`.
  */
 const BUILDS: Record<Target, { profile: string; maps: string[]; filename: (version: string) => string; build: (log: string, output: string) => Promise<void> }> = {
   psp: { profile: "psp30", maps: MAPS.map((map) => map.id), filename: (v) => `${NAME}-${v}-psp.zip`, build: psp },
-  "3ds": { profile: "n3ds30", maps: [FIRST], filename: (v) => `${NAME}-${v}.3dsx`, build: n3ds },
+  "3ds": { profile: "n3ds30", maps: MAPS.map((map) => map.id), filename: (v) => `${NAME}-${v}-3ds.zip`, build: n3ds },
 };
 
 const sha256 = (bytes: Uint8Array | string) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
@@ -161,10 +165,13 @@ async function psp(log: string, output: string): Promise<void> {
   writeZip(output, [{ name: "PSP/" }, { name: "PSP/GAME/" }, ...tree(join(ROOT, "dist/psp/PSP/GAME/PocketDuty"), "PSP/GAME/PocketDuty")]);
 }
 
-/** The `.3dsx` with the pack and the interface in its ROMFS (`tools/n3ds.ts` `build`). */
+/** The memory card's folder (`tools/n3ds.ts` `card`): the `.3dsx` without a pack, and every map's pack beside it. */
 async function n3ds(log: string, output: string): Promise<void> {
-  await run(log, ["bun", "tools/n3ds.ts", "build"]);
-  cpSync(join(ROOT, "dist/3ds/pocket-duty.3dsx"), output);
+  const card = join(ROOT, "dist/3ds/card");
+  rmSync(card, { recursive: true, force: true });
+  await run(log, ["bun", "tools/n3ds.ts", "build", "--embed", "none"]);
+  await run(log, ["bun", "tools/n3ds.ts", "card", card]);
+  writeZip(output, [{ name: "3ds/" }, ...tree(join(card, "3ds/pocket-duty"), "3ds/pocket-duty")]);
 }
 
 /** A package is refused when it is empty or holds what only a development run uses. */
