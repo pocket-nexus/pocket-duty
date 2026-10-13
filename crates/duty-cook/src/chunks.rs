@@ -33,6 +33,9 @@ pub struct Built {
 pub struct Settings {
     /// What is left of the sky's fill where no sky is seen at all, 0…1.
     pub open_floor: f32,
+    /// A cut-out's face (a leaf) takes the light of whichever of its two sides has more of it: the eye
+    /// sees a leaf from both, and its stored normal looks at the ground as often as at the sky.
+    pub leaves_both: bool,
     /// The picture each material samples.
     pub texture_of: Vec<u16>,
     pub texture_flags: Vec<u16>,
@@ -57,7 +60,11 @@ pub struct Settings {
 type LightKey = ([i32; 3], [i8; 3]);
 
 fn light_key(at: [f32; 3], c: &Corner, quantum: f32) -> LightKey {
-    (at.map(|p| (p / quantum).round() as i32), c.nrm.map(|n| (n * 24.0).round() as i8))
+    key_of(at, c.nrm, quantum)
+}
+
+fn key_of(at: [f32; 3], nrm: [f32; 3], quantum: f32) -> LightKey {
+    (at.map(|p| (p / quantum).round() as i32), nrm.map(|n| (n * 24.0).round() as i8))
 }
 
 /// Where a corner's light is taken: a few centimetres into its own triangle. At the corner itself
@@ -103,9 +110,14 @@ struct Sun<'a> {
 impl Sun<'_> {
     /// How much of the sun the corner sees from `at`.
     fn at(&mut self, c: &Corner, at: [f32; 3]) -> f32 {
+        self.facing(c.nrm, at)
+    }
+
+    /// The same for a face at `at` that looks along `nrm`.
+    fn facing(&mut self, nrm: [f32; 3], at: [f32; 3]) -> f32 {
         let (lighting, sun) = (self.lighting, self.lighting.sky.sun);
-        *self.seen.entry(light_key(at, c, self.quantum)).or_insert_with(|| {
-            let n = v3(c.nrm[0], c.nrm[1], c.nrm[2]);
+        *self.seen.entry(key_of(at, nrm, self.quantum)).or_insert_with(|| {
+            let n = v3(nrm[0], nrm[1], nrm[2]);
             if n.dot(sun) <= 0.02 {
                 0.0
             } else {
@@ -272,18 +284,27 @@ fn light_piece(piece: &Piece, material: &Material, scene: &Scene, lighting: &Lig
             let mut corners = [0u16; 3];
             for (k, c) in tri.iter().enumerate() {
                 let at = sample_point(c, tri);
-                let key = light_key(at, c, scene.quantum);
-                let n = v3(c.nrm[0], c.nrm[1], c.nrm[2]);
-                let sky = *open.entry(key).or_insert_with(|| lighting.open(v3(at[0], at[1], at[2]), n));
-                let fill = set.open_floor + (1.0 - set.open_floor) * sky;
-                let facing = n.dot(sun_dir).max(0.0);
-                let seen = if piece.ground { 1.0 } else { sun.at(c, at) };
                 let albedo = c.col.map(|v| v.powf(2.2));
                 // A surface the reference's program could not be asked takes the fill open ground has.
                 let ambient = if c.amb[0] < 0.0 { [albedo[0] * 0.13, albedo[1] * 0.21, albedo[2] * 0.41] } else { c.amb };
-                // (a place's own light: a warmer sky, the ground's bounce, lamps; nothing for the street)
-                let (gain, added) = (lighting.sky_gain(), lighting.added(v3(at[0], at[1], at[2]), n, sky));
-                let linear: [f32; 3] = core::array::from_fn(|i| ambient[i] * gain[i] * fill + albedo[i] * (added[i] + lighting.sky.sun_colour[i] * facing * seen * core::f32::consts::FRAC_1_PI));
+                // The light on the face as it looks along `nrm`.
+                let mut side = |nrm: [f32; 3]| -> [f32; 3] {
+                    let n = v3(nrm[0], nrm[1], nrm[2]);
+                    let sky = *open.entry(key_of(at, nrm, scene.quantum)).or_insert_with(|| lighting.open(v3(at[0], at[1], at[2]), n));
+                    let fill = set.open_floor + (1.0 - set.open_floor) * sky;
+                    let facing = n.dot(sun_dir).max(0.0);
+                    let seen = if piece.ground { 1.0 } else { sun.facing(nrm, at) };
+                    // (a place's own light: a warmer sky, the ground's bounce, lamps; nothing for the street)
+                    let (gain, added) = (lighting.sky_gain(), lighting.added(v3(at[0], at[1], at[2]), n, sky));
+                    core::array::from_fn(|i| ambient[i] * gain[i] * fill + albedo[i] * (added[i] + lighting.sky.sun_colour[i] * facing * seen * core::f32::consts::FRAC_1_PI))
+                };
+                let mut linear = side(c.nrm);
+                if set.leaves_both && material.cutout {
+                    let other = side(c.nrm.map(|n| -n));
+                    if other[0] + other[1] + other[2] > linear[0] + linear[1] + linear[2] {
+                        linear = other;
+                    }
+                }
                 let uv = coords[l][t][k];
                 let v = WorldVertex {
                     uv: [(((uv[0] - uv_offset[0]) / uv_scale[0]) * 32768.0).round().clamp(0.0, 32767.0) as i16, (((uv[1] - uv_offset[1]) / uv_scale[1]) * 32768.0).round().clamp(0.0, 32767.0) as i16],

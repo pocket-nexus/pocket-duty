@@ -65,6 +65,73 @@ impl Image {
         out
     }
 
+    /// Averaged down as `reduced` does, a texel's colour counting as much as the texel is there: the
+    /// colour of a shape's edge is the shape's, however much of the edge is hole.
+    pub fn reduced_by_cover(&self, width: usize, height: usize) -> Image {
+        assert!(width <= self.width && height <= self.height, "a picture of {} × {} is not made larger ({width} × {height})", self.width, self.height);
+        let (fx, fy) = (self.width / width, self.height / height);
+        let mut out = Image::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                let (mut sum, mut cover) = ([0.0f32; 3], 0.0f32);
+                for j in 0..fy {
+                    for i in 0..fx {
+                        let p = self.data[(y * fy + j) * self.width + x * fx + i];
+                        for k in 0..3 {
+                            sum[k] += p[k] * p[3];
+                        }
+                        cover += p[3];
+                    }
+                }
+                out.data[y * width + x] = if cover > 0.0 { [sum[0] / cover, sum[1] / cover, sum[2] / cover, cover / (fx * fy) as f32] } else { [0.0; 4] };
+            }
+        }
+        out
+    }
+
+    /// Gives every texel that is not there at all (alpha 0) the colour of the texels about it that
+    /// are, ring by ring until none is left; its alpha stays 0. The picture repeats at its edges.
+    pub fn spread(&mut self) {
+        let (w, h) = (self.width as i32, self.height as i32);
+        let mut known: Vec<bool> = self.data.iter().map(|p| p[3] > 0.0).collect();
+        if !known.contains(&true) {
+            return;
+        }
+        while known.contains(&false) {
+            let mut found: Vec<(usize, [f32; 3])> = Vec::new();
+            for y in 0..h {
+                for x in 0..w {
+                    let at = (y * w + x) as usize;
+                    if known[at] {
+                        continue;
+                    }
+                    let (mut sum, mut weight) = ([0.0f32; 3], 0.0f32);
+                    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                        let near = ((y + dy).rem_euclid(h) * w + (x + dx).rem_euclid(w)) as usize;
+                        if known[near] {
+                            // (a texel that is there counts by its cover, one this spread reached counts as a faint one)
+                            let share = self.data[near][3].max(1.0 / 255.0) * if dx != 0 && dy != 0 { 0.7 } else { 1.0 };
+                            for k in 0..3 {
+                                sum[k] += self.data[near][k] * share;
+                            }
+                            weight += share;
+                        }
+                    }
+                    if weight > 0.0 {
+                        found.push((at, sum.map(|c| c / weight)));
+                    }
+                }
+            }
+            if found.is_empty() {
+                break;
+            }
+            for (at, colour) in found {
+                self.data[at] = [colour[0], colour[1], colour[2], 0.0];
+                known[at] = true;
+            }
+        }
+    }
+
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), self.width as u32, self.height as u32);
@@ -290,9 +357,23 @@ impl Texels {
         assert!(image.width.is_power_of_two() && image.height.is_power_of_two() && image.width <= 4096 && image.height <= 4096, "a texture of {} × {}", image.width, image.height);
         let cutout = options.flags & texture::CUTOUT != 0;
         let mut levels = vec![image.clone()];
+        if cutout {
+            // A clear texel's colour is nobody's (black, in the pictures the reference forges), and the
+            // device's filter mixes it into the edge of every shape: it takes the colour of the texels
+            // about it that are there, at every level.
+            levels[0].spread();
+        }
         while levels.len() < options.levels && (levels.last().unwrap().width > 1 || levels.last().unwrap().height > 1) {
             let last = levels.last().unwrap();
-            levels.push(last.reduced((last.width / 2).max(1), (last.height / 2).max(1)));
+            let (width, height) = ((last.width / 2).max(1), (last.height / 2).max(1));
+            let next = if cutout {
+                let mut next = last.reduced_by_cover(width, height);
+                next.spread();
+                next
+            } else {
+                last.reduced(width, height)
+            };
+            levels.push(next);
         }
         if cutout {
             // A smaller level is a mean of texels, and the mean of a thin shape (a leaf, a wire) is under one
@@ -396,6 +477,29 @@ mod tests {
         let (start, bytes) = record.level(3);
         assert_eq!((bytes, start + bytes <= texels.bytes.len() - record.offset as usize), (4, true));
         assert_eq!(record.texel(&texels.bytes, 3, 0, 0)[1], 64);
+    }
+
+    /// A hole's texels take the colour of the shape beside them, at every level, and stay holes.
+    #[test]
+    fn a_hole_takes_the_colour_of_what_is_about_it() {
+        let mut image = Image::new(32, 32);
+        for (i, p) in image.data.iter_mut().enumerate() {
+            // A green column in eight; the rest is clear and black.
+            *p = if i % 8 == 0 { [0.25, 0.75, 0.5, 1.0] } else { [0.0, 0.0, 0.0, 0.0] };
+        }
+        let mut texels = Texels { rgba: true, ..Default::default() };
+        let at = texels.add(&image, &Options { levels: 10, flags: texture::CUTOUT, dither: false }) as usize;
+        let record = texels.records[at];
+        for l in 0..record.levels as u32 {
+            let side = (32usize >> l).max(1);
+            for i in 0..side * side {
+                let c = record.texel(&texels.bytes, l, i % side, i / side);
+                assert_eq!((c[0], c[1], c[2]), (64, 191, 128), "level {l}, texel {i}");
+            }
+        }
+        // (the first level's holes are still holes)
+        assert_eq!(record.texel(&texels.bytes, 0, 3, 3)[3], 0);
+        assert_eq!(record.texel(&texels.bytes, 0, 8, 3)[3], 255);
     }
 
     /// A thin shape passes the device's test in as much of a smaller level as of the first.
