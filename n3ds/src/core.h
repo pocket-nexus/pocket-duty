@@ -141,6 +141,9 @@ const char *dt_init(const DtPack *pack, uint32_t (*clock)(void));
 uint32_t dt_wanted(char *out, uint32_t cap);
 /* Lets go of the pack: nothing of it is read after this returns. No other thread may be inside the core. */
 void dt_drop(void);
+/* The held map from above: its texture in the interface's core (negative: none), the picture's side in pixels,
+ * the map's side in it, the metres a pixel covers. Before dt_init, or at any time after it. */
+void dt_chart(int32_t texture, uint32_t picture, uint32_t side, float metres);
 void dt_stage(uint32_t error, const char *message, uint32_t len);
 void dt_prefs_stored(const char *text, uint32_t len);
 uint32_t dt_prefs_take(char *out, uint32_t cap);

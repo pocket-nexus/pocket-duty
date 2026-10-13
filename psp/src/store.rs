@@ -50,6 +50,8 @@ pub struct Section {
 pub struct PackFile {
     /// The map's pack as the manifest lists it: its pieces in order.
     pack: Pack,
+    /// The pack beside it that brings the map from above (`<id>-map`), when the manifest has one.
+    chart: Option<Pack>,
     /// The piece last read from, open. Sections are read in the pack's order, so a piece is opened once.
     piece: Cell<([u8; NAME_DIGITS], SceUid)>,
     pub sections: Vec<Section>,
@@ -290,9 +292,11 @@ impl PackFile {
             return Err("no pocket.packs beside the program or on host0:/duty");
         }
         let list = Manifest::parse(manifest()).map_err(|_| "pocket.packs is not a list of packs")?;
-        let pack = list.packs.into_iter().find(|pack| pack.name == map().id).ok_or("pocket.packs has no pack for the map")?;
+        let mut packs = list.packs;
+        let chart = packs.iter().position(|pack| pack.name.strip_suffix("-map") == Some(map().id)).map(|at| packs.swap_remove(at));
+        let pack = packs.into_iter().find(|pack| pack.name == map().id).ok_or("pocket.packs has no pack for the map")?;
         let bytes = pack.bytes;
-        let mut file = PackFile { pack, piece: Cell::new(([0; NAME_DIGITS], SceUid(-1))), sections: Vec::new(), bytes: bytes as u32, host: false };
+        let mut file = PackFile { pack, chart, piece: Cell::new(([0; NAME_DIGITS], SceUid(-1))), sections: Vec::new(), bytes: bytes as u32, host: false };
         let mut head = [0u32; 4];
         file.read(0, head.as_mut_ptr().cast(), 16)?;
         if head[0] != duty_pack::MAGIC {
@@ -323,6 +327,17 @@ impl PackFile {
             pocket3d_packs::ReadError::Store(why) => why,
             pocket3d_packs::ReadError::Pack(_) => "read past the pack's end",
         })
+    }
+
+    /// The map from above, as the pack beside the map's own brings it (`duty_interface::Chart`): whole,
+    /// in memory the allocator takes back. `None` for a map that came without one, or with no room.
+    pub unsafe fn chart(&self) -> Option<Vec<u8>> {
+        let chart = self.chart.as_ref()?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(chart.bytes as usize).ok()?;
+        bytes.resize(chart.bytes as usize, 0);
+        Reader::new(chart, Pieces(&self.piece)).read(0, &mut bytes).ok()?;
+        Some(bytes)
     }
 
     /// Bytes of the sections: all of them stay in memory.

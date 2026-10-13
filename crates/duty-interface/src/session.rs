@@ -13,6 +13,7 @@ use duty_sim::player::{btn, Input};
 use duty_sim::tune::{mode, DT};
 
 use crate::maps::{self, MAPS};
+use crate::Chart;
 use crate::{channel, flag, t, Command, Kill, Mode, Outcome, Setting, State};
 
 /// The pad as a device hands it over: one bit a button, whatever the device calls it.
@@ -83,6 +84,9 @@ pub struct Session {
     /// A map the interface asked for that the device does not hold: the device takes it, reads that
     /// map's pack, sets `map_id` and calls [`Session::play`].
     pub wanted: Option<&'static str>,
+    /// The held map from above, when the device read one beside the map's pack ([`Chart`]): the
+    /// device sets it with `map_id`.
+    pub chart: Option<Chart>,
 }
 
 /// What asking for a match on a map comes to: nothing, a new match on the map that is held, or
@@ -102,7 +106,7 @@ impl Default for Session {
 
 impl Session {
     pub fn new() -> Session {
-        Session { mode: Mode::Title, idle: false, stats: false, look: 1, invert: false, assist: true, layout: 0, skill: 1, listed: None, seconds: 0.0, wakes: Vec::new(), feed: Vec::new(), lines: 0, banner: (0, "", ""), prev_held: u32::MAX, tapped: 0, frames: 0, map: (0.0, 0.0), focal: 213.0, map_id: MAPS[0].id, maps: alloc::vec![MAPS[0].id], wanted: None }
+        Session { mode: Mode::Title, idle: false, stats: false, look: 1, invert: false, assist: true, layout: 0, skill: 1, listed: None, seconds: 0.0, wakes: Vec::new(), feed: Vec::new(), lines: 0, banner: (0, "", ""), prev_held: u32::MAX, tapped: 0, frames: 0, map: (0.0, 0.0), focal: 213.0, map_id: MAPS[0].id, maps: alloc::vec![MAPS[0].id], wanted: None, chart: None }
     }
 
     /// What a row of the map list comes to. A list is up (no match runs under a map that goes), and
@@ -290,6 +294,9 @@ impl Session {
         state.map = self.map_id;
         if state.maps != self.maps {
             state.maps.clone_from(&self.maps);
+        }
+        if state.chart != self.chart {
+            state.chart.clone_from(&self.chart);
         }
         let listed = (self.look, self.invert, self.assist, self.layout, self.skill, self.stats);
         if self.listed != Some(listed) {

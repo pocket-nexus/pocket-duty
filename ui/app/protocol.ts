@@ -71,6 +71,12 @@ export interface HostState {
    *  list's order. A renderer that holds one map lists that one. */
   map: string;
   maps: string[];
+  /** The held map from above, as the renderer read it beside the map's pack, or null for a map that
+   *  came without one: `[texture, picture, side, metres]`, and for a renderer that cannot reach the
+   *  interface's core a fifth member. `texture` is the picture's texture in the core (-1 with a fifth
+   *  member: the picture as an image entry in base64, which the interface uploads); `picture` is its
+   *  side in pixels, `side` the map's side in it, `metres` what a pixel covers. */
+  chart: [number, number, number, number, string?] | null;
   /** The numbers that change during play, at most once a turn (see `T`). */
   t: number[];
 }

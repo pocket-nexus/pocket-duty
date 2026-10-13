@@ -4,6 +4,8 @@
 // stands among the readouts; it does not lay a screen out again.
 import { createMemo, Show } from "solid-js";
 import { Text, View } from "@pocketjs/framework/components";
+import { getOps } from "@pocketjs/framework/host";
+import { fitLines } from "../lines.ts";
 import type { Match, Sheet } from "../match.ts";
 import { About, Ammo, Banner, Compass, Crosshair, Edges, Heading, Hitmarker, Hurt, Keep, KillFeed, Killed, LevelMap, MatchBar, type Menu, Outcome, Panel, ReloadPrompt, Rows, Stats, Tally, Vitals, Wordmark } from "../parts.tsx";
 import { DIM, HAIRLINE } from "../theme.ts";
@@ -60,6 +62,9 @@ export function Title(props: { frame: Frame; match: Match; menu: Menu }) {
   const up = (sheet: Sheet) => match.mode() === "title" && match.sheet() === sheet;
   // The name and the title's rows leave while a panel is up: type under a panel shows through its glass.
   const home = createMemo(() => match.mode() !== "title" || match.sheet() === "menu");
+  // The map's line in the smallest type (font slot 0), inside the screen: 24 from the left, 16 kept at the right.
+  // A host that measures nothing counts six pixels a character.
+  const line = createMemo(() => fitLines(match.map().line, W - 24 - 16, 2, (row) => getOps().measureText(row, 0) || row.length * 6));
   return (
     <View class="relative w-full h-full">
       {/* The title's own rows, and the panels a list opened from them comes up in. All stay built:
@@ -67,8 +72,9 @@ export function Title(props: { frame: Frame; match: Match; menu: Menu }) {
       <View class="absolute" style={{ insetL: 0, insetT: 0, width: W, height: H, display: home() ? 0 : 1, hitPass: 1 }}>
         <View class="absolute bg-gradient-to-r from-[#000000c8] to-[#00000000]" style={{ insetL: 0, insetT: 0, width: 330, height: H }} />
         <View class="absolute" style={{ insetL: 24, insetT: 22 }}><Wordmark large /></View>
-        {/* The map behind the title, in its own words. */}
-        <Text class="absolute text-xs" style={{ insetL: 24, insetT: 88, textColor: DIM }}>{match.map().line}</Text>
+        {/* The map behind the title, in its own words: one row, or two on a screen it does not cross in one. */}
+        <Text class="absolute text-xs" style={{ insetL: 24, insetT: 88, textColor: DIM }}>{line()[0] ?? ""}</Text>
+        <Text class="absolute text-xs" style={{ insetL: 24, insetT: 101, textColor: DIM }}>{line()[1] ?? ""}</Text>
         <View class="absolute" style={{ insetL: 10, insetT: 114 }}>
           <Rows match={match} menu={props.menu} width={190} rowHeight={26} active={() => up("menu")} warm={[match.lists.title]} />
         </View>

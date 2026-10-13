@@ -12,11 +12,11 @@ import { Image, Text, View } from "@pocketjs/framework/components";
 import type { SurfaceId } from "@pocketjs/framework/display";
 import { createGesture } from "@pocketjs/framework/gesture";
 import { prop as hotProp, text as hotText } from "@pocketjs/framework/hot";
+import { getOps } from "@pocketjs/framework/host";
 import { BTN } from "@pocketjs/framework/input";
 import { onFrame } from "@pocketjs/framework/lifecycle";
 import { modality } from "@pocketjs/framework/modality";
 import type { NodeMirror } from "@pocketjs/framework/renderer";
-import { MAPS } from "./generated/level.ts";
 import type { Host } from "./host.ts";
 import { clock, CREDITS, HURT_SECONDS, read, SETTLE, type Match, type Row } from "./match.ts";
 import { BLIPS, FLAG, T } from "./protocol.ts";
@@ -503,19 +503,31 @@ export function Board(props: { host: Host; width: number }) {
  * renderer lists. Positions arrive in decimetres from the picture's top left
  * corner. Nothing turns: the tick has sixteen places around the dot.
  *
- * Every map's picture stays built, and the one of the map the renderer holds
- * is shown: another map is a display flag, not a picture decoded during play.
+ * The picture is the held map's own: the renderer reads it beside the map's
+ * pack and says where it put it (`chart` of the state). The interface holds no
+ * map's picture itself, so a map that arrives later brings its own.
  */
 export function LevelMap(props: { host: Host; size: number }) {
-  let me: Node, tick: Node;
+  let me: Node, tick: Node, picture: Node;
   const blips = Array.from({ length: BLIPS }, (_, index) => ({ index, node: undefined as Node }));
   // What arrived last, as it arrived: a turn in which the player and the enemies stood still writes nothing.
   let x = NaN, z = NaN, heading = NaN, faced = -1, count = -1;
   const seen = new Array<number>(BLIPS * 2).fill(NaN);
-  // The map the renderer holds: its picture's scale. Before the renderer has said, the first.
-  let held = MAPS[0];
-  createEffect(on(props.host.map, (id) => {
-    held = MAPS.find((map) => map.id === id) ?? MAPS[0];
+  // The held map's picture: its side in pixels, the map's side in it, the metres a pixel covers. Before
+  // the renderer has said, and for a map without a picture, the dots keep the scale every map so far has.
+  const [chart, setChart] = createSignal({ texture: 256, side: 256, metres: 0.625, shown: false });
+  let held = chart();
+  // A texture this interface uploaded itself (in a browser tab), to free when another map's comes.
+  let own = -1;
+  createEffect(on(props.host.chart, (told) => {
+    const ops = getOps();
+    if (own >= 0) ops.freeTexture?.(own);
+    own = -1;
+    let texture = told ? told[0] : -1;
+    if (told && texture < 0 && told[4] && ops.uploadImgEntry) texture = own = ops.uploadImgEntry(Uint8Array.from(atob(told[4]), (c) => c.charCodeAt(0)));
+    if (texture >= 0 && picture) ops.setImage(picture.id, texture);
+    held = told ? { texture: told[1], side: told[2], metres: told[3], shown: texture >= 0 } : { ...held, shown: false };
+    setChart(held);
     // What was drawn was drawn at the other map's scale.
     x = z = NaN;
     seen.fill(NaN);
@@ -549,9 +561,7 @@ export function LevelMap(props: { host: Host; size: number }) {
   });
   return (
     <View class="relative" style={{ width: props.size, height: props.size, bgColor: "#10161c" }}>
-      <For each={MAPS}>
-        {(map, index) => <Image src={map.image} class="absolute" style={{ insetL: 0, insetT: 0, width: (props.size * map.texture) / map.side, height: (props.size * map.texture) / map.side, display: (props.host.map() ? props.host.map() === map.id : index() === 0) ? 0 : 1 }} />}
-      </For>
+      <Image ref={picture} class="absolute" style={{ insetL: 0, insetT: 0, width: (props.size * chart().texture) / chart().side, height: (props.size * chart().texture) / chart().side, display: chart().shown ? 0 : 1 }} />
       <View class="absolute" style={{ insetL: 0, insetT: 0, width: props.size, height: props.size, borderWidth: 1, borderColor: HAIRLINE }} />
       <For each={blips}>
         {(blip) => <View ref={blip.node} class="absolute rounded-full w-[5] h-[5]" style={{ insetL: -2, insetT: -2, opacity: 0, bgColor: RED, borderWidth: 1, borderColor: OUTLINE }} />}

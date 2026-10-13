@@ -17,6 +17,7 @@ use pocket_web_wgpu::wgpu::TextureFormat;
 use wasm_bindgen::prelude::*;
 
 use crate::app::{self, App, Held, Shape, SHAPES};
+use duty_interface::Chart;
 use crate::pack::Progress;
 
 fn describe(s: &Shape) -> String {
@@ -61,6 +62,18 @@ pub struct Reader {
 #[wasm_bindgen]
 pub struct World {
     world: app::World,
+    /// The map from above, when the manifest has it beside the map's pack.
+    chart: Option<Chart>,
+}
+
+/// The pack `<map>-map` beside a map's own (`duty_interface::Chart`, tools/packs.ts). A tab's interface
+/// runs in a realm this module cannot reach into: the picture is told to it in the state, as text,
+/// and it puts it in its core itself.
+async fn read_chart(place: &str) -> Option<Chart> {
+    let bytes = Source::open(place).await.ok()?.all().await.ok()?;
+    let (mut chart, entry) = Chart::parse(&bytes)?;
+    chart.entry = duty_interface::base64(entry);
+    Some(chart)
 }
 
 #[wasm_bindgen]
@@ -70,7 +83,9 @@ impl Reader {
     pub async fn read(self, url: String) -> Result<World, JsError> {
         let source = Source::open(&url).await.map_err(|e| JsError::new(&e))?;
         let world = app::World::read(self.gpu, self.format, source, self.progress).await.map_err(|e| JsError::new(&e))?;
-        Ok(World { world })
+        // (a pack named in a manifest has its picture under the same manifest; a lone file has none)
+        let chart = if url.contains(".packs#") { read_chart(&format!("{url}-map")).await } else { None };
+        Ok(World { world, chart })
     }
 }
 
@@ -116,6 +131,7 @@ impl Duty {
     /// a match starts on it.
     pub fn enter(&mut self, world: World) {
         self.app.enter(world.world);
+        self.app.chart(world.chart);
     }
 
     /// Whether the world is there.

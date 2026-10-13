@@ -35,6 +35,7 @@
 
 #include "core.h"
 #include "packs_delivery.h"
+#include "pocket_core.h"
 #include "pocket3d_packs.h"
 #include "devserver.h"
 #include "gfx.h"
@@ -235,6 +236,37 @@ static bool pack_whole(u32 index) {
   return true;
 }
 
+/* The held map from above, in the interface's core: its texture there, or -1. The picture is the pack
+ * `<id>-map` of the same manifest (tools/packs.ts): 16 bytes of facts, then a PocketJS image entry. A map
+ * that came without one has no picture, and the interface shows its dots on a plain ground. */
+static int32_t chart = -1;
+
+static void load_chart(void) {
+  if (chart >= 0)
+    ui_free_texture(chart);
+  chart = -1;
+  dt_chart(-1, 0, 0, 0);
+  char name[P3D_PACK_NAME_BYTES + 8], found[P3D_PACK_NAME_BYTES + 1];
+  snprintf(name, sizeof name, "%s-map", held_id);
+  int32_t index = p3d_packs_find(packs, name);
+  if (index < 0 || !guest_running())
+    return;
+  u32 bytes = (u32)p3d_packs_name(packs, index, found);
+  u8 *pack = bytes >= 16 && bytes <= 2 * 1024 * 1024 ? malloc(bytes) : NULL;
+  if (pack && p3d_packs_read(packs, index, 0, pack, bytes, piece_read, NULL) == 0 && memcmp(pack, "DMAP", 4) == 0) {
+    u16 picture, side;
+    float metres;
+    u32 entry;
+    memcpy(&picture, pack + 4, 2);
+    memcpy(&side, pack + 6, 2);
+    memcpy(&metres, pack + 8, 4);
+    memcpy(&entry, pack + 12, 4);
+    if (entry <= bytes - 16 && (chart = ui_upload_img_entry(pack + 16, entry)) >= 0)
+      dt_chart(chart, picture, side, metres);
+  }
+  free(pack);
+}
+
 /* Finds the manifest and says which maps there is a whole pack for (`have`: ids with spaces between). */
 static bool find_packs(char *have, size_t cap) {
   for (unsigned d = 0; d < sizeof PACK_DIRS / sizeof *PACK_DIRS && !packs; d++) {
@@ -293,7 +325,12 @@ static u32 micros(void) { return (u32)(svcGetSystemTick() * 1000000ULL / SYSCLOC
 
 static char maps_have[256];
 
+/* The C heap in use before a map was read, with its sections in memory, with the core started and with the
+ * renderer set up: what a change of map is measured by (`change_note`). */
+static u32 load_heap[4];
+
 static bool load(const char *id) {
+  load_heap[0] = mallinfo().uordblks;
   u32 sizes[8];
   dt_sizes(sizes);
   if (sizes[0] != sizeof(DtPack) || sizes[1] != sizeof(DtDraw) || sizes[2] != sizeof(DtFigure) || sizes[3] != sizeof(DtView) || sizes[4] != sizeof(DtScene) || sizes[5] != sizeof(DtTexture) || sizes[6] != sizeof(DtFxVertex) ||
@@ -308,6 +345,7 @@ static bool load(const char *id) {
   snprintf(first, sizeof first, "%.*s", (int)strcspn(maps_have, " "), maps_have);
   if (!open_pack(id ? id : first))
     return false;
+  load_chart();
   static RenderData data;
   static DtPack p;
   memset(&p, 0, sizeof p);
@@ -367,8 +405,10 @@ static bool load(const char *id) {
     fclose(piece);
   piece = NULL;
   loading("Starting");
+  load_heap[1] = mallinfo().uordblks;
   dt_maps(held_id, maps_have);
   const char *e = dt_init(&p, micros);
+  load_heap[2] = mallinfo().uordblks;
   if (e) {
     snprintf(app_error, sizeof app_error, "%s", e);
     return false;
@@ -379,7 +419,9 @@ static bool load(const char *id) {
   data.textures = p.textures;
   data.texture_count = p.texture_count;
   data.texels = p.texels;
-  return render_init(&data, app_error, sizeof app_error);
+  bool ready = render_init(&data, app_error, sizeof app_error);
+  load_heap[3] = mallinfo().uordblks;
+  return ready;
 }
 
 /* ---------------------------------------------------------------- sound
@@ -721,7 +763,7 @@ int main(void) {
   if (top)
     C3D_RenderTargetSetOutput(top, GFX_TOP, GFX_LEFT, transfer);
   Result romfs = romfsInit();
-  bool loaded = false;
+  bool loaded = false, can_load = false;
   stage = "loading";
   devserver_set_runtime(&state, NULL, stage, 0);
   devserver_poll();
@@ -764,6 +806,7 @@ int main(void) {
     snprintf(app_error, sizeof app_error, "romfsInit failed: %08lx", (unsigned long)romfs);
   else {
     LightLock_Init(&mixing);
+    can_load = true;
     loaded = load(NULL);
   }
   if (loaded) {
@@ -837,6 +880,22 @@ int main(void) {
       /* (an emulator run that did not load ends here, with its error in boot.log) */
       if (exit_at >= 0)
         break;
+      /* A delivery brought a list of packs to a program that had none it could read: it reads now. */
+      if (relist && can_load) {
+        relist = false;
+        free_sections();
+        forget_packs();
+        loaded = load(NULL);
+        if (loaded) {
+          if (!sounding)
+            sounding = sound_start();
+          stage = "running";
+        } else {
+          failed();
+        }
+        continue;
+      }
+      relist = false;
       /* The interface says why; without it the console already has. */
       if (guest_running()) {
         guest_turn(1.0f / 60);
@@ -878,17 +937,34 @@ int main(void) {
       snprintf(wanted, sizeof wanted, "%s", held_id);
     if (change || relisted) {
       LightLock_Lock(&mixing);
+      u32 was[4] = {mallinfo().uordblks};
       dt_drop();
+      was[1] = mallinfo().uordblks;
       render_drop();
+      was[2] = mallinfo().uordblks;
       free_sections();
       if (relisted)
         forget_packs();
+      was[3] = mallinfo().uordblks;
       relist = false;
       loaded = load(wanted[0] ? wanted : NULL);
       /* (the new list may not name the held map: the first it names, then) */
       if (!loaded && relisted)
         loaded = load(NULL);
       LightLock_Unlock(&mixing);
+      /* The screens the change took down (play, the loading screen six times) left cycles of owners behind on
+       * the C heap, about 59 KB a change: QuickJS collects them megabytes later by itself, and here at once. */
+      u32 uncollected = mallinfo().uordblks;
+      u64 collect_from = svcGetSystemTick();
+      guest_collect();
+      float collect_ms = (float)(svcGetSystemTick() - collect_from) * 1000.0f / SYSCLOCK_ARM11;
+      /* The C heap across the change, for the log: what the old map gave back, what the new one took. */
+      static char note[288];
+      snprintf(note, sizeof note,
+               "Map %s: heap %lu (was %lu; gave back core %ld, pictures %ld, sections %ld; took sections %ld, core %ld, pictures %ld; the interface's collector freed %ld in %.1f ms), linear free %lu",
+               held_id, (unsigned long)mallinfo().uordblks, (unsigned long)was[0], (long)(was[0] - was[1]), (long)(was[1] - was[2]), (long)(was[2] - was[3]), (long)(load_heap[1] - load_heap[0]),
+               (long)(load_heap[2] - load_heap[1]), (long)(load_heap[3] - load_heap[2]), (long)(uncollected - mallinfo().uordblks), collect_ms, (unsigned long)linearSpaceFree());
+      say(note);
       if (!loaded) {
         stage = "load-error";
         failed();

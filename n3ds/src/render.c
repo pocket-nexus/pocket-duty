@@ -116,12 +116,24 @@ static bool texture(C3D_Tex *t, const DtTexture *r) {
   return true;
 }
 
+/* A cell's matrix and its shadow rows, worked out once a frame for the cells it draws. */
+typedef struct {
+  u32 frame;
+  C3D_Mtx mvp;
+  C3D_FVec shadow[2];
+} CellPlace;
+static CellPlace *places;
+static u32 place_frame;
+
 /* The pictures of the map that was held: another map brings its own. */
 void render_drop(void) {
   for (unsigned i = 0; textures && d && i < d->texture_count; i++)
     C3D_TexDelete(&textures[i]);
   free(textures);
   textures = NULL;
+  /* (a matrix a cell: the next map has its own count of cells) */
+  free(places);
+  places = NULL;
 }
 
 /* The vertex programs and the buffers of the sky and the effects are made once; a map's pictures and its sky
@@ -299,14 +311,6 @@ static inline void raw_triangles(const uint16_t *indices, u32 count) {
   GPUCMD_AddMaskedWrite(GPUREG_PRIMITIVE_CONFIG, 0x8, 0);
 }
 
-/* A cell's matrix and its shadow rows, worked out once a frame for the cells it draws. */
-typedef struct {
-  u32 frame;
-  C3D_Mtx mvp;
-  C3D_FVec shadow[2];
-} CellPlace;
-static CellPlace *places;
-static u32 place_frame;
 
 static void street(const C3D_Mtx *pv, const DtView *view, const DtDraw *draws, uint32_t count, u32 haze) {
   const DtScene *s = d->scene;

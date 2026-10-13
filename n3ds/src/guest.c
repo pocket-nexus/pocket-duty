@@ -223,6 +223,13 @@ void guest_turn_now(void) {
   turn();
 }
 
+void guest_qjs_collect(void);
+
+void guest_collect(void) {
+  if (running)
+    guest_qjs_collect();
+}
+
 bool guest_prepare(void) {
   if (!running || !fresh)
     return false;

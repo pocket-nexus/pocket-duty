@@ -138,6 +138,56 @@ pub mod flag {
     pub const EMPTY: i32 = 16;
 }
 
+/// A map from above: the picture the interface lays its dots on. It travels beside the map's pack, as
+/// the pack `<id>-map` of the same manifest (tools/packs.ts writes it from the cook's `map.png` and
+/// `map.json`): 16 bytes of facts, then the picture as a PocketJS image entry in the device's own
+/// pixel format. A device reads it when it reads the map's pack and puts it in the interface's core.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Chart {
+    /// The picture's texture in the interface's core. -1 when the device could not put it there
+    /// itself: the interface uploads `entry`.
+    pub handle: i32,
+    /// The picture's side in pixels (a power of two), the map's side in it, and the metres a pixel covers.
+    pub texture: u16,
+    pub side: u16,
+    pub metres: f32,
+    /// The image entry in base64, for a device whose interface runs where the device cannot reach
+    /// its core (a browser tab's realm). Empty when `handle` is a texture.
+    pub entry: String,
+}
+
+impl Chart {
+    /// What a chart pack begins with: `DMAP`, then `u16` texture, `u16` side, `f32` metres and the
+    /// `u32` length of the image entry that follows, all little-endian.
+    pub const MAGIC: [u8; 4] = *b"DMAP";
+
+    /// A chart pack's facts (with no texture yet) and its image entry.
+    pub fn parse(bytes: &[u8]) -> Option<(Chart, &[u8])> {
+        if bytes.len() < 16 || bytes[..4] != Chart::MAGIC {
+            return None;
+        }
+        let texture = u16::from_le_bytes([bytes[4], bytes[5]]);
+        let side = u16::from_le_bytes([bytes[6], bytes[7]]);
+        let metres = f32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+        let length = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
+        let entry = bytes.get(16..16 + length)?;
+        (texture > 0 && side > 0 && side <= texture && metres > 0.0).then(|| (Chart { handle: -1, texture, side, metres, entry: String::new() }, entry))
+    }
+}
+
+/// `bytes` in base64, with padding.
+pub fn base64(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for group in bytes.chunks(3) {
+        let word = (group[0] as u32) << 16 | (*group.get(1).unwrap_or(&0) as u32) << 8 | *group.get(2).unwrap_or(&0) as u32;
+        for place in 0..4 {
+            out.push(if place <= group.len() { DIGITS[(word >> (18 - 6 * place) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
+}
+
 /// What the interface is shown.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct State {
@@ -163,6 +213,8 @@ pub struct State {
     /// The map the renderer holds (its id), and the maps it has a pack for, in the list's order.
     pub map: &'static str,
     pub maps: Vec<&'static str>,
+    /// The held map from above, once the device has read it; `None` for a map that came without one.
+    pub chart: Option<Chart>,
     pub t: [i32; t::COUNT],
 }
 
@@ -251,6 +303,17 @@ impl State {
                 escape(s, id);
             }
             s.push(']');
+        });
+        member!(chart, "chart", |s: &mut String| match &self.chart {
+            None => s.push_str("null"),
+            Some(chart) => {
+                let _ = write!(s, "[{},{},{},{}", chart.handle, chart.texture, chart.side, chart.metres);
+                if !chart.entry.is_empty() {
+                    s.push(',');
+                    escape(s, &chart.entry);
+                }
+                s.push(']');
+            }
         });
         member!(t, "t", |s: &mut String| {
             s.push('[');
@@ -431,8 +494,8 @@ impl Interface {
     /// line): text swapped in place, with nothing set moving.
     pub fn only_readouts(&self) -> bool {
         let Some(sent) = &self.sent else { return false };
-        let State { mode, message, options, prefs, woke, weapon, fire, feed, banner, result, map, maps, stats: _, t: _ } = &self.state;
-        *map == sent.map && *maps == sent.maps && *mode == sent.mode && *message == sent.message && *options == sent.options && *prefs == sent.prefs && *woke == sent.woke && *weapon == sent.weapon && *fire == sent.fire && *feed == sent.feed && *banner == sent.banner && *result == sent.result
+        let State { mode, message, options, prefs, woke, weapon, fire, feed, banner, result, map, maps, chart, stats: _, t: _ } = &self.state;
+        *map == sent.map && *maps == sent.maps && *chart == sent.chart && *mode == sent.mode && *message == sent.message && *options == sent.options && *prefs == sent.prefs && *woke == sent.woke && *weapon == sent.weapon && *fire == sent.fire && *feed == sent.feed && *banner == sent.banner && *result == sent.result
     }
 
     /// A line from the guest.
@@ -467,6 +530,36 @@ pub unsafe fn channel() -> &'static mut Interface {
 mod tests {
     use super::*;
     use alloc::vec;
+
+    #[test]
+    fn a_chart_is_read_from_its_pack_and_told_in_the_state() {
+        let mut pack = vec![];
+        pack.extend_from_slice(b"DMAP");
+        pack.extend_from_slice(&256u16.to_le_bytes());
+        pack.extend_from_slice(&200u16.to_le_bytes());
+        pack.extend_from_slice(&0.625f32.to_le_bytes());
+        pack.extend_from_slice(&3u32.to_le_bytes());
+        pack.extend_from_slice(&[1, 2, 3, 9]);
+        let (mut chart, entry) = Chart::parse(&pack).unwrap();
+        assert_eq!((chart.handle, chart.texture, chart.side, chart.metres, entry), (-1, 256, 200, 0.625, &[1u8, 2, 3][..]));
+        // Another mark, a length past the end, a map wider than its picture: no chart.
+        assert!(Chart::parse(b"DMAX\0\x01\xc8\0\0\0\x20\x3f\0\0\0\0").is_none());
+        assert!(Chart::parse(&pack[..18]).is_none());
+        let mut wide = pack.clone();
+        wide[6..8].copy_from_slice(&300u16.to_le_bytes());
+        assert!(Chart::parse(&wide).is_none());
+
+        assert_eq!((base64(b""), base64(b"f"), base64(b"fo"), base64(b"foo"), base64(b"foob")), ("".into(), "Zg==".into(), "Zm8=".into(), "Zm9v".into(), "Zm9vYg==".into()));
+        let mut state = State::default();
+        assert!(state.line(None).unwrap().contains("\"chart\":null"));
+        chart.handle = 7;
+        state.chart = Some(chart.clone());
+        assert!(state.line(None).unwrap().contains("\"chart\":[7,256,200,0.625]"));
+        chart.handle = -1;
+        chart.entry = base64(entry);
+        let told = State { chart: Some(chart), ..State::default() };
+        assert_eq!(told.line(Some(&state)).unwrap(), "{\"type\":\"state\",\"value\":{\"chart\":[-1,256,200,0.625,\"AQID\"]}}\n");
+    }
 
     #[test]
     fn commands_from_the_interface() {
