@@ -181,24 +181,6 @@ export const BLOCKS = [
   { at: [[-7.5, 42], [-4, 42], [-4, 46.5], [-7.5, 46.5]], top: 10.5 },
 ];
 
-/**
- * Houses with their own faces, at the edges of floors: `at` the middle, `size` [east-west, north-south], `y` the
- * floor they stand by, `streetSide` the face that looks on it (0 north, 1 east, 2 south, 3 west).
- */
-export const HOUSES = [
-  // north of the low start
-  { at: [-52, -7.25], size: [8, 7.5], y: LOW, floors: 3, t: 0.5, streetSide: 2, wallKey: OCHRE, arches: true },
-  // west of the north yard, north of the north street
-  { at: [-13.5, 37.5], size: [9, 18], y: SITE, floors: 2, t: 0.5, streetSide: 1, wallKey: ROSE, arches: true },
-  { at: [33.75, 44.5], size: [23.5, 9], y: LANE, floors: 3, t: 0.5, streetSide: 2, wallKey: SAGE, arches: true },
-  // north and east of the east start
-  { at: [51.5, 37.5], size: [8, 8], y: EAST, floors: 3, t: 0.5, streetSide: 2, wallKey: ROSE },
-  { at: [63, 21], size: [9, 20], y: EAST, floors: 3, t: 0.5, streetSide: 3, wallKey: OCHRE, arches: true },
-  // north of the cross street, north of the east site's yard
-  { at: [9.25, -12], size: [11.5, 9], y: MID, floors: 3, t: 0.5, streetSide: 2, wallKey: SAGE, arches: true },
-  { at: [54.25, -13], size: [6.5, 8], y: SITE, floors: 2, t: 0.5, streetSide: 2, wallKey: ROSE },
-];
-
 /** Walls along a line, with what is cut in them: `holes` of `{ at, w, h, sill, arch }`, `at` in metres from the first point. */
 export const WALLS = [
   // the room over the south street: its two sides with their windows, and the houses' walls under it
