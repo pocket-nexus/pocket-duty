@@ -21,9 +21,10 @@
 // The kit also says what the walk grid needs (./mapnav.js): the undersides over floors (`ceilings`) and
 // the thin walls between floors (`barriers`).
 //
-// One floor a place: where two floors overlap the higher one is the ground. A second level over a first
-// (a room over a way, a roof a player walks on) is a floor with `over: true` and a walk grid that holds
-// more than one height a node; neither is built yet, and nothing here stands in their way.
+// A second level: a floor with `over: true` stands over another (a storey, a roof a player walks on, a
+// bridge, a gallery). It is a slab with an underside, its edges end in the air with a rail, a wall under
+// it stops at its underside, and a player walks on it and under it. The walk grid holds one height a
+// node: soldiers keep to the floor under it, unless the plan gives them the upper one (`soldiers: true`).
 import * as THREE from 'three';
 import { BOX, BOX_THIN, IDENT, LL } from '../world/kit.js';
 import { fillMasks, polyPrism, solidSlabs, wallPanel } from '../world/util.js';
@@ -55,6 +56,9 @@ export function heightOf(g, e, n) {
 }
 
 const highest = (g) => (typeof g.y === 'number' ? g.y : Math.max(g.y.from[2], g.y.to[2]));
+const lowest = (g) => (typeof g.y === 'number' ? g.y : Math.min(g.y.from[2], g.y.to[2]));
+/** How thick a floor over another is. */
+const thickOf = (g) => g.thick ?? 0.3;
 /** The turn about +Y that carries +X onto a level direction. */
 const turnTo = (dx, dz) => Math.atan2(-dz, dx);
 
@@ -138,6 +142,23 @@ export function buildPlace(A, rng, place) {
     geo.computeVertexNormals();
     fillMasks(geo, 0.2, 0.6, 0.35);
     solid(key, geo, null, [0.2, 0.6, 0.35]);
+    if (g.over) {
+      // A floor over another is a slab: its underside, `thick` below, is the ceiling of what lies under it.
+      const under = geo.clone();
+      const at = under.getAttribute('position');
+      for (let i = 0; i < at.count; i += 3) {
+        // (turned over: the same triangles, lowered, wound the other way)
+        const a = [at.getX(i), at.getY(i), at.getZ(i)], b = [at.getX(i + 1), at.getY(i + 1), at.getZ(i + 1)];
+        at.setXYZ(i, b[0], b[1] - thickOf(g), b[2]);
+        at.setXYZ(i + 1, a[0], a[1] - thickOf(g), a[2]);
+        at.setY(i + 2, at.getY(i + 2) - thickOf(g));
+      }
+      under.computeVertexNormals();
+      solid(g.side ?? keys.side, under, null, [0.4, 0.8, 0.6]);
+      under.dispose();
+      // Soldiers keep to the floor under it, unless the plan gives them this one (`soldiers: true`).
+      if (!g.soldiers) ceilings.push({ poly: g.at.map(([e, n]) => [e, -n]), y: lowest(g) - thickOf(g) });
+    }
     geo.dispose();
     for (const [e, n] of g.at) {
       e0 = Math.min(e0, e); e1 = Math.max(e1, e); n0 = Math.min(n0, n); n1 = Math.max(n1, n);
@@ -164,14 +185,30 @@ export function buildPlace(A, rng, place) {
         const pe = a[0] + de * t, pn = a[1] + dn * t;
         const qe = pe + out[0] * 0.3, qn = pn + out[1] * 0.3;
         const mine = heightOf(g, pe, pn);
-        let other = contains(g.at, qe, qn) ? mine : null;
-        for (const o of grounds) if (o !== g && contains(o.at, qe, qn)) other = Math.max(other ?? -Infinity, heightOf(o, qe, qn));
+        // A floor far above the edge (a deck, a storey) is not what lies beyond it: it only stops the wall.
+        let other = contains(g.at, qe, qn) ? mine : null, above = Infinity;
+        for (const o of grounds) {
+          if (o === g || !contains(o.at, qe, qn)) continue;
+          const y = heightOf(o, qe, qn);
+          if (y > mine + 0.5 && (o.over || g.over)) above = Math.min(above, y - (o.over ? thickOf(o) : 0));
+          else if (!(g.over && y < mine - 0.06)) other = Math.max(other ?? -Infinity, y);
+        }
+        if (g.over) {
+          // A floor over another ends in the air: a rail along its edge, and its slab's side.
+          beyond.push(other === null ? 'rail' : 'joined');
+          continue;
+        }
+        if (other === null && above < Infinity) {
+          beyond.push(`under${above}`);
+          continue;
+        }
         // (a free edge's wall rises to the block that stands beyond it, where the plan states one)
         beyond.push(other === null ? (houseAt(qe + out[0] * 0.4, qn + out[1] * 0.4) ? 'joined' : `free${blockTop(qe + out[0] * 0.5, qn + out[1] * 0.5) ?? ''}`) : other >= mine - 0.06 ? 'joined' : other);
       }
       for (let k = 0; k < count; ) {
         const what = typeof beyond[k] === 'number' ? 'drop' : beyond[k];
-        const kind = what.startsWith('free') ? 'free' : what;
+        const under = what.startsWith('under');
+        const kind = under || what.startsWith('free') ? 'free' : what;
         let end = k, low = Infinity;
         while (end < count && (typeof beyond[end] === 'number' ? 'drop' : beyond[end]) === what) low = Math.min(low, typeof beyond[end] === 'number' ? beyond[end] : Infinity), end++;
         const t0 = k / count, t1 = end / count;
@@ -189,15 +226,27 @@ export function buildPlace(A, rng, place) {
           fillMasks(face, 0.5, 0.7, 0.4);
           solid(g.side ?? keys.side, face);
           face.dispose();
+        } else if (kind === 'rail') {
+          // The slab's side, and a rail of `rail` metres on its edge (1 m; 0 for none).
+          const face = new THREE.BufferGeometry();
+          const [p, q] = side > 0 ? [la, lb] : [lb, la], yp = side > 0 ? ya : yb, yq = side > 0 ? yb : ya, t = thickOf(g);
+          face.setAttribute('position', new THREE.Float32BufferAttribute([p[0], yp, p[1], q[0], yq - t, q[1], q[0], yq, q[1], p[0], yp, p[1], p[0], yp - t, p[1], q[0], yq - t, q[1]], 3));
+          face.computeVertexNormals();
+          fillMasks(face, 0.5, 0.7, 0.4);
+          solid(g.side ?? keys.side, face);
+          face.dispose();
+          const rail = g.rail ?? 1;
+          if (rail > 0) run(g.railKey ?? keys.cap, la, lb, Math.min(ya, yb), Math.max(ya, yb) + rail, 0.16, { off: side > 0 ? 0.08 : -0.08 });
         } else if (kind === 'free' && g.walls !== false) {
           // Nothing beyond: the place's own wall, standing outside the edge, with its crown.
-          const stated = what.length > 4 ? Number(what.slice(4)) : null;
-          const wallTop = stated === null ? Math.max(ya, yb) + (g.walls ?? wallH) : Math.max(stated, Math.max(ya, yb) + 1.1);
+          const stated = under ? Number(what.slice(5)) : what.length > 4 ? Number(what.slice(4)) : null;
+          // (under a floor over this one the wall stops at its underside)
+          const wallTop = stated === null ? Math.max(ya, yb) + (g.walls ?? wallH) : under ? stated : Math.max(stated, Math.max(ya, yb) + 1.1);
           const more = (t0 === 0 ? T : 0) + (t1 === 1 ? T : 0);
           // (a wall is to the right of an anticlockwise edge: `run` counts to the left)
           const [p, q] = side > 0 ? [lb, la] : [la, lb];
           run(g.wall ?? keys.wall, p, q, Math.min(ya, yb) - 0.8, wallTop, T, { off: T / 2, more });
-          if (g.crown !== false) crown(p, q, wallTop, T, { off: T / 2, more });
+          if (g.crown !== false && !under) crown(p, q, wallTop, T, { off: T / 2, more });
           // The windows of the houses behind the wall: small, arched, shuttered, one to so many metres.
           const length = Math.hypot(q[0] - p[0], q[1] - p[1]), every = place.LOOK?.windows?.every ?? 0;
           if (every && g.windows !== false && !g.roof && length >= every * 0.8 && wallTop - Math.max(ya, yb) >= 4) {

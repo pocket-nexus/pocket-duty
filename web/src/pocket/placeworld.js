@@ -63,6 +63,8 @@ export class PlaceWorldSystem extends WorldSystem {
     this.place = built;
     this.ceilings = built.ceilings;
     this.barriers = built.barriers;
+    // The plan's floors as it states them, for comparing a map with its place level by level.
+    this.floors = (place.GROUND ?? []).map((g) => ({ at: g.at, y: g.y, over: !!g.over }));
     this.stairs = built.stairs;
     this.threads = built.threads;
     if (built.ladders.length) this.ladders = built.ladders.map((l) => ({ foot: A.toWorld(...l.foot).toArray(), top: A.toWorld(...l.top).toArray() }));

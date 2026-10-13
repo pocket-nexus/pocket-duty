@@ -345,6 +345,8 @@ async function exportNav() {
   bundle.meta.coverSample = ai.cover.points.slice(0, 2).map((p) => JSON.parse(JSON.stringify(p, (k, value) => (value?.isVector3 ? value.toArray() : value))));
   bundle.add('cover', cover);
   await put('nav.dir', bundle.blob());
+  // (a place's own floors, level by level: what its author compares with the place)
+  if (world.floors) await put('floors.json', JSON.stringify(world.floors));
   log(`nav: ${grid.nx} × ${grid.nz} cells of ${grid.cell} m, ${grid.walkableCount} open, ${ai.cover.points.length} cover points`);
 }
 
