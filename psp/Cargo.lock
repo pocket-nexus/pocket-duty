@@ -119,6 +119,7 @@ dependencies = [
  "libm",
  "libquickjs-sys",
  "pocket-psp-ge",
+ "pocket3d-packs",
  "pocket3d-title",
  "pocketjs-psp",
  "psp",
@@ -126,6 +127,10 @@ dependencies = [
 
 [[package]]
 name = "pocket-psp-ge"
+version = "0.1.0"
+
+[[package]]
+name = "pocket3d-packs"
 version = "0.1.0"
 
 [[package]]
