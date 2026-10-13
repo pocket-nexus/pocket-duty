@@ -66,7 +66,7 @@ pub struct World {
 #[wasm_bindgen]
 impl Reader {
     /// Reads the pack at `url`: the pack's file, on a server that answers byte ranges, or the manifest
-    /// (`.json`) of a pack cut into pieces (`pocket_web_wgpu::source`).
+    /// of a game's packs in pieces with the map after `#` (`.packs#yards`; `pocket_web_wgpu::source`).
     pub async fn read(self, url: String) -> Result<World, JsError> {
         let source = Source::open(&url).await.map_err(|e| JsError::new(&e))?;
         let world = app::World::read(self.gpu, self.format, source, self.progress).await.map_err(|e| JsError::new(&e))?;

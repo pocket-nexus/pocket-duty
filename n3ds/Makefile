@@ -1,7 +1,7 @@
 # Pocket Duty for Nintendo 3DS: the C host and renderer, the Rust core
 # (core/, built before this runs), PocketJS's dev transport and the pieces the
-# interface (ui/) runs on, into a .3dsx with the pack and the interface's
-# bundle in its ROMFS. tools/n3ds.ts runs this inside the pinned devkitARM
+# interface (ui/) runs on, into a .3dsx with the interface's bundle in its
+# ROMFS and, when one is embedded, a map's pack as pieces. tools/n3ds.ts runs this inside the pinned devkitARM
 # container.
 DEVKITPRO ?= /opt/devkitpro
 DEVKITARM ?= $(DEVKITPRO)/devkitARM
@@ -12,6 +12,8 @@ SOURCE := $(ROOT)/n3ds/src
 POCKET := $(ROOT)/vendor/pocketjs/hosts/3ds
 PICA_KERNEL := $(ROOT)/vendor/pocketjs/devices/3ds/pocket-3ds-pica/include
 TITLE := $(ROOT)/vendor/pocketjs/engine/pocket3d/crates/pocket3d-title
+# The maps' packs as pieces: the header of the reader the core carries (pocket3d_packs.h).
+PACKS := $(ROOT)/vendor/pocketjs/engine/pocket3d/crates/pocket3d-packs
 CORE := $(ROOT)/n3ds/core/target/armv6k-nintendo-3ds/release/libduty_n3ds_core.a
 # The interface is a PocketJS guest: PocketJS's UI core (a Rust static library,
 # built on the host like core/), QuickJS (built in this container by
@@ -32,7 +34,7 @@ ROMFS := $(ROOT)/.pocket-build/3ds/romfs
 ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 CFLAGS := -O3 -g -Wall -Wextra -std=gnu11 -ffunction-sections -fdata-sections -mword-relocations $(ARCH) \
   -D__3DS__ -DJS_NO_NAN_BOXING -DPOCKETJS_RUNTIME_SLOT='"pocket-duty"' \
-  -include $(BUILD)/config.h -I$(SOURCE) -I$(BUILD) -I$(POCKET)/src -I$(POCKET)/include -I$(PICA_KERNEL) -I$(TITLE)/include -I$(QUICKJS) -I$(DEVKITPRO)/libctru/include -I$(DEVKITPRO)/portlibs/3ds/include
+  -include $(BUILD)/config.h -I$(SOURCE) -I$(BUILD) -I$(POCKET)/src -I$(POCKET)/include -I$(PICA_KERNEL) -I$(TITLE)/include -I$(PACKS) -I$(QUICKJS) -I$(DEVKITPRO)/libctru/include -I$(DEVKITPRO)/portlibs/3ds/include
 LDFLAGS := -specs=3dsx.specs $(ARCH) -Wl,--gc-sections -Wl,-Map,$(BUILD)/duty.map
 SHADERS := world skin flat
 OWN := main.o render.o guest.o
@@ -66,7 +68,8 @@ $(BUILD)/duty.elf: $(OBJECTS) $(CORE) $(UI_CORE) $(QUICKJS)/libquickjs.a
 	$(CC) $(LDFLAGS) $(OBJECTS) $(CORE) $(UI_CORE) $(QUICKJS)/libquickjs.a -L$(DEVKITPRO)/libctru/lib -L$(DEVKITPRO)/portlibs/3ds/lib -lcitro3d -lmbedcrypto -lctru -lm -o $@
 $(BUILD)/duty.smdh: $(ICON) $(SMALL_ICON) | $(BUILD)
 	$(DEVKITPRO)/tools/bin/smdhtool --create 'Pocket Duty' 'A firefight on a market street' 'Pocket Nexus' $(ICON) $@ $(SMALL_ICON)
-$(OUT): $(BUILD)/duty.elf $(BUILD)/duty.smdh $(ROMFS)/duty.pack $(ROMFS)/duty.js $(ROMFS)/duty.pak
+# (the ROMFS's packs/ holds one map's pack as pieces with their manifest, or nothing: tools/n3ds.ts)
+$(OUT): $(BUILD)/duty.elf $(BUILD)/duty.smdh $(wildcard $(ROMFS)/packs/*) $(ROMFS)/duty.js $(ROMFS)/duty.pak
 	mkdir -p $(dir $@)
 	$(DEVKITPRO)/tools/bin/3dsxtool $< $@ --smdh=$(BUILD)/duty.smdh --romfs=$(ROMFS)
 

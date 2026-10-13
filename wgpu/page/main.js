@@ -14,7 +14,7 @@
 //
 //   ?device=psp|3ds             the handheld the page opens as (the bar chooses another at any time)
 //   ?pack=URL                   the first map's pack (the PSP's): its file, on a server that answers
-//                               byte ranges, or the manifest (.json) of one cut into pieces. Without it,
+//                               byte ranges, or the manifest of the packs in pieces and the map (`….packs#yards`). Without it,
 //                               the page's own (<meta name="pocket-pack">)
 //   ?map=yards                  the map the page opens on, of those it has a pack for
 //                               (<meta name="pocket-packs">: `<map>=<pack>` with spaces between)

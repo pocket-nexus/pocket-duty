@@ -26,6 +26,8 @@ extern RenderStats render_stats;
 extern uint32_t render_parts[4];
 
 bool render_init(const RenderData *d, char *error, size_t n);
+/* Frees the pictures of the map that was held, before another map is read and `render_init` is called again. */
+void render_drop(void);
 /* The whole upper screen but the interface: the sky, the street, the soldiers, the effects, the held weapon. */
 void render_frame(C3D_RenderTarget *target, const DtView *view, const DtDraw *draws, uint32_t draw_count, const DtFigure *figures, uint32_t figure_count);
 #endif

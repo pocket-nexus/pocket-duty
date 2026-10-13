@@ -5,7 +5,7 @@
 //   bun tools/wgpu.ts build                        wasm32 + wasm-bindgen + the page + the interface as each
 //                                                  device loads it (tools/ui.ts) on PocketJS's UI core → .pocket-build/wgpu/site
 //   bun tools/wgpu.ts serve [--port 8802]          the site and the packs, with byte ranges
-//   bun tools/wgpu.ts dist [--piece 2]             the directory a static host serves → .pocket-build/wgpu/dist:
+//   bun tools/wgpu.ts dist [--piece 4]             the directory a static host serves → .pocket-build/wgpu/dist:
 //                                                  the page, the module under its build's name, and every
 //                                                  map's pack cut into pieces of that many MiB with its manifest
 //   bun tools/wgpu.ts serve --dist                 that directory as such a host serves it: no byte ranges
@@ -29,7 +29,8 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statS
 import { gzipSync } from "node:zlib";
 import { join, resolve } from "node:path";
 import { POCKET3D_ICON } from "../vendor/pocketjs/tools/pocket3d-icon.ts";
-import { cutPack, stagePocket3dWeb } from "../vendor/pocketjs/tools/pocket3d-web.ts";
+import { CUT_SIZES, writePacks } from "../vendor/pocketjs/tools/pocket3d-packs.ts";
+import { stagePocket3dWeb } from "../vendor/pocketjs/tools/pocket3d-web.ts";
 import { FIRST, mapNamed, MAPS, packPath } from "./maps.ts";
 import { compileInterface, type Device } from "./ui.ts";
 
@@ -130,13 +131,15 @@ async function dist(pieceBytes: number) {
     mkdirSync(join(DIST, "app", id, file, ".."), { recursive: true });
     writeFileSync(join(DIST, "app", id, file), bytes);
   }
-  // Each map's pack in pieces of one size, each named by its hash, and the manifest that lists them
-  // (pocket_web_wgpu::source::Manifest), named by the pack's.
-  const cuts = packs().map((each) => ({ id: each.id, ...cutPack(each.file, join(DIST, "pack"), pieceBytes) }));
-  const cut = cuts[0]!;
-  const manifest = `pack/${cut.manifest}`;
+  // The maps' packs in pieces named by their bytes, cut where a pack's sections begin, and the one
+  // manifest that lists them, named by its own (vendor/pocketjs/tools/pocket3d-packs.ts). A section two
+  // maps share is one file, and a pack cooked again leaves the pieces it did not change where they are.
+  // A map's pack is the manifest's place and the map's name after `#` (pocket_web_wgpu::source).
+  const cut = writePacks(join(DIST, "pack"), packs().map((each) => ({ name: each.id, file: each.file })), { min: Math.max(64 << 10, pieceBytes >> 3), max: pieceBytes, bits: Math.max(12, Math.round(Math.log2(pieceBytes)) - 2) });
+  const place = (name: string) => `pack/${cut.manifest}#${name}`;
+  const manifest = place(cut.packs[0]!.name);
   // The page names its build and its packs.
-  let page = namePacks(readFileSync(join(SITE, "index.html"), "utf8"), cuts.slice(1).map((each) => ({ id: each.id, pack: `pack/${each.manifest}` })));
+  let page = namePacks(readFileSync(join(SITE, "index.html"), "utf8"), cut.packs.slice(1).map((each) => ({ id: each.name, pack: place(each.name) })));
   for (const [from, to] of [[`<meta name="pocket-pack" content="duty.pack">`, `<meta name="pocket-pack" content="${manifest}">`], [`src="main.js"`, `src="app/${id}/main.js"`], [`href="pocket3d-stage.css"`, `href="app/${id}/pocket3d-stage.css"`], [`href="pocket3d-player.css"`, `href="app/${id}/pocket3d-player.css"`]] as const) {
     if (!page.includes(from)) throw new Error(`wgpu/page/index.html has no ${from}`);
     page = page.replace(from, to);
@@ -163,7 +166,7 @@ async function dist(pieceBytes: number) {
     ...readdirSync(DIST).filter((name) => HOST.reserved.includes(name)).map((name) => `${name}/ is the host's own`),
   ];
   if (refused.length) throw new Error(`the host would refuse the directory: ${refused.join("; ")}`);
-  const report = { directory: DIST, files: all.length, bytes: total, largest, build: id, studio: registered ? { app: registered.app, server: registered.server } : null, page: part("index.html"), app: part("app/"), pack: { ...part("pack/"), manifest, pieces: cut.pieces.length, piece: pieceBytes, sha256: cut.sha256 }, maps: Object.fromEntries(cuts.map((each) => [each.id, { manifest: `pack/${each.manifest}`, bytes: each.bytes, pieces: each.pieces.length, sha256: each.sha256 }])) };
+  const report = { directory: DIST, files: all.length, bytes: total, largest, build: id, studio: registered ? { app: registered.app, server: registered.server } : null, page: part("index.html"), app: part("app/"), pack: { ...part("pack/"), manifest, pieces: cut.packs[0]!.pieces.length, piece: pieceBytes, sha256: cut.packs[0]!.sha256, packs: cut.bytes, stored: cut.stored }, maps: Object.fromEntries(cut.packs.map((each) => [each.name, { manifest: place(each.name), bytes: each.bytes, pieces: each.pieces.length, sha256: each.sha256 }])) };
   writeFileSync(join(BUILD, "dist.json"), JSON.stringify(report, null, 1));
   return report;
 }
@@ -258,7 +261,7 @@ const validation = (run: string) => {
 if (command === "build") {
   console.log(JSON.stringify(await build(), null, 1));
 } else if (command === "dist") {
-  console.log(JSON.stringify(await dist(Math.round(Number(option("--piece", "2")) * (1 << 20))), null, 1));
+  console.log(JSON.stringify(await dist(Math.round(Number(option("--piece", String(CUT_SIZES.max >> 20))) * (1 << 20))), null, 1));
 } else if (command === "serve" && rest.includes("--dist")) {
   if (!existsSync(join(DIST, "index.html"))) await dist(2 << 20);
   const server = serveDist(Number(option("--port", "8802")));
@@ -281,7 +284,7 @@ if (command === "build") {
 } else if (command === "check") {
   needPack();
   // (--dist: the deployable directory, served whole files only, with the pack in pieces)
-  const deployed = rest.includes("--dist") ? await dist(Math.round(Number(option("--piece", "2")) * (1 << 20))) : null;
+  const deployed = rest.includes("--dist") ? await dist(Math.round(Number(option("--piece", String(CUT_SIZES.max >> 20))) * (1 << 20))) : null;
   const sizes = deployed ? JSON.parse(readFileSync(join(BUILD, "site.json"), "utf8")).sizes : await build();
   const { chromium } = await import("playwright-core");
   const server = deployed ? serveDist(0) : serve(0);

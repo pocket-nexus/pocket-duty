@@ -133,7 +133,14 @@ void dt_sizes(uint32_t out[8]);
 /* The version of the pack the core reads (duty_pack::VERSION). */
 uint32_t dt_pack_version(void);
 /* `clock`: microseconds, for the core's own timers. */
+/* The map whose pack dt_init is given next, and the maps the card has a pack for (ids with spaces between). */
+void dt_maps(const char *held, const char *have);
 const char *dt_init(const DtPack *pack, uint32_t (*clock)(void));
+/* The map the interface asked a match on and the host does not hold: its id in `out`, and its length; 0 for
+ * none. The host calls dt_drop, frees the pack, reads that map's, and calls dt_maps and dt_init. */
+uint32_t dt_wanted(char *out, uint32_t cap);
+/* Lets go of the pack: nothing of it is read after this returns. No other thread may be inside the core. */
+void dt_drop(void);
 void dt_stage(uint32_t error, const char *message, uint32_t len);
 void dt_prefs_stored(const char *text, uint32_t len);
 uint32_t dt_prefs_take(char *out, uint32_t cap);
