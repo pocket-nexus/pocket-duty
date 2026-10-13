@@ -83,6 +83,15 @@ unsafe extern "C" fn frame_thread(_: usize, _: *mut c_void) -> i32 {
 unsafe fn start() {
     // PSPLINK can start a thread with floating-point exceptions on; the interface's layout computes with NaN.
     host::reset_fpu_status();
+    {
+        // A test run with another start's memory (`held=<KiB>` in boot.txt): that much of the kernel's
+        // memory is kept from the program before its first allocation sizes the arena.
+        let mut buf = [0u8; 2048];
+        let held = store::boot_text(&mut buf).and_then(|text| text.split_ascii_whitespace().find_map(|w| w.strip_prefix("held=")).and_then(parse_f32));
+        if let Some(kib) = held.filter(|kib| *kib > 0.0) {
+            mem::hold_back(kib as usize * 1024);
+        }
+    }
     let mut ui = interface::Ui::none("");
     let mut on_screen = false;
     if let Err(e) = run(&mut ui, &mut on_screen) {
@@ -178,6 +187,10 @@ struct Remote {
     way_at: u8,
     way_asked: bool,
     finder: Option<Pathfinder>,
+    /// Changes of map still to be made by the program itself, one after another (`changes=N`), and
+    /// whether such a run was asked for.
+    changes: u32,
+    scripted: bool,
     /// Where the legs stood a frame ago, and for how many frames they have stood still.
     stood: V3,
     still: u8,
@@ -248,6 +261,10 @@ unsafe fn remote(text: &str, ui: &mut interface::Ui, session: &mut Session, game
                 game.player.hurt(next(), from, &mut game.events);
             }
             "god" => state.god = next() != 0.0,
+            "changes" => {
+                state.changes = next() as u32;
+                state.scripted = state.changes > 0;
+            }
             "film" => state.film = next() as u32,
             "go" => {
                 let (x, z, stick) = (next(), next(), next());
@@ -333,6 +350,22 @@ unsafe fn step(ui: &mut interface::Ui, waking: &Session, host: bool, name: &str)
     if host {
         store::note(&format!("{{\"target\":\"psp\",\"stage\":\"loading\",\"step\":\"{name}\"}}"));
     }
+}
+
+/// A change of map while the frames after it are timed: which change it is (0 is the map the program
+/// started on), the map, what the change took, and the frames drawn since with their times.
+struct Measured {
+    index: u32,
+    map: &'static str,
+    ms: u32,
+    frames: u32,
+    sum: f32,
+    worst: f32,
+}
+
+impl Measured {
+    /// Frames timed after a change.
+    const FRAMES: u32 = 120;
 }
 
 /// What a run holds of one map. All of it lies in the map's memory (`mem::of_map`) or was made from
@@ -428,13 +461,16 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
     // The interface starts first when memory has room for it beside the pack: the loading steps
     // are then its first screen.
     let arena_before_ui = arena::stats().bump_bytes;
+    let mut pak_bytes = 0;
     if room < tail + beside {
         *ui = interface::Ui::none("no memory for the interface beside the pack");
         store::leave_beside(store::SCRIPT);
         store::leave_beside(store::PAK);
     } else {
         psp::dprintln!("  Starting the interface");
-        *ui = interface::Ui::boot(store::read_beside(store::SCRIPT, &[0]), store::keep_beside(store::PAK));
+        let pak = store::keep_beside(store::PAK);
+        pak_bytes = pak.map_or(0, |pak| pak.len());
+        *ui = interface::Ui::boot(store::read_beside(store::SCRIPT, &[0]), pak);
         ui.bytes = arena::stats().bump_bytes - arena_before_ui;
     }
     if ui.up() {
@@ -462,9 +498,12 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
     if store::plays() {
         session.play(&mut game);
     }
-    // The arena after each change of map, for the status: its carved bytes and what the change took.
-    let mut changes = String::new();
+    // The changes of map, counted and measured: a line each in `changes.txt` once the 120 frames after
+    // it are drawn (`Measured`), the first line for the map the program started on.
     let mut changed = 0u32;
+    let mut measured = Some(Measured { index: 0, map: session.map_id, ms: 0, frames: 0, sum: 0.0, worst: 0.0 });
+    let mut record = String::with_capacity(4096);
+    let mut record_due = false;
     {
         // What the interface asked to have kept in an earlier run.
         let mut buf = [0u8; store::KEPT_MAX];
@@ -485,7 +524,7 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
         store::write_text(b"host0:/duty/probe.json\0", &text);
     }
     // (a frame number no run reaches when the word is absent)
-    let (shot_at, exit_at) = (word("shot").map_or(u32::MAX, |v| v as u32), word("exit").map_or(u32::MAX, |v| v as u32));
+    let (mut shot_at, mut exit_at) = (word("shot").map_or(u32::MAX, |v| v as u32), word("exit").map_or(u32::MAX, |v| v as u32));
     let load_ms = sceKernelGetSystemTimeLow().wrapping_sub(t_load) / 1000;
     let free_after = sceKernelTotalFreeMemSize();
     let arena_after_load = arena::stats().bump_bytes;
@@ -523,6 +562,19 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
                 }
             }
         }
+        // A scripted run (`changes=N`): the program changes its map N times with no hand on it, each
+        // change asked the way a person asks it, back to the title and a map chosen there, once the
+        // 120 frames after the last change are measured. The maps are taken in the list's order.
+        if steer.changes > 0 && measured.is_none() && session.maps.len() > 1 {
+            if session.mode == Mode::Title {
+                let at = session.maps.iter().position(|id| *id == session.map_id).unwrap_or(0);
+                let next = session.maps[(at + 1) % session.maps.len()];
+                channel().receive(&format!(r#"{{"type":"map","id":"{next}"}}"#));
+                steer.changes -= 1;
+            } else if session.mode != Mode::Loading {
+                remote("ui=title", ui, &mut session, &mut game, &mut gfx, &mut steer);
+            }
+        }
         if let Some(text) = session.obey(&mut game) {
             prefs = Some(text);
         }
@@ -531,7 +583,6 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
         // session is the one the interface set up, and the match begins on the new map.
         if let Some(to) = session.wanted.take().and_then(maps::named) {
             let from = sceKernelGetSystemTimeLow();
-            let before = arena::stats().bump_bytes;
             let fits = store::tail_for(to, mem::kernel_stretch()).is_some_and(|tail| tail <= mem::tail_reserved());
             let read = if fits {
                 // (the GE finished the last frame's list at that frame's end; the sound thread lets go here)
@@ -566,9 +617,11 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
                         audio::ambience(Id::Ambience, 110);
                     }
                     changed += 1;
-                    if changed <= 12 {
-                        let _ = write!(changes, "{}{{\"map\":\"{}\",\"arena\":{},\"took\":{},\"mapBytes\":{},\"ms\":{}}}", if changed > 1 { "," } else { "" }, to.id, arena::stats().bump_bytes, arena::stats().bump_bytes as i64 - before as i64, mem::map_bytes(), sceKernelGetSystemTimeLow().wrapping_sub(from) / 1000);
-                    }
+                    measured = Some(Measured { index: changed, map: to.id, ms: sceKernelGetSystemTimeLow().wrapping_sub(from) / 1000, frames: 0, sum: 0.0, worst: 0.0 });
+                    // (the bench's legs walked the other map's grid)
+                    steer.finder = None;
+                    steer.go = None;
+                    steer.way_asked = false;
                     last_vcount = sceDisplayGetVcount();
                     last_swap = sceKernelGetSystemTimeLow();
                     ticks = pace;
@@ -782,6 +835,33 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
         ticks = if filming { pace } else { refreshes.clamp(1, pace + 1) };
         last_vcount = vcount;
         let now = sceKernelGetSystemTimeLow();
+        if let Some(m) = measured.as_mut() {
+            let took = now.wrapping_sub(last_swap) as f32 / 1000.0;
+            m.frames += 1;
+            m.sum += took;
+            m.worst = m.worst.max(took);
+            if m.frames == Measured::FRAMES {
+                // The line of this change: what it took, the arena as it stands after 120 frames on the
+                // new map, the memory the map and the pak hold, the frames, the opens off the main thread.
+                let (free, largest) = arena::debug_free();
+                if record.is_empty() {
+                    let _ = writeln!(record, "Pocket Duty on PSP: changes of map in the running program");
+                    let _ = writeln!(record, "free at start {}, held back {}, arena {}, kernel stretch {}, tail stretch {}, pak {}", free_at_start, core::ptr::addr_of!(mem::HELD_BACK).read(), arena::stats().capacity_bytes, mem::kernel_stretch(), mem::tail_reserved(), pak_bytes);
+                    let _ = writeln!(record, "change map change-ms arena-free arena-largest arena-tail map-bytes frames mean-ms worst-ms stray-opens");
+                }
+                let _ = writeln!(record, "{} {} {} {} {} {} {} {} {:.2} {:.2} {}", m.index, m.map, m.ms, free, largest, arena::stats().tail_free_bytes, mem::map_bytes(), m.frames, m.sum / m.frames as f32, m.worst, store::stray_opens());
+                measured = None;
+                record_due = true;
+            }
+        }
+        if record_due && store::report(&record) {
+            record_due = false;
+        }
+        // A scripted run of a test (`exit=` in boot.txt) ends when its last change is measured and written.
+        if steer.scripted && steer.changes == 0 && measured.is_none() && !record_due && store::reported() && exit_at != u32::MAX && exit_at > frame + 3 {
+            shot_at = frame;
+            exit_at = frame + 3;
+        }
         timing.push(now.wrapping_sub(last_swap) as f32 / 1000.0, refreshes > pace && !filming);
         last_swap = now;
 
@@ -922,10 +1002,11 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
                 ui.words(),
                 ui.bytes
             );
-            // (the arena across each change of map, before the record's last brace)
-            if changed > 0 && status.ends_with('}') {
+            // (the changes of map and the opens made off the main thread, before the record's last brace)
+            if status.ends_with('}') {
                 status.pop();
-                let _ = write!(status, ",\"changes\":[{}]}}", changes);
+                let (free, largest) = arena::debug_free();
+                let _ = write!(status, ",\"changes\":{},\"strayOpens\":{},\"heldBack\":{},\"arenaFree\":{},\"arenaLargest\":{},\"mapBytes\":{}}}", changed, store::stray_opens(), core::ptr::addr_of!(mem::HELD_BACK).read(), free, largest, mem::map_bytes());
             }
             store::publish(&status);
         }

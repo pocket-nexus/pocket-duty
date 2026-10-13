@@ -28,6 +28,7 @@ bun tools/duty.ts cook             # DutyIR → .pocket-build/duty/psp30/duty.pa
 bun tools/duty.ts shot --png f.png # a frame of the cooked pack, drawn on this computer
 bun tools/psp.ts build             # ui/ + psp/ → dist/psp/{EBOOT.PBP,duty.js,duty.pak}
 bun tools/psp.ts emu               # the same EBOOT in PPSSPPHeadless: a frame and its status
+bun tools/psp.ts emu --ctl "changes=20 held=4096"   # twenty changes of map in the running program, in an XMB start's memory: a line a change (changes.txt)
 bun tools/psp.ts package           # dist/psp/PSP/GAME/PocketDuty for a Memory Stick
 ```
 

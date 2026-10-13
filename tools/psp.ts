@@ -5,7 +5,12 @@
 //
 //   bun tools/psp.ts build                    # ui/ + psp/ → dist/psp/{pocket-duty.prx,EBOOT.PBP,duty.js,duty.pak}
 //   bun tools/psp.ts serve                    # start usbhostfs_pc (detached, logged) when none is running
-//   bun tools/psp.ts run [--no-build]         # build, stage, reset PSPLINK, wait for it to reconnect, start the PRX
+//   bun tools/psp.ts run [--no-build] [--boot "<words>"] [--standalone]
+//                                             # build, stage, reset PSPLINK, wait for it to reconnect, start the PRX.
+//                                             # --boot: the words of boot.txt (default title=0). --standalone puts the
+//                                             # packs and the interface beside the PRX on the share and not in duty/:
+//                                             # the program then opens them as it does from a Memory Stick, on the
+//                                             # thread it started on
 //   bun tools/psp.ts status
 //   bun tools/psp.ts ctl "ui=start auto=1"   # host0:/duty/control.txt (the words are in psp/src/main.rs, `remote`:
 //                                             # `mode=title|play|menu` sets the flow, `ui=start|menu|resume|restart|title`
@@ -26,6 +31,15 @@
 //                                             # --keep leaves interface.json from the last run; a word of --ctl
 //                                             # written @N:word is said at frame N; --timeout is the seconds
 //                                             # the emulator may take
+//
+// A scripted run of map changes, for `run --boot` and `emu --ctl`: `changes=N` has the program change its map N
+// times with no hand on it (back to the title, the next map of the list, 120 frames of play, again) and write a
+// line a change to changes.txt where the packs are (duty/ on the share, or beside the program): the change's
+// milliseconds, the arena's free bytes, its largest free block and its tail, the bytes the map holds, the mean
+// and worst frame of the 120, and the opens made off the main thread (0, or the XMB start would fail there).
+// `held=<KiB>` keeps that much memory from the program before its arena is sized: a PSPLINK start and the
+// emulator then run in what an XMB start has (about 4096 less; changes.txt of a start from the XMB says its own).
+// `emu` ends such a run when the last change is written, and prints the file.
 //
 // `run`, `bench`, `tour`, `film` and `emu` take `--map <id>` (a directory under maps/): the map the run starts on. Every
 // cooked map's pack is staged, so the interface's map list offers them all. Staging brings a directory up
@@ -469,11 +483,16 @@ async function device<T>(f: () => Promise<T>): Promise<T> {
  * PSPLINK (after a reset when a program is loaded) and returns its first status. `bare` leaves the interface's
  * files off the share: the street with nothing drawn over it.
  */
-async function start(boot: string, bare = false): Promise<any> {
-  const id = stage(app);
+async function start(boot: string, bare = false, standalone = false): Promise<any> {
+  // `standalone`: the packs and the interface beside the PRX, as beside an EBOOT on a Memory Stick.
+  const beside = standalone ? share! : app;
+  unstage(standalone ? app : share!);
+  const id = stage(beside);
   cpSync(`${OUT}/pocket-duty.prx`, `${share}/pocket-duty.prx`);
-  if (bare) for (const f of UI_FILES) rmSync(`${app}/${f}`, { force: true });
-  else stageInterface(app);
+  for (const f of UI_FILES) rmSync(`${standalone ? app : share}/${f}`, { force: true });
+  if (bare) for (const f of UI_FILES) rmSync(`${beside}/${f}`, { force: true });
+  else stageInterface(beside);
+  for (const dir of [share, app]) rmSync(`${dir}/changes.txt`, { force: true });
   writeFileSync(`${app}/build.json`, JSON.stringify({ prxSha256: sha(`${OUT}/pocket-duty.prx`), packSha256: id, interfaceSha256: Object.fromEntries(UI_FILES.map((f) => [f, sha(`${OUT}/${f}`)])) }, null, 1));
   writeFileSync(`${app}/boot.txt`, `${boot}\n`);
   rmSync(`${app}/status.json`, { force: true });
@@ -501,7 +520,7 @@ async function start(boot: string, bare = false): Promise<any> {
       await Bun.sleep(1000);
     }
   }
-  if (!/pocket\.packs/.test(await pspsh("ls host0:/duty"))) throw new Error("PSPLINK does not serve host0: restart PSPLINK on the console");
+  if (!/pocket\.packs/.test(await pspsh(standalone ? "ls host0:/" : "ls host0:/duty"))) throw new Error("PSPLINK does not serve host0: restart PSPLINK on the console");
   await pspsh("ldstart host0:/pocket-duty.prx");
   const s = await waitFor((s) => s.stage === "running", 180);
   return s;
@@ -513,7 +532,7 @@ switch (cmd) {
     break;
   case "run":
     if (!argv.includes("--no-build")) await build();
-    await device(async () => console.log(JSON.stringify(await start(opt("--boot", "title=0")), null, 1)));
+    await device(async () => console.log(JSON.stringify(await start(opt("--boot", "title=0"), false, argv.includes("--standalone")), null, 1)));
     break;
   case "film": {
     // A film: `--frames` pictures from frame `--from` of a run that `--boot` words steer, one thirtieth of a
@@ -618,12 +637,15 @@ switch (cmd) {
     if (!argv.includes("--no-interface")) stageInterface(standalone ? root : `${root}/duty`);
     cpSync(`${OUT}/EBOOT.PBP`, `${root}/EBOOT.PBP`);
     const frames = Number(opt("--frames", "240"));
-    for (const f of ["status.json", "shot.raw"]) rmSync(`${root}/duty/${f}`, { force: true });
+    for (const f of ["status.json", "shot.raw", "changes.txt"]) rmSync(`${root}/duty/${f}`, { force: true });
+    rmSync(`${root}/changes.txt`, { force: true });
     writeFileSync(`${root}/duty/boot.txt`, `title=0 ${opt("--ctl", "")} shot=${frames} exit=${frames + 3}\n`);
     const run = await $`${headless} --root ${root} --graphics=${opt("--graphics", "software")} --timeout=${opt("--timeout", "240")} ${root}/EBOOT.PBP`.nothrow().quiet();
     const log = (run.stdout.toString() + run.stderr.toString()).trim();
     if (log) console.log(log.split("\n").slice(-12).join("\n"));
     if (existsSync(`${root}/duty/status.json`)) console.log(readFileSync(`${root}/duty/status.json`, "utf8"));
+    // (a scripted run of map changes wrote its lines where the packs are)
+    for (const record of [`${root}/duty/changes.txt`, `${root}/changes.txt`]) if (existsSync(record)) console.log(readFileSync(record, "utf8"));
     if (!existsSync(`${root}/duty/shot.raw`)) throw new Error("the emulator run wrote no frame");
     const raw = readFileSync(`${root}/duty/shot.raw`);
     const rgba = new Uint8Array(480 * 272 * 4);

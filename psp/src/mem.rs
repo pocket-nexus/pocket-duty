@@ -29,6 +29,21 @@ const SMALL: usize = 64 * 1024;
 
 /// Bytes held in kernel blocks.
 pub static mut KERNEL_BYTES: usize = 0;
+/// Bytes a test run keeps from the program (`hold_back`).
+pub static mut HELD_BACK: usize = 0;
+
+/// Keeps `bytes` of the kernel's memory from the program, as one block that is never used. Call
+/// before anything allocates: the arena takes its block at the first allocation, as long as the
+/// kernel's largest free block less 2 MB, so a run started with more free memory than another kind of
+/// start has (PSPLINK or an emulator against the XMB) gets that start's arena and that start's
+/// remainder. False when the kernel has no such block.
+pub unsafe fn hold_back(bytes: usize) -> bool {
+    let id = sys::sceKernelAllocPartitionMemory(SceSysMemPartitionId::SceKernelPrimaryUserPartition, b"held\0".as_ptr(), SceSysMemBlockTypes::Low, bytes as u32, ptr::null_mut::<c_void>());
+    if id.0 >= 0 {
+        HELD_BACK += bytes;
+    }
+    id.0 >= 0
+}
 
 /// A kernel block of `bytes` while the kernel keeps `KEEP` after it: its address and id.
 unsafe fn kernel_block(bytes: usize) -> Option<(*mut u8, SceUid)> {

@@ -157,7 +157,29 @@ fn path(local: bool, name: &[u8]) -> [u8; 64] {
     out
 }
 
+/// The thread the program started on: the only one a path without a device works on from the XMB.
+static mut MAIN_THREAD: i32 = 0;
+/// Opens by a path without a device that another thread made. PSPLINK and an emulator give every
+/// thread a working directory, so such an open works there and fails from the XMB: it is counted
+/// here, and the count must stay 0 (`stray_opens`, in the status and in `changes.txt`).
+static STRAY: AtomicU32 = AtomicU32::new(0);
+
+/// Notes an open by a path without a device: on the main thread, or counted.
+unsafe fn beside() {
+    if sceKernelGetThreadId() != MAIN_THREAD {
+        STRAY.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// How many opens by a path without a device were made off the main thread.
+pub fn stray_opens() -> u32 {
+    STRAY.load(Ordering::Relaxed)
+}
+
 unsafe fn open(local: bool, name: &[u8]) -> SceUid {
+    if local {
+        beside();
+    }
     sceIoOpen(path(local, name).as_ptr(), IoOpenFlags::RD_ONLY, 0)
 }
 
@@ -166,6 +188,7 @@ unsafe fn open(local: bool, name: &[u8]) -> SceUid {
 /// else the first the list has. Call on the thread the program started on, before the frame thread
 /// exists. It allocates nothing.
 pub unsafe fn locate() {
+    MAIN_THREAD = sceKernelGetThreadId();
     // The list says where everything is: every copy of the game has it.
     let mut list = open(true, MANIFEST);
     LOCAL = list.0 >= 0;
@@ -209,6 +232,9 @@ pub unsafe fn locate() {
 
 /// Writes `map.txt`: a map's name, and what follows it.
 unsafe fn write_choice(id: &[u8], then: &[u8]) {
+    if LOCAL {
+        beside();
+    }
     let fd = sceIoOpen(path(LOCAL, CHOICE).as_ptr(), IoOpenFlags::WR_ONLY | IoOpenFlags::CREAT | IoOpenFlags::TRUNC, 0o644);
     if fd.0 >= 0 {
         sceIoWrite(fd, id.as_ptr() as *const c_void, id.len());
@@ -535,7 +561,22 @@ pub unsafe fn serve() -> ! {
             }
             sceKernelDelayThread(10_000);
         }
+        if REPORT_FLAG.load(Ordering::Acquire) == 1 {
+            let path: &[u8] = if LOCAL { b"changes.txt\0" } else { b"host0:/duty/changes.txt\0" };
+            if LOCAL {
+                beside();
+            }
+            let fd = sceIoOpen(path.as_ptr(), IoOpenFlags::WR_ONLY | IoOpenFlags::CREAT | IoOpenFlags::TRUNC, 0o644);
+            if fd.0 >= 0 {
+                sceIoWrite(fd, ptr::addr_of!(REPORT) as *const c_void, REPORT_LEN);
+                sceIoClose(fd);
+            }
+            REPORT_FLAG.store(0, Ordering::Release);
+        }
         if KEPT_FLAG.load(Ordering::Acquire) == 1 {
+            if LOCAL {
+                beside();
+            }
             let path: &[u8] = if LOCAL { b"interface.json\0" } else { b"host0:/duty/interface.json\0" };
             let fd = sceIoOpen(path.as_ptr(), IoOpenFlags::WR_ONLY | IoOpenFlags::CREAT | IoOpenFlags::TRUNC, 0o644);
             if fd.0 >= 0 {
@@ -585,6 +626,30 @@ pub unsafe fn serve() -> ! {
             }
         }
     }
+}
+
+// The record of the changes of map, on its way to `changes.txt` where the packs are.
+const REPORT_MAX: usize = 8192;
+static mut REPORT: [u8; REPORT_MAX] = [0; REPORT_MAX];
+static mut REPORT_LEN: usize = 0;
+static REPORT_FLAG: AtomicU32 = AtomicU32::new(0);
+
+/// Hands the record of the changes of map to `serve`, which writes it as `changes.txt` where the
+/// packs are: beside the EBOOT, or on the computer's share. False while the last one is being written.
+pub unsafe fn report(text: &str) -> bool {
+    if REPORT_FLAG.load(Ordering::Acquire) != 0 {
+        return false;
+    }
+    let n = text.len().min(REPORT_MAX);
+    ptr::copy_nonoverlapping(text.as_ptr(), ptr::addr_of_mut!(REPORT) as *mut u8, n);
+    REPORT_LEN = n;
+    REPORT_FLAG.store(1, Ordering::Release);
+    true
+}
+
+/// Whether the last record handed to `report` is written.
+pub fn reported() -> bool {
+    REPORT_FLAG.load(Ordering::Acquire) == 0
 }
 
 /// Hands what the interface asked to have kept to `serve`, which writes it beside the pack.
