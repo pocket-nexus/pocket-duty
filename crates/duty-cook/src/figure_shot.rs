@@ -18,6 +18,9 @@
 //!   <weapon>_hands.png   at the size of the profile's screen: at the hip, aimed, carried in a sprint
 //!                        and at three moments of RELOAD_TAC, each over its two hands four times as large
 //!   <weapon>_reload.png  twelve moments of RELOAD_TAC at that size, and <weapon>_draw.png of DRAW
+//!   <weapon>_wrists.png  the two wrists at rest, large and without perspective, from four sides
+//!   <weapon>_wrists_whole.png  the same of the arms as the profile takes them from the export,
+//!                        before anything is lowered or left out
 //!   <name>_source.png    the export's own mesh, drawn the same way: what the compiler started from
 //!
 //! A held weapon's colours are near black, so its pictures multiply them by 2.2.
@@ -393,6 +396,33 @@ fn held_hands(figures: &Figures, weapon: u32, id: u32, size: (usize, usize)) -> 
     Ok(sheet.image)
 }
 
+/// The two wrists at rest, large and without perspective: each from the eye's side, from the left,
+/// from above and from the right, the left wrist over the right one. What stands out of the line from
+/// a forearm to its hand shows here before it shows on a device.
+fn held_wrists(figures: &Figures, id: u32) -> Result<Image, String> {
+    let model = figures.model(id).ok_or("the section lacks a held weapon")?;
+    let rest = vec![figure::UNMOVED; part::WEAPON];
+    let cell = (360, 300);
+    let mut sheet = Sheet::new(4, 2, cell);
+    for (row, hand) in [part::HAND_L, part::HAND_R].into_iter().enumerate() {
+        // The wrist: where the hand's vertices lie nearest the forearm's middle.
+        let of = |which: usize| -> Vec<V3> { model.batches().filter(|b| b.batch.bones[0] as usize == which).flat_map(|b| (0..b.batch.vertices as usize).filter_map(move |i| b.vertex(i).map(|v| b.place(&v, &[figure::UNMOVED; part::WEAPON]))).collect::<Vec<_>>()).collect() };
+        let (palm, sleeve) = (of(hand), of(hand - 1));
+        if palm.is_empty() {
+            continue;
+        }
+        let mean = |points: &[V3]| -> V3 { core::array::from_fn(|k| points.iter().map(|p| p[k]).sum::<f32>() / points.len().max(1) as f32) };
+        let middle = if sleeve.is_empty() { mean(&palm) } else { mean(&sleeve) };
+        let wrist = palm.iter().copied().min_by(|a, b| dot(sub(*a, middle), sub(*a, middle)).total_cmp(&dot(sub(*b, middle), sub(*b, middle)))).unwrap_or(middle);
+        for (column, toward) in [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]].into_iter().enumerate() {
+            let mut canvas = Canvas::new(cell.0, cell.1, [0.62, 0.64, 0.66], 2.2);
+            canvas.model(&View::flat(cell.0, cell.1, toward, wrist, 0.22), &model, &rest);
+            sheet.put(column, row, &canvas.image);
+        }
+    }
+    Ok(sheet.image)
+}
+
 /// Twelve moments of one of a held weapon's clips, evenly apart, at the size of a device's screen.
 fn held_strip(figures: &Figures, weapon: u32, id: u32, size: (usize, usize), which: u32) -> Result<Image, String> {
     let model = figures.model(id).ok_or("the section lacks a held weapon")?;
@@ -444,10 +474,11 @@ pub fn run(ir: &Path, out: &Path, profile: &str) -> Result<(), String> {
         second.save(&dir.join(format!("{name}_more.png")))?;
         held_close(&figures, *id)?.save(&dir.join(format!("{name}_close.png")))?;
         held_hands(&figures, weapon as u32, *id, screen)?.save(&dir.join(format!("{name}_hands.png")))?;
+        held_wrists(&figures, *id)?.save(&dir.join(format!("{name}_wrists.png")))?;
         held_strip(&figures, weapon as u32, *id, screen, clip::RELOAD_TAC)?.save(&dir.join(format!("{name}_reload.png")))?;
         held_strip(&figures, weapon as u32, *id, screen, clip::DRAW)?.save(&dir.join(format!("{name}_draw.png")))?;
     }
-    crate::figures::source_pictures(ir, &dir)?;
+    crate::figures::source_pictures(ir, &dir, &profile)?;
     println!("figures: {} KiB in {}, pictures in {}", bytes.len() / 1024, out.join("figures.bin").display(), dir.display());
     Ok(())
 }
