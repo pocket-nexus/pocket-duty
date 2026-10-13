@@ -34,8 +34,8 @@ export const PLACE = {
   wall: 9,
   // [east, north, facing in degrees from north toward east, tag]. The first is the player's.
   starts: [
-    [-3, -17.5, 0, 'street'],
-    [10, -19.5, 0, 'street'],
+    [17, -20, 4, 'street'],
+    [-3, -18.5, 90, 'street'],
     [33.8, -21, 320, 'by the lorry'],
     [20, -8, 0, 'east street'],
     [-9, -8, 0, 'west of the block'],
