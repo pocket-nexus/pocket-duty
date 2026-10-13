@@ -37,10 +37,12 @@ export const PLACE = {
   title: 'Arcade Row',
   turn: -0.3,
   wall: 5.7,
-  // [east, north, facing in degrees from north toward east, tag]. The first is the player's.
+  // [east, north, facing in degrees from north toward east, tag]. The first is the player's: the head of the ramp
+  // into the sunken way, the road's span over it ahead. The title's picture and the export's exposure are that view.
   starts: [
+    [-28.5, 57.5, 174, 'north-west yard'],
+    [6, -66.5, 0, 'south base'],
     [-4, -66, 0, 'south base'],
-    [8, -67, 0, 'south base'],
     [-13, -68, 20, 'south base'],
     [16, -54, 0, 'base terrace'],
     [5, -37, 0, 'south yard'],
@@ -52,7 +54,6 @@ export const PLACE = {
     [-25.5, 2, 0, 'sunken way'],
     [-8, 31, 90, 'corridor'],
     [-33.5, 44, 0, 'west road'],
-    [-27, 65, 90, 'north-west yard'],
     [6, 54, 0, 'north yard'],
     [39, 56, 290, 'low start'],
   ],
