@@ -293,7 +293,7 @@ export const MASSES = [
   // the two piers of the west rooms that stand over the passage
   { at: R(-19, 5.5, -16.5, 6.5), y: F - 0.3, top: TOP, key: PLASTER },
   { at: R(-18.5, 16, -17, 19), y: F - 0.3, top: TOP, key: PLASTER },
-  // furniture: the glass room's table, the desks, the long room's counter, the east hall's pier
+  // furniture: the glass room's table, the desks, the long room's long desk, the east hall's pier
   { at: R(-11, 21, -9, 24), y: F, top: F + 0.8, key: 'ch_desk' },
   { at: R(-12, 4.5, -10, 7), y: F, top: F + 0.8, key: 'ch_desk' },
   { at: R(31, 9, 38.5, 9.8), y: F, top: F + 1, key: 'ch_desk' },
