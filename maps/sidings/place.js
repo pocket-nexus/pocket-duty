@@ -31,7 +31,8 @@
  *
  * A wagon is a floor of the track with a roof 1.14 m over it. The roof is the wagon's body: it stops a
  * player and a bullet, one sees and shoots under it between its bogies, and the walk grid holds no way
- * under it (a standing soldier needs more than 1.15 m). The rails are low walls on the sleepers.
+ * under it (a standing soldier needs more than 1.15 m). A ladder at an end of its side goes up to its roof.
+ * The rails are low walls on the sleepers.
  */
 
 /** The map's name, its turn in the world (which side the sun is on), its walls' height, the starts. */
@@ -112,12 +113,14 @@ export const GROUND = [
   // ------------------------------------------------------------------ the upper hall, round its core
   { at: box(-26, -16.5, -23.4, 10.2), y: DK, ...UPPER },
   { at: box(-23.4, 10.2, -14.2, 12), y: DK, ...UPPER },
-  // (over the way from the connector to the yard: a floor over a floor; its roof is in MASSES)
-  { at: box(-23.4, 12, -14.2, 20), y: DK, key: PLANK, over: true, thick: 0.4, side: WHITE, rail: 0 },
+  // (over the way from the connector to the yard: a floor over a floor, the soldiers' as the way under it is)
+  { at: box(-23.4, 12, -14.2, 20), y: DK, ...UPPER, over: true, thick: 0.4, side: WHITE, rail: 0 },
   { at: box(-18.2, -6.6, -14.2, 10.2), y: DK, ...UPPER },
   { at: box(-23.4, -11, -14.2, -6.6), y: DK, ...UPPER },
-  { at: box(-18.2, -16, -14.2, -11), y: DK, ...UPPER },
-  { at: box(-19, -19.5, -14.2, -16), y: DK, ...UPPER },
+  { at: box(-18.2, -13.7, -14.2, -11), y: DK, ...UPPER },
+  // (over the way from the bay south of the yard to the ladder's shaft: a floor over a floor)
+  { at: box(-18.2, -15.7, -14.2, -13.7), y: DK, ...UPPER, over: true, thick: 0.4, side: WHITE, rail: 0 },
+  { at: box(-19, -19.5, -14.2, -15.7), y: DK, ...UPPER },
   // its stair down to the west walk's landing
   { at: box(-24.5, -19.5, -19, -16.5), y: { from: [-24.5, -18, LD], to: [-19, -18, DK] }, steps: true, key: SLAB, roof: 3.25, walls: 3.65, wall: WHITE, roofKey: CAST },
   { at: box(-28, -19.5, -24.5, -16.5), y: LD, key: SLAB, roof: 6.7, walls: 7.1, wall: WHITE, roofKey: CAST },
@@ -176,6 +179,9 @@ export const GROUND = [
 
   // ------------------------------------------------------------------ south of the yard: the bay, the arch, the court, the way down
   { at: box(-14.2, -15.7, -8.5, -11.5), y: Y, key: SLAB, roof: 4.2, walls: 11.79, wall: CAST, roofKey: CAST },
+  // the bay's way on under the upper hall, and the shaft its ladder climbs to the upper hall
+  { at: box(-18.2, -15.7, -14.2, -13.7), y: Y, key: SLAB, wall: WHITE },
+  { at: box(-20, -15.7, -18.2, -12.2), y: Y, key: SLAB, roof: 9.4, wall: WHITE, roofKey: CAST },
   { at: box(9.5, -15.5, 15.7, -11.5), y: Y, key: SLAB, roof: 4.4, walls: 11.79, wall: CAST, roofKey: CAST },
   { at: [[9.5, -21.5], [27.3, -21.5], [27.3, -18.2], [15.7, -18.2], [15.7, -15.5], [9.5, -15.5]], y: Y, key: SLAB, wall: CAST },
   { at: box(24, -24.8, 27.3, -21.5), y: { from: [25.65, -21.5, Y], to: [25.65, -24.8, 2.6] }, key: SLAB, wall: CAST },
@@ -284,8 +290,6 @@ export const MASSES = [
   { at: box(24.1, 0.3, 33.5, 3.2), y: 14.25, top: 15.24, key: CAST },
   { at: box(24.1, -9.5, 33.5, -6.6), y: 14.25, top: 15.24, key: CAST },
   { at: box(24.1, 7.8, 28.9, 11.4), y: 15.24, top: 18.5, key: RED },
-  // the roof over the upper hall's floor that lies over the way to the yard
-  { at: box(-23.4, 12, -14.2, 20), y: 12.85, top: 13.2, key: CAST },
   // the hall's roof over the wagons under it
   { at: box(-6.4, -30.9, 9.6, -28), y: 11.4, top: 12.19, key: TIN },
   { at: box(16.9, -30.9, 33, -28), y: 11.4, top: 12.19, key: TIN },
@@ -442,15 +446,17 @@ export const PROPS = [
   ['pallet', -11.6, 30.8, 8, 1], ['pallet', -11.6, 30.8, 20, 1, Y + 0.14], ['pallet', -12.6, -14.6, 80, 1], ['pallet', 3.4, -25.6, 12, 1], ['pallet', 3.4, -25.6, 2, 1, PL + 0.14], ['pallet', 49.6, -39.8, 30, 1],
 ];
 
-/** Ladders, drawn: `facing` is the way a ladder looks, away from what it climbs. Nobody climbs one yet. */
+/** Ladders: `facing` is the way a ladder looks, away from what it climbs. A player and a soldier climb one. */
 export const LADDERS = [
-  // a ladder at an end of each wagon's side: the yard's four, the hall's four
-  { at: [4.4, -9.62], facing: 180, y: Y + CLEAR, h: 3.8 },
-  { at: [-1.7, 3.32], facing: 0, y: Y + CLEAR, h: 3.8 },
-  { at: [18, 0.18], facing: 180, y: Y + CLEAR, h: 3.8 },
-  { at: [21.8, 7.08], facing: 180, y: Y + CLEAR, h: 3.8 },
-  { at: [8.8, -31.02], facing: 180, y: CLEAR, h: 3.75 },
-  { at: [17.7, -31.02], facing: 180, y: CLEAR, h: 3.75 },
-  { at: [30.4, -35.18], facing: 0, y: CLEAR, h: 3.75 },
-  { at: [8, -41.48], facing: 0, y: CLEAR, h: 3.75 },
+  // from the shaft beside the bay south of the yard up to the upper hall
+  { at: [-18.33, -12.95], facing: 270, y: Y, h: DK - Y },
+  // up an end of each wagon's side to its roof, which is no floor of the plan: these are the player's alone
+  { at: [4.4, -9.62], facing: 180, y: Y, h: 4.95 },
+  { at: [-1.7, 0.18], facing: 180, y: Y, h: 4.95 },
+  { at: [18, 0.18], facing: 180, y: Y, h: 4.95 },
+  { at: [21.8, 10.22], facing: 0, y: Y, h: 4.95 },
+  { at: [8.8, -31.02], facing: 180, y: 0, h: 4.9 },
+  { at: [17.7, -31.02], facing: 180, y: 0, h: 4.9 },
+  { at: [30.4, -35.18], facing: 0, y: 0, h: 4.9 },
+  { at: [8, -41.48], facing: 0, y: 0, h: 4.9 },
 ];
