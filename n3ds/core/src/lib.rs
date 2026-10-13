@@ -264,6 +264,13 @@ unsafe fn slice<T>(p: *const T, n: u32) -> &'static [T] {
     }
 }
 
+/// The version of the pack this program reads (`duty_pack::VERSION`): the host checks the pack's head
+/// against it, so the number is written once.
+#[no_mangle]
+pub extern "C" fn dt_pack_version() -> u32 {
+    duty_pack::VERSION
+}
+
 /// Sizes of the records both sides lay out: the host checks them against `core.h` at start.
 #[no_mangle]
 pub extern "C" fn dt_sizes(out: &mut [u32; 8]) {

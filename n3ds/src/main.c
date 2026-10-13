@@ -158,8 +158,8 @@ static bool open_pack(void) {
     return false;
   }
   u32 head[4];
-  if (fread(head, 4, 4, pack) != 4 || head[0] != TAG('D', 'U', 'T', 'Y') || head[1] != 1 || head[2] > 32 || fread(sections, sizeof(Section), head[2], pack) != head[2]) {
-    snprintf(app_error, sizeof app_error, "duty.pack is not a version 1 pack");
+  if (fread(head, 4, 4, pack) != 4 || head[0] != TAG('D', 'U', 'T', 'Y') || head[1] != dt_pack_version() || head[2] > 32 || fread(sections, sizeof(Section), head[2], pack) != head[2]) {
+    snprintf(app_error, sizeof app_error, "duty.pack is not a version %lu pack", (unsigned long)dt_pack_version());
     return false;
   }
   section_count = head[2];

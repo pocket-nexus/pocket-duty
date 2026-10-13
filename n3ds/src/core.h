@@ -130,6 +130,8 @@ typedef struct {
 } DtFxVertex;
 
 void dt_sizes(uint32_t out[8]);
+/* The version of the pack the core reads (duty_pack::VERSION). */
+uint32_t dt_pack_version(void);
 /* `clock`: microseconds, for the core's own timers. */
 const char *dt_init(const DtPack *pack, uint32_t (*clock)(void));
 void dt_stage(uint32_t error, const char *message, uint32_t len);
