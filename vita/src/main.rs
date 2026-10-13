@@ -279,6 +279,9 @@ struct Timing {
     ms: [f32; Timing::N],
     at: usize,
     late: u32,
+    /// Of the late frames, how many this thread's work made late, and how many the GPU's.
+    late_cpu: u32,
+    late_gpu: u32,
     frames: u32,
 }
 
@@ -299,7 +302,10 @@ impl Timing {
         self.ms.iter().fold(0.0, |a, &b| a.max(b))
     }
     fn clear(&mut self) {
-        *self = Timing { ms: [16.7; Timing::N], at: 0, late: 0, frames: 0 };
+        *self = Timing::new();
+    }
+    fn new() -> Timing {
+        Timing { ms: [16.7; Timing::N], at: 0, late: 0, late_cpu: 0, late_gpu: 0, frames: 0 }
     }
 }
 
@@ -523,7 +529,9 @@ impl World {
 /// `nearer=<hundredths>` (the levels' distances), `everything=1`, `budget=<triangles>`, `govern=0|1`,
 /// `pace=<refreshes a frame>`, `profile=1` (wait for the GPU each frame and time it), `interface=0`, `merge=
 /// <indices>`, `cull=0|1|2`, and `sky= haze= shadows= effects= figures= shades= flash=` (0 or 1): each a part
-/// of the frame that can be left out to learn what it costs.
+/// of the frame that can be left out to learn what it costs. `walls=1` has every fragment of the street read
+/// the ground's shadow picture, as the ground's do: what a second picture's read costs where walls fill the
+/// screen (the picture it gives is wrong: the ground's shadow lies on the walls).
 unsafe fn remote(words: &str, set: &mut Settings, session: &mut Session, ui: &mut interface::Ui, mut world: Option<&mut World>) {
     for word in words.split_whitespace() {
         let Some((key, value)) = word.split_once('=') else { continue };
@@ -538,6 +546,7 @@ unsafe fn remote(words: &str, set: &mut Settings, session: &mut Session, ui: &mu
             "figures" => set.look.figures = on,
             "shades" => set.look.shades = on,
             "flash" => set.look.flash = on,
+            "walls" => set.look.walls = on,
             "merge" => set.look.merge = next() as u32,
             "cull" => set.look.cull = next() as u8,
             "everything" => set.everything = on,
@@ -709,11 +718,11 @@ fn main() {
         let mut fence = Fence::new(0, 2);
         let control = if live { control_watcher() } else { mpsc::channel().1 };
         let ctx = g::vita2d_get_context();
-        let mut timing = Timing { ms: [16.7; Timing::N], at: 0, late: 0, frames: 0 };
+        let mut timing = Timing::new();
         let mut last = Instant::now();
         let mut last_vcount = sceDisplayGetVcount();
         let (mut sim_ms, mut select_ms, mut draw_ms, mut gpu_ms, mut ui_ms, mut ui_draw_ms) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
-        let (mut late_cpu, mut late_gpu) = (0u32, 0u32);
+        let mut was_profiling = false;
         let mut frame_no = shell.frame;
         let mut clock_tick = 0u32;
         let mut was_playing = false;
@@ -829,6 +838,9 @@ fn main() {
                 // A stopped match is silent but for the street.
                 if !playing {
                     sounding.silence();
+                } else {
+                    // (late frames are counted from where a match starts or goes on)
+                    timing.clear();
                 }
                 sounding.ambience(&w.sounds, Id::Ambience, if playing { 110 } else { 70 });
             }
@@ -967,7 +979,11 @@ fn main() {
                 let tg = Instant::now();
                 fence.wait(slot);
                 gpu_ms = gpu_ms * 0.9 + tg.elapsed().as_secs_f32() * 100.0;
+            } else if was_profiling {
+                // (a profile run waits for the GPU every frame: its late frames are not the game's)
+                timing.clear();
             }
+            was_profiling = set.profile;
             // The distances of the levels of detail follow the triangle budget: in quickly when a frame draws too
             // many, out slowly when there is room. They also come in when this frame had to wait for the GPU to
             // finish the frame before last: the GPU is then a refresh behind and the next frames would be late.
@@ -1000,9 +1016,9 @@ fn main() {
             timing.push((now - last).as_secs_f32() * 1000.0, shown > set.pace);
             if shown > set.pace {
                 if worked.as_secs_f32() > 0.012 {
-                    late_cpu += 1;
+                    timing.late_cpu += 1;
                 } else {
-                    late_gpu += 1;
+                    timing.late_gpu += 1;
                 }
             }
             last = now;
@@ -1030,7 +1046,7 @@ fn main() {
                     "interface": {"up": shell.ui.up(), "open": channel().is_open(), "error": shell.ui.error, "turns": shell.ui.turns, "taken": shell.ui.pace.taken, "turnMs": shell.ui.turn_ms, "worstTurnMs": shell.ui.worst_ms, "collections": shell.ui.collections, "collectMs": shell.ui.collect_ms},
                     "pack": {"bytes": w.bytes, "fetched": w.fetched, "from": packs.directory(), "id": serde_json::from_str::<Value>(&w.meta).unwrap_or(Value::String(w.meta.clone())), "chart": w.chart.is_some()},
                     "loadMs": w.load_ms,
-                    "frameMs": timing.avg(), "worstMs": timing.worst(), "late": timing.late, "lateBy": {"cpu": late_cpu, "gpu": late_gpu}, "frames": timing.frames, "pace": set.pace,
+                    "frameMs": timing.avg(), "worstMs": timing.worst(), "late": timing.late, "lateBy": {"cpu": timing.late_cpu, "gpu": timing.late_gpu}, "frames": timing.frames, "pace": set.pace,
                     "cpuMs": {"match": sim_ms, "select": select_ms, "draw": draw_ms, "interface": ui_ms, "interfaceDraw": ui_draw_ms},
                     "gpuMs": if set.profile { json!(gpu_ms) } else { Value::Null },
                     "draws": street.draws + people.draws,

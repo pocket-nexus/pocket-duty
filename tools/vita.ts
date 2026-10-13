@@ -19,11 +19,13 @@
 //                                              # somewhere, and `sky= haze= shadows= effects= figures= shades= flash=
 //                                              # interface=` leave a part of the frame out)
 //   bun tools/vita.ts capture [--out f.png]    # the frame on the display, 960 x 544
-//   bun tools/vita.ts bench [--seconds 60] [--clock 50]
+//   bun tools/vita.ts bench [--seconds 60] [--clock 50] [--roam 15]
 //                                              # a match played by the bench's player (ended after --clock seconds, so
-//                                              # the results come up): frame timings → .pocket-build/validation/vita/
+//                                              # the results come up; --roam: put at the map's next start point every
+//                                              # so many seconds): frame timings → .pocket-build/validation/vita/
 //   bun tools/vita.ts cost [--view "x,y,z,yaw,pitch"] [--quick]
 //                                              # one held view with each part left out in turn, the GPU timed: what each costs
+//                                              # (bench and cost: --into DIR and --tag NAME say where the record goes)
 //   bun tools/vita.ts package                  # dist/vita/pocket-duty-PKDT00001.vpk: every cooked map's pieces, the
 //                                              # interface and the programs the console compiled, no debug link
 //   bun tools/vita.ts emu [--seconds 25] [--boot "<words>"]
@@ -52,7 +54,7 @@ import { PACKS_FILE } from "../vendor/pocketjs/tools/pocket3d-packs.ts";
 import { packageVitaVpk } from "../vendor/pocketjs/tools/vita-package.ts";
 import { VitaUsbClient } from "../vendor/pocketjs/tools/vita-dev-client.ts";
 import { prepareVitaUsb } from "../vendor/pocketjs/tools/vita-usb.ts";
-import { FIRST, mapNamed } from "./maps.ts";
+import { FIRST, irDir, mapNamed } from "./maps.ts";
 import { bringMaps, cooked, said } from "./packs.ts";
 import { compileInterface } from "./ui.ts";
 
@@ -248,33 +250,53 @@ async function running(from: string[], seconds = 600): Promise<any> {
   throw new Error("the game did not come up: is Pocket Devkit open, the cable in, and the USB host running (bun tools/vita.ts serve)?");
 }
 
-/** A run of the bench's player on a map: what the frames cost, as a record under .pocket-build/validation/vita/. */
+/** Where a record of a run goes: `--into DIR`, or .pocket-build/validation/vita/; `--tag NAME` goes into its file's name. */
+function record(name: string, from: string[]): string {
+  const dir = resolve(ROOT, opt("--into", VALIDATION, from));
+  mkdirSync(dir, { recursive: true });
+  const tag = opt("--tag", "", from);
+  return `${dir}/${name}${tag ? `-${tag}` : ""}.json`;
+}
+
+/**
+ * A run of the bench's player on a map: what the frames cost, as a record under .pocket-build/validation/vita/.
+ * The bench's player aims and fires and has no legs: `--roam N` puts him at the map's next start point every N
+ * seconds (the starts of the map's export), so a run sees the map from every start with the match going on.
+ */
 async function bench(from: string[]): Promise<void> {
   const seconds = Number(opt("--seconds", "60", from));
-  await running(from);
+  const engine = await running(from);
   // `--clock N` ends the match after N seconds, so the run goes through to the results.
   const clock = opt("--clock", "", from);
+  const roam = Number(opt("--roam", "0", from));
+  const scene = `${irDir(engine.map)}/scene.json`;
+  if (roam > 0 && !existsSync(scene)) throw new Error(`${scene} is missing: --roam reads the map's starts from its export`);
+  const starts: { position: number[]; yaw: number }[] = roam > 0 ? JSON.parse(readFileSync(scene, "utf8")).spawns : [];
   ctl("ui=start auto=1 god=1 stats=1", from);
   await Bun.sleep(3000);
   // (a match that starts sets its own clock: the word comes after it has)
   if (clock) ctl(`clock=${clock}`, from);
   const samples: any[] = [];
   for (let at = 0; at < seconds; at++) {
-    await Bun.sleep(1000);
+    const began = Date.now();
+    if (starts.length > 0 && at % roam === 0) {
+      const start = starts[(at / roam) % starts.length]!;
+      ctl(`at=${start.position.map((c) => c.toFixed(2)).join(",")},${((start.yaw * 180) / Math.PI).toFixed(1)},0`, from);
+    }
+    await Bun.sleep(Math.max(0, 1000 - (Date.now() - began)));
     const e = status(from).engine;
     samples.push({ frameMs: e.frameMs, worstMs: e.worstMs, late: e.late, lateBy: e.lateBy, tris: e.tris, figureTris: e.figureTris, draws: e.draws, cpuMs: e.cpuMs, scale: e.governor?.scale });
   }
   const end = status(from).engine;
   const mean = (key: string) => samples.reduce((sum, s) => sum + s[key], 0) / samples.length;
-  const record = {
-    map: end.map, seconds, mode: end.mode, match: end.match, pictures: end.pictures, frames: end.frames, late: end.late, lateBy: end.lateBy,
+  const run = {
+    map: end.map, seconds, roam, mode: end.mode, match: end.match, pictures: end.pictures, frames: end.frames, late: end.late, lateBy: end.lateBy,
     frameMs: mean("frameMs"), worstMs: Math.max(...samples.map((s) => s.worstMs)), tris: { mean: mean("tris"), most: Math.max(...samples.map((s) => s.tris)) }, draws: { mean: mean("draws"), most: Math.max(...samples.map((s) => s.draws)) },
     cpuMs: end.cpuMs, governor: end.governor, memory: end.memory, pack: end.pack, msaa: end.msaa, clockMhz: end.clockMhz, samples,
   };
-  mkdirSync(VALIDATION, { recursive: true });
-  const out = `${VALIDATION}/bench-${end.map}.json`;
-  writeFileSync(out, JSON.stringify(record, null, 2) + "\n");
-  console.log(`vita: ${end.map}: ${record.frameMs.toFixed(2)} ms a frame, worst ${record.worstMs.toFixed(1)}, ${end.late} late of ${end.frames} (cpu ${end.lateBy.cpu}, gpu ${end.lateBy.gpu}), ${Math.round(record.tris.mean)} triangles (most ${record.tris.most}), ${Math.round(record.draws.mean)} draws → ${out}`);
+  const out = record(`bench-${end.map}`, from);
+  writeFileSync(out, JSON.stringify(run, null, 2) + "\n");
+  console.log(`vita: ${end.map}: ${run.frameMs.toFixed(2)} ms a frame, worst ${run.worstMs.toFixed(1)}, ${end.late} late of ${end.frames} (cpu ${end.lateBy.cpu}, gpu ${end.lateBy.gpu}), ${Math.round(run.tris.mean)} triangles (most ${run.tris.most}), ${Math.round(record.draws.mean)} draws → ${out}`);
   ctl("auto=0 stats=0", from);
 }
 
@@ -293,7 +315,7 @@ async function cost(from: string[]): Promise<void> {
     const e = status(from).engine;
     return { gpuMs: e.gpuMs as number, drawMs: e.cpuMs.draw as number, selectMs: e.cpuMs.select as number, tris: e.tris as number, figureTris: e.figureTris as number, draws: e.draws as number };
   };
-  const all = "sky=1 haze=1 shadows=1 effects=1 figures=1 shades=1 flash=1 interface=1 nearer=100 merge=150";
+  const all = "sky=1 haze=1 shadows=1 effects=1 figures=1 shades=1 flash=1 walls=0 interface=1 nearer=100 merge=150";
   ctl(`ui=start god=1 govern=0 profile=1 pace=1 view=${view},65`, from);
   await Bun.sleep(3000);
   const whole = await read(all);
@@ -306,6 +328,7 @@ async function cost(from: string[]): Promise<void> {
     ["without the soldiers and their shadows", "figures=0"],
     ["without the soldiers' shadows", "shades=0"],
     ["without the interface", "interface=0"],
+    ["a shadow picture read by every fragment of the street (walls=1)", "walls=1"],
     ["runs drawn one by one (merge=0)", "merge=0"],
     ["runs joined across 200 triangles (merge=600)", "merge=600"],
     ["the levels' distances halved (nearer=50)", "nearer=50"],
@@ -315,8 +338,7 @@ async function cost(from: string[]): Promise<void> {
   }
   rows.push(["the whole frame again", await read(all)]);
   ctl(`${all} govern=1 profile=0 view=off`, from);
-  mkdirSync(VALIDATION, { recursive: true });
-  const out = `${VALIDATION}/cost-${engine.map}.json`;
+  const out = record(`cost-${engine.map}`, from);
   if (!has("--quick", from)) writeFileSync(out, JSON.stringify({ map: engine.map, view, pictures: engine.pictures, msaa: engine.msaa, rows: Object.fromEntries(rows) }, null, 2) + "\n");
   const signed = (ms: number) => `${ms >= 0 ? "+" : ""}${ms.toFixed(2)}`;
   for (const [name, r] of rows) console.log(`${name.padEnd(46)} GPU ${r.gpuMs.toFixed(2)} ms (${signed(r.gpuMs - whole.gpuMs)}), draws ${r.drawMs.toFixed(2)} ms, choice ${r.selectMs.toFixed(2)} ms, ${r.tris} + ${r.figureTris} triangles in ${r.draws} draws`);

@@ -13,7 +13,7 @@
 //                                                  one frame on this machine's GPU (Metal) → a PNG and the status
 //   bun tools/wgpu.ts check [--headed] [--seconds 5] [--dist]   the page in Chrome, driven by keys and pointer:
 //                                                  from the title into a match, the menu, the results, the same
-//                                                  as a Nintendo 3DS with its lower screen's keys, what a
+//                                                  as a Nintendo 3DS with its lower screen's keys and as a PS Vita, what a
 //                                                  frame costs, what the first frame needs on a slow line,
 //                                                  and, when a second map is cooked, a match on it chosen
 //                                                  from the map list → .pocket-build/validation/web/
@@ -698,6 +698,38 @@ if (command === "build") {
       expect(`3ds: a PSP chosen while the match runs keeps the match (${after.mode}, tick ${tick} to ${after.match.tick}) on one screen (${JSON.stringify(left)})`, after.mode === "play" && after.match.tick > tick && after.match.weapon === armed.match.weapon && JSON.stringify(left) === JSON.stringify([["upper", 480, 272]]));
       await p.save("3ds-then-psp");
       expect(`3ds: no error on the page (${p.problems.join("; ")})`, p.problems.length === 0);
+      await p.page.close();
+    }
+
+    // ---- the same match as a PS Vita: one screen of 960 by 544 in its shell, played by a PSP's keys
+    {
+      const p = await visit("?device=vita");
+      await p.up();
+      await p.mode("title");
+      await p.page.waitForTimeout(600);
+      const shape = (await p.status()).shape;
+      expect(`vita: the renderer draws the screen's 960 by 544 (${JSON.stringify(shape)})`, shape.name === "vita" && shape.width === 960 && shape.height === 544);
+      const screens = (await p.page.evaluate(`[...document.querySelectorAll("[data-pocket-screen]:not([hidden])")].map((c) => [c.dataset.pocketScreen, c.width, c.height])`)) as [string, number, number][];
+      expect(`vita: the shell holds one screen (${JSON.stringify(screens)})`, JSON.stringify(screens) === JSON.stringify([["upper", 960, 544]]));
+      await p.save("vita-title");
+      await p.say("ui=start");
+      await p.mode("play");
+      await p.say("god=1");
+      const tick = (await p.status()).match.tick;
+      await p.page.keyboard.down("KeyE");
+      await p.page.waitForTimeout(500);
+      await p.page.keyboard.up("KeyE");
+      const played = await p.status();
+      expect(`vita: the match runs and R fires (tick ${tick} to ${played.match.tick}, ${played.match.shots} rounds)`, played.match.tick > tick && played.match.shots > 0);
+      await p.save("vita-play");
+      await p.page.screenshot({ path: join(directory, "page-vita-play.png") });
+      const mark = (await p.page.locator("[data-pocket-mark]").first().boundingBox())!;
+      await p.page.mouse.move(mark.x + mark.width / 2, mark.y + mark.height / 2);
+      await p.page.waitForTimeout(300);
+      const said = (await p.page.evaluate(`document.getElementById("pocket-simulated").textContent`)) as string;
+      expect(`vita: the mark says the picture is simulated ("${said}")`, said === "Your browser draws this picture. A real PS Vita draws Pocket Duty with its own hardware, so it looks and runs differently there.");
+      await p.page.mouse.move(4, 400);
+      expect(`vita: no error on the page (${p.problems.join("; ")})`, p.problems.length === 0);
       await p.page.close();
     }
 
