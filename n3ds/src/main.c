@@ -35,6 +35,7 @@
 
 #include "core.h"
 #include "packs_delivery.h"
+#include "pocket_core.h"
 #include "pocket3d_packs.h"
 #include "devserver.h"
 #include "gfx.h"
@@ -235,6 +236,37 @@ static bool pack_whole(u32 index) {
   return true;
 }
 
+/* The held map from above, in the interface's core: its texture there, or -1. The picture is the pack
+ * `<id>-map` of the same manifest (tools/packs.ts): 16 bytes of facts, then a PocketJS image entry. A map
+ * that came without one has no picture, and the interface shows its dots on a plain ground. */
+static int32_t chart = -1;
+
+static void load_chart(void) {
+  if (chart >= 0)
+    ui_free_texture(chart);
+  chart = -1;
+  dt_chart(-1, 0, 0, 0);
+  char name[P3D_PACK_NAME_BYTES + 8], found[P3D_PACK_NAME_BYTES + 1];
+  snprintf(name, sizeof name, "%s-map", held_id);
+  int32_t index = p3d_packs_find(packs, name);
+  if (index < 0 || !guest_running())
+    return;
+  u32 bytes = (u32)p3d_packs_name(packs, index, found);
+  u8 *pack = bytes >= 16 && bytes <= 2 * 1024 * 1024 ? malloc(bytes) : NULL;
+  if (pack && p3d_packs_read(packs, index, 0, pack, bytes, piece_read, NULL) == 0 && memcmp(pack, "DMAP", 4) == 0) {
+    u16 picture, side;
+    float metres;
+    u32 entry;
+    memcpy(&picture, pack + 4, 2);
+    memcpy(&side, pack + 6, 2);
+    memcpy(&metres, pack + 8, 4);
+    memcpy(&entry, pack + 12, 4);
+    if (entry <= bytes - 16 && (chart = ui_upload_img_entry(pack + 16, entry)) >= 0)
+      dt_chart(chart, picture, side, metres);
+  }
+  free(pack);
+}
+
 /* Finds the manifest and says which maps there is a whole pack for (`have`: ids with spaces between). */
 static bool find_packs(char *have, size_t cap) {
   for (unsigned d = 0; d < sizeof PACK_DIRS / sizeof *PACK_DIRS && !packs; d++) {
@@ -313,6 +345,7 @@ static bool load(const char *id) {
   snprintf(first, sizeof first, "%.*s", (int)strcspn(maps_have, " "), maps_have);
   if (!open_pack(id ? id : first))
     return false;
+  load_chart();
   static RenderData data;
   static DtPack p;
   memset(&p, 0, sizeof p);

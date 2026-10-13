@@ -295,6 +295,23 @@ pub extern "C" fn dt_sizes(out: &mut [u32; 8]) {
 static mut MAPS_TOLD: (Option<&'static str>, Vec<&'static str>) = (None, Vec::new());
 /// The interface's setup carried over a change of map: the match on the new map begins with it.
 static mut CARRIED: Option<Session> = None;
+/// The held map from above, as the host put it in the interface's core (`dt_chart`).
+static mut CHART_TOLD: Option<duty_interface::Chart> = None;
+
+/// Tells the core the held map's picture from above: its texture in the interface's core, the
+/// picture's side in pixels, the map's side in it and the metres a pixel covers. A negative `texture`
+/// is a map without a picture. The interface is told with the rest of the state.
+///
+/// # Safety
+/// No other thread is inside a function of this library.
+#[no_mangle]
+pub unsafe extern "C" fn dt_chart(texture: i32, picture: u32, side: u32, metres: f32) {
+    let chart = (texture >= 0).then(|| duty_interface::Chart { handle: texture, texture: picture as u16, side: side as u16, metres, entry: alloc::string::String::new() });
+    if let Some(c) = (*core::ptr::addr_of_mut!(CORE)).as_mut() {
+        c.session.chart.clone_from(&chart);
+    }
+    *core::ptr::addr_of_mut!(CHART_TOLD) = chart;
+}
 
 /// Says which map's pack `dt_init` is given next (`held`) and which maps the card has a pack for
 /// (`have`: ids with spaces between). Ids `maps/maps.json` does not list are left out.
@@ -377,6 +394,7 @@ pub unsafe extern "C" fn dt_init(pack: &PackIn, clock: Option<unsafe extern "C" 
     let told = &*core::ptr::addr_of!(MAPS_TOLD);
     session.map_id = told.0.unwrap_or(maps::first().id);
     session.maps = if told.1.is_empty() { alloc::vec![session.map_id] } else { told.1.clone() };
+    session.chart.clone_from(&*core::ptr::addr_of!(CHART_TOLD));
     // The map picture's corner, as the compiler laid it out about the level's origin.
     session.map = (scene.level_origin[0] - 80.0, scene.level_origin[2] - 80.0);
     session.focal = 120.0 / tan(FOV * 0.5 * (PI / 180.0));

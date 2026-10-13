@@ -11,7 +11,7 @@ type Signals = { [K in keyof Slow]: Accessor<Slow[K]> };
 
 const initial: Slow = {
   mode: "loading", message: "", options: [], stats: "", prefs: "", woke: 0,
-  weapon: "", fire: "", feed: [], banner: [0, "", ""], result: null, map: "", maps: [],
+  weapon: "", fire: "", feed: [], banner: [0, "", ""], result: null, map: "", maps: [], chart: null,
 };
 
 function same(a: unknown, b: unknown): boolean {

@@ -32,6 +32,7 @@ import { POCKET3D_ICON } from "../vendor/pocketjs/tools/pocket3d-icon.ts";
 import { CUT_SIZES, writePacks } from "../vendor/pocketjs/tools/pocket3d-packs.ts";
 import { stagePocket3dWeb } from "../vendor/pocketjs/tools/pocket3d-web.ts";
 import { FIRST, mapNamed, MAPS, packPath } from "./maps.ts";
+import { chartPacks, isChart } from "./packs.ts";
 import { compileInterface, type Device } from "./ui.ts";
 
 export const ROOT = resolve(import.meta.dir, "..");
@@ -135,11 +136,11 @@ async function dist(pieceBytes: number) {
   // manifest that lists them, named by its own (vendor/pocketjs/tools/pocket3d-packs.ts). A section two
   // maps share is one file, and a pack cooked again leaves the pieces it did not change where they are.
   // A map's pack is the manifest's place and the map's name after `#` (pocket_web_wgpu::source).
-  const cut = writePacks(join(DIST, "pack"), packs().map((each) => ({ name: each.id, file: each.file })), { min: Math.max(64 << 10, pieceBytes >> 3), max: pieceBytes, bits: Math.max(12, Math.round(Math.log2(pieceBytes)) - 2) });
+  const cut = writePacks(join(DIST, "pack"), [...packs().map((each) => ({ name: each.id, file: each.file })), ...chartPacks("psp30", packs().map((each) => each.id))], { min: Math.max(64 << 10, pieceBytes >> 3), max: pieceBytes, bits: Math.max(12, Math.round(Math.log2(pieceBytes)) - 2) });
   const place = (name: string) => `pack/${cut.manifest}#${name}`;
   const manifest = place(cut.packs[0]!.name);
   // The page names its build and its packs.
-  let page = namePacks(readFileSync(join(SITE, "index.html"), "utf8"), cut.packs.slice(1).map((each) => ({ id: each.name, pack: place(each.name) })));
+  let page = namePacks(readFileSync(join(SITE, "index.html"), "utf8"), cut.packs.slice(1).filter((each) => !isChart(each.name)).map((each) => ({ id: each.name, pack: place(each.name) })));
   for (const [from, to] of [[`<meta name="pocket-pack" content="duty.pack">`, `<meta name="pocket-pack" content="${manifest}">`], [`src="main.js"`, `src="app/${id}/main.js"`], [`href="pocket3d-stage.css"`, `href="app/${id}/pocket3d-stage.css"`], [`href="pocket3d-player.css"`, `href="app/${id}/pocket3d-player.css"`]] as const) {
     if (!page.includes(from)) throw new Error(`wgpu/page/index.html has no ${from}`);
     page = page.replace(from, to);
