@@ -92,6 +92,8 @@ pub struct Look {
     pub shades: bool,
     /// The muzzle's light on the street.
     pub flash: bool,
+    /// A measurement: every fragment of the street reads the ground's shadow picture, not the ground's alone.
+    pub walls: bool,
     /// Two runs of one chunk with no more indices than this between them are drawn as one: the triangles
     /// between are cheaper than a draw.
     pub merge: u32,
@@ -102,7 +104,7 @@ pub struct Look {
 impl Look {
     /// (two runs are joined across 50 triangles: measured on the console in a view of 137 000 triangles, the
     /// GPU takes 0.45 ms less than across 200 and this thread's draws 0.18 ms more)
-    pub const DEFAULT: Look = Look { sky: true, haze: true, shadows: true, effects: true, figures: true, shades: true, flash: true, merge: 150, cull: 0 };
+    pub const DEFAULT: Look = Look { sky: true, haze: true, shadows: true, effects: true, figures: true, shades: true, flash: true, walls: false, merge: 150, cull: 0 };
 
     pub fn cull(&self, two_sided: bool) -> Cull {
         match (two_sided, self.cull) {
@@ -186,11 +188,13 @@ pub fn merge(draws: &mut Vec<Draw>, gap: u32) {
     draws.truncate(kept);
 }
 
-/// A picture of the pack as rows of four bytes a texel, every level after the one above it.
+/// A picture of the pack as the GPU takes it, every level after the one above it: rows of four bytes a
+/// texel, or the picture's own blocks of 4 × 4 texels.
 fn rows(file: &mut PackFile, r: &Record) -> Result<Vec<u8>, String> {
     let levels = (r.levels as u32).max(1);
     let mut out = Vec::new();
-    if r.format == texture::RGBA8 {
+    if r.format == texture::RGBA8 || r.block().is_some() {
+        // (true colour is rows already, and blocks are what the GPU reads)
         for l in 0..levels {
             let (at, len) = r.level(l);
             let from = out.len();
@@ -411,7 +415,9 @@ impl Gfx {
         let records: Vec<Record> = file.records(pack::TEXT)?;
         let largest = records.iter().map(|r| r.width as usize * r.height as usize * 4).max().unwrap_or(0);
         let mut staging = Block::new(Kind::Main, largest.max(4096))?;
-        let mut up = Uploader::new(64 * 1024)?;
+        // (the uploader stages a level of blocks whole before the transfer engine reorders it)
+        let staged = records.iter().filter(|r| r.block().is_some()).map(|r| r.level(0).1).max().unwrap_or(0);
+        let mut up = Uploader::new(staged.max(64 * 1024))?;
         let mut pictures = Vec::with_capacity(records.len());
         let mut sun = (Vec::new(), 0, 0);
         let mut picture_bytes = 0usize;
@@ -428,7 +434,13 @@ impl Gfx {
             // The transfer engine refuses a copy of 2048 texels a side into the GPU's order (0x805b0003 on the
             // console); 512 goes through. A larger picture stays as rows: the ground's shadow, which has one
             // level and is not repeated.
-            let mut t = if linear || w.max(h) > SWIZZLED_SIDE { up.texture(vram, Format::Rgba8, w, h, levels, &data)? } else { swizzled(&mut staging, vram, w, h, levels, &data)? };
+            let mut t = match r.format {
+                // A surface's picture in the GPU's blocks: PocketJS's uploader puts the blocks in its order.
+                texture::BC1 => up.texture(vram, Format::Bc1, w, h, levels, &data)?,
+                texture::BC3 => up.texture(vram, Format::Bc3, w, h, levels, &data)?,
+                _ if linear || w.max(h) > SWIZZLED_SIDE => up.texture(vram, Format::Rgba8, w, h, levels, &data)?,
+                _ => swizzled(&mut staging, vram, w, h, levels, &data)?,
+            };
             let wrap = if r.flags & texture::CLAMP != 0 { Wrap::Clamp } else { Wrap::Repeat };
             t.set_wrap(wrap, wrap);
             // Between two texels, and between two levels: the GE and the PICA200 take the nearest level.
@@ -563,7 +575,7 @@ impl Gfx {
                 self.glass.push((mat::box_distance2(view.eye, &c.min, &c.max), *d));
                 continue;
             }
-            let want = (if c.flags & chunk::CUTOUT != 0 { variant::CUTOUT } else { 0 }) | (if view.look.shadows && c.flags & chunk::GROUND != 0 { variant::GROUND } else { 0 }) | flash_bit;
+            let want = (if c.flags & chunk::CUTOUT != 0 { variant::CUTOUT } else { 0 }) | (if view.look.shadows && (c.flags & chunk::GROUND != 0 || view.look.walls) { variant::GROUND } else { 0 }) | flash_bit;
             let cull = view.look.cull(c.flags & chunk::TWO_SIDED != 0);
             if want != program {
                 program = want;

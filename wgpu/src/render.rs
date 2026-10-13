@@ -229,7 +229,7 @@ impl Renderer {
         let mut pictures = Vec::with_capacity(textures.len());
         let mut sun = (Vec::new(), 0, 0);
         for (number, t) in textures.iter().enumerate() {
-            if t.format != texture::T8 && t.format != texture::RGBA8 {
+            if t.format != texture::T8 && t.format != texture::RGBA8 && t.block().is_none() {
                 return Err(format!("picture {number} has format {} (this renderer reads the PSP's pack and the PS Vita's)", t.format));
             }
             let levels = (t.levels as u32).max(1);

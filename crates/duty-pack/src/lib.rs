@@ -133,6 +133,12 @@ pub mod texture {
     /// Four bytes a texel (red, green, blue, alpha), rows from the top one, no tiles and no
     /// palette: a device that holds true colour (the PS Vita). The levels go down to one texel.
     pub const RGBA8: u8 = 4;
+    /// The GPU's own blocks of 4 × 4 texels, the picture's top row of blocks first, every level down
+    /// to one block: 8 bytes a block with two colours of 16 bits and two bits a texel (`BC1`, a
+    /// surface with no holes), or 16 bytes with eight more for the texels' alpha (`BC3`). A sixth or
+    /// a quarter of true colour's bytes.
+    pub const BC1: u8 = 5;
+    pub const BC3: u8 = 6;
     /// Palette entry 0 is clear: the device tests alpha.
     pub const CUTOUT: u16 = 1;
     /// Coordinates outside 0…1 take the edge's texel.
@@ -165,15 +171,28 @@ impl Texture {
         }
     }
 
+    /// Bytes of a block of 4 × 4 texels, when the picture is held in blocks.
+    pub fn block(&self) -> Option<usize> {
+        match self.format {
+            texture::BC1 => Some(8),
+            texture::BC3 => Some(16),
+            _ => None,
+        }
+    }
+
     /// Bytes of level `l`, and where it starts from `offset`.
     pub fn level(&self, l: u32) -> (usize, usize) {
         let (texel, mut at) = self.layout();
         // (a level of a picture that is not square keeps one texel along its shorter side)
         let side = |s: u16, k: u32| (s as usize >> k).max(1);
+        let bytes = |k: u32| match self.block() {
+            Some(block) => side(self.width, k).div_ceil(4) * side(self.height, k).div_ceil(4) * block,
+            None => side(self.width, k) * side(self.height, k) * texel,
+        };
         for k in 0..l {
-            at += (side(self.width, k) * side(self.height, k) * texel + 15) & !15;
+            at += (bytes(k) + 15) & !15;
         }
-        (at, side(self.width, l) * side(self.height, l) * texel)
+        (at, bytes(l))
     }
 
     /// The texel at (`x`, `y`) of level `l`, counted from the picture's top left: red, green, blue
@@ -191,6 +210,44 @@ impl Texture {
         if self.format == texture::RGBA8 {
             let c = &texels[base + at + (y * width + x) * 4..][..4];
             return [c[0], c[1], c[2], c[3]];
+        }
+        if let Some(block) = self.block() {
+            let b = &texels[base + at + ((y / 4) * width.div_ceil(4) + x / 4) * block..][..block];
+            let place = (y % 4) * 4 + x % 4;
+            // The colours: two of five, six and five bits, and two between them (or one between and a hole).
+            let c = &b[block - 8..];
+            let (c0, c1) = (u16::from_le_bytes([c[0], c[1]]), u16::from_le_bytes([c[2], c[3]]));
+            let wide = |v: u16| [((v >> 11) as u32 * 255 / 31) as u8, ((v >> 5 & 63) as u32 * 255 / 63) as u8, ((v & 31) as u32 * 255 / 31) as u8];
+            let (a, z) = (wide(c0), wide(c1));
+            let index = (u32::from_le_bytes([c[4], c[5], c[6], c[7]]) >> (place * 2)) & 3;
+            let four = c0 > c1 || block == 16;
+            let mix = |n: u32, d: u32| -> [u8; 3] { core::array::from_fn(|k| ((a[k] as u32 * (d - n) + z[k] as u32 * n) / d) as u8) };
+            let rgb = match (index, four) {
+                (0, _) => a,
+                (1, _) => z,
+                (2, true) => mix(1, 3),
+                (3, true) => mix(2, 3),
+                (2, false) => mix(1, 2),
+                _ => [0, 0, 0],
+            };
+            let alpha = if block == 16 {
+                // Two alphas and six between them (or four between, then none and all).
+                let (a0, a1) = (b[0] as u32, b[1] as u32);
+                let bits = b[2..8].iter().rev().fold(0u64, |all, byte| all << 8 | *byte as u64);
+                match ((bits >> (place * 3)) & 7) as u32 {
+                    0 => a0 as u8,
+                    1 => a1 as u8,
+                    i if a0 > a1 => ((a0 * (8 - i) + a1 * (i - 1)) / 7) as u8,
+                    6 => 0,
+                    7 => 255,
+                    i => ((a0 * (6 - i) + a1 * (i - 1)) / 5) as u8,
+                }
+            } else if index == 3 && !four {
+                0
+            } else {
+                255
+            };
+            return [rgb[0], rgb[1], rgb[2], alpha];
         }
         // Tiles of 8 × 8, a tile's texels in Z order: the bits of x and y in turn, x the lower.
         let spread = |v: usize| (v & 1) | (v & 2) << 1 | (v & 4) << 2;
