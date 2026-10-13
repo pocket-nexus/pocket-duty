@@ -21,7 +21,10 @@
 //                                               # the held map again from the new list
 //   bun tools/n3ds.ts status
 //   bun tools/n3ds.ts ctl "ui=start auto=1"     # the core's words (n3ds/core/src/lib.rs `dt_control`: mode=, ui=, pad=,
-//                                               # at=, near=, auto=, god=, hurt=, clock=, skill=, budget=, option=), and:
+//                                               # at=, near=, auto=, god=, hurt=, clock=, skill=, budget=, option=,
+//                                               # map=<id>: a match on that map, taken where the interface's map
+//                                               # list is reachable, at the title, in the menu and at the results;
+//                                               # during play say ui=title first), and:
 //                                               #   press=MASK (PocketJS BTN bits on the interface; 0 rests)
 //                                               #   touch=X,Y | touch=off (a stylus on the lower screen)
 //   bun tools/n3ds.ts capture [--out f.png] [--surface top|auxiliary]

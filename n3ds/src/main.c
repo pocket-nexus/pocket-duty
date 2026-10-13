@@ -763,7 +763,7 @@ int main(void) {
   if (top)
     C3D_RenderTargetSetOutput(top, GFX_TOP, GFX_LEFT, transfer);
   Result romfs = romfsInit();
-  bool loaded = false;
+  bool loaded = false, can_load = false;
   stage = "loading";
   devserver_set_runtime(&state, NULL, stage, 0);
   devserver_poll();
@@ -806,6 +806,7 @@ int main(void) {
     snprintf(app_error, sizeof app_error, "romfsInit failed: %08lx", (unsigned long)romfs);
   else {
     LightLock_Init(&mixing);
+    can_load = true;
     loaded = load(NULL);
   }
   if (loaded) {
@@ -879,6 +880,22 @@ int main(void) {
       /* (an emulator run that did not load ends here, with its error in boot.log) */
       if (exit_at >= 0)
         break;
+      /* A delivery brought a list of packs to a program that had none it could read: it reads now. */
+      if (relist && can_load) {
+        relist = false;
+        free_sections();
+        forget_packs();
+        loaded = load(NULL);
+        if (loaded) {
+          if (!sounding)
+            sounding = sound_start();
+          stage = "running";
+        } else {
+          failed();
+        }
+        continue;
+      }
+      relist = false;
       /* The interface says why; without it the console already has. */
       if (guest_running()) {
         guest_turn(1.0f / 60);
