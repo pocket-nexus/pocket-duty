@@ -6,6 +6,7 @@ import { after } from "@pocketjs/framework/clock";
 import { glyph, modality } from "@pocketjs/framework/modality";
 import type { Host } from "./host.ts";
 import type { Kill, Mode, Setting } from "./protocol.ts";
+import { MAPS } from "./generated/level.ts";
 
 /** What the settings a renderer may offer are called. One it lists that is not here shows its key. */
 const LABELS: Record<string, string> = {
@@ -37,8 +38,9 @@ export function read<T extends string | boolean>(member: T | (() => T)): T {
   return typeof member === "function" ? member() : member;
 }
 
-/** The list on the screen: the mode's own, or one opened from it. */
-export type Sheet = "menu" | "settings" | "about";
+/** The list on the screen: the mode's own, or one opened from it. `maps`: the maps a match can be
+ *  played on, where the renderer has more than one. */
+export type Sheet = "menu" | "settings" | "about" | "maps";
 
 /** Seconds a fade takes to play, and a turn more. */
 export const SETTLE = 0.4;
@@ -233,10 +235,16 @@ export interface Match {
   backLabel: Accessor<string>;
   /** A list comes up over the match. */
   menu(): void;
+  /** A match begins on the map the renderer holds. */
+  start(): void;
   /** What the strip under a list says at its left. */
   notice: Accessor<string>;
   /** Each mode's own rows: a presentation may build them before the mode is first shown. */
   lists: { title: Row[]; menu: Row[]; results: Row[] };
+  /** One row per map the renderer has a pack for: a press asks for a match on it. */
+  maps: Accessor<Row[]>;
+  /** The map the renderer holds: its name and its line. */
+  map: Accessor<{ title: string; line: string }>;
   /** One row per setting the renderer offers. */
   settings: Accessor<Row[]>;
   controls: Row[];
@@ -319,8 +327,23 @@ export function createMatch(host: Host): Match {
     setBegan((count) => count + 1);
     host.send({ type });
   };
+  // The maps the renderer has a pack for, as this interface knows them, in the list's order.
+  const offeredMaps = createMemo(() => host.maps().join(" "));
+  const play = (id: string) => {
+    setBegan((count) => count + 1);
+    host.send({ type: "map", id });
+  };
+  const maps = createMemo<Row[]>(() =>
+    MAPS.filter((map) => offeredMaps().split(" ").includes(map.id)).map((map) => ({
+      label: map.title,
+      // The map behind the list needs no reading.
+      value: () => (host.map() === map.id ? "Here" : ""),
+      press: () => play(map.id),
+    })));
+  const map = createMemo(() => MAPS.find((entry) => entry.id === host.map()) ?? MAPS[0]);
   const title: Row[] = [
-    { label: "Start match", press: () => begin("start") },
+    // With one map the match starts on it; with more, the first row opens their list.
+    { label: "Start match", press: () => (untrack(maps).length > 1 ? setSheet("maps") : begin("start")) },
     { label: "Settings", press: () => setSheet("settings") },
     { label: "About", press: () => setSheet("about") },
   ];
@@ -340,6 +363,7 @@ export function createMatch(host: Host): Match {
   const rows = createMemo<Row[]>((before) => {
     if (!listing()) return before;
     if (sheet() === "settings") return settings();
+    if (sheet() === "maps") return maps();
     if (sheet() === "about") return none;
     return mode() === "title" ? title : mode() === "menu" ? menu : results;
   }, none);
@@ -416,7 +440,7 @@ export function createMatch(host: Host): Match {
   createEffect(on(began, hideBanner, { defer: true }));
 
   return {
-    host, schedule, mode, listing, sheet, rows, settings, began, feed, banner, bannered,
+    host, schedule, mode, listing, sheet, rows, settings, began, feed, banner, bannered, maps, map,
     lists: { title, menu, results },
     controls: controls(),
     open: setSheet,
@@ -426,6 +450,12 @@ export function createMatch(host: Host): Match {
     },
     backLabel: () => (sheet() !== "menu" ? "back" : mode() === "menu" ? "resume" : ""),
     menu: () => host.send({ type: "menu", on: true }),
-    notice: createMemo<string>((before) => (mode() === "title" ? "Team Deathmatch" : mode() === "menu" ? "Paused" : mode() === "results" ? "Match over" : before), ""),
+    start: () => begin("start"),
+    // What the strip says: the match's kind and where it is played, or what the list that is up is for.
+    notice: createMemo<string>((before) => {
+      const where = map().title;
+      if (mode() === "title") return sheet() === "maps" ? "Choose a map" : `Team Deathmatch · ${where}`;
+      return mode() === "menu" ? `Paused · ${where}` : mode() === "results" ? `Match over · ${where}` : before;
+    }, ""),
   };
 }

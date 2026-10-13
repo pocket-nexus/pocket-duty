@@ -1,0 +1,13 @@
+[
+  { "name": "above", "pos": [0, 190, 30], "look": [0, 0, 0], "fov": 40 },
+  { "name": "south-street", "pos": [0.4, 1.7, 46], "look": [0, 2.2, 0], "fov": 65 },
+  { "name": "gate", "pos": [0.5, 1.7, -10], "look": [0, 3.5, -28], "fov": 65 },
+  { "name": "north-court", "pos": [-3, 1.7, -46], "look": [8, 2.5, -30], "fov": 70 },
+  { "name": "west-yard", "pos": [-27, 1.7, -30], "look": [-45, 1.5, -46], "fov": 70 },
+  { "name": "east-yard", "pos": [19, 1.7, -32], "look": [44, 2, -48], "fov": 70 },
+  { "name": "long-lane", "pos": [51.5, 1.7, 33], "look": [51.5, 2.2, -20], "fov": 65 },
+  { "name": "long-doors", "pos": [44, 1.7, 47], "look": [51.5, 2.2, 30], "fov": 65 },
+  { "name": "covered-way", "pos": [-51.5, 1.7, 29], "look": [-51.5, 1.8, -10], "fov": 70 },
+  { "name": "lower-way", "pos": [-9, 1.7, 5], "look": [-40, 1.8, 5], "fov": 65 },
+  { "name": "short-way", "pos": [8, 1.7, -9], "look": [26, 2, -12], "fov": 70 }
+]

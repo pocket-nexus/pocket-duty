@@ -30,6 +30,7 @@ import { pocketRuntimeDeviceId } from "../vendor/pocketjs/contracts/spec/pocket-
 import { extractHostBuildInputs } from "../vendor/pocketjs/framework/src/manifest/index.ts";
 import { withDeviceLease } from "../vendor/pocketjs/tools/device-lease.ts";
 import { ensureQuickJs, runContainer, THREE_DS_CONTAINER_IMAGE } from "../vendor/pocketjs/tools/3ds-toolchain.ts";
+import { FIRST, mapNamed, packPath } from "./maps.ts";
 import { compileInterface } from "./ui.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -48,7 +49,13 @@ const opt = (key: string, fallback: string) => {
   const at = argv.indexOf(key);
   return at < 0 ? fallback : (argv[at + 1] ?? fallback);
 };
-const PACK = join(ROOT, ".pocket-build/duty/n3ds30/duty.pack");
+// The map the package holds. The pack is in the `.3dsx` (its ROMFS), and the paired wire installs a file of
+// 32 MiB at most: one pack fits. So a package is one map's: the first, or `--map <id>` for a `.3dsx` of
+// another. Its interface lists that map alone, and the core is built knowing its id (`DUTY_MAP`).
+// maps/README.md says what choosing among maps on this device needs.
+const MAP = mapNamed(opt("--map", FIRST));
+const PACK = packPath(MAP.id, "n3ds30");
+const HELD = [MAP];
 const host = opt("--host", process.env.POCKET_3DS_HOST ?? "192.168.8.159");
 
 // Loaded by path at run time: PocketJS's client module is checked by PocketJS's own compiler settings.
@@ -100,13 +107,13 @@ async function interfaceCore(): Promise<string> {
 }
 
 async function build() {
-  if (!existsSync(PACK)) throw new Error(`no pack at ${PACK}: run \`bun tools/duty.ts cook --profile n3ds30\` first`);
+  if (!existsSync(PACK)) throw new Error(`no pack at ${PACK}: run \`bun tools/duty.ts cook${MAP.id === FIRST ? "" : ` --map ${MAP.id}`} --profile n3ds30\` first`);
   // The interface: its bundle and pak for this device, and the plan they were resolved against.
   const uiDirectory = join(ROOT, ".pocket-build/ui/3ds");
-  const ui = argv.includes("--no-ui") ? extractHostBuildInputs(JSON.parse(readFileSync(join(uiDirectory, "plan.json"), "utf8"))) : (await compileInterface("3ds")).inputs;
+  const ui = argv.includes("--no-ui") ? extractHostBuildInputs(JSON.parse(readFileSync(join(uiDirectory, "plan.json"), "utf8"))) : (await compileInterface("3ds", HELD)).inputs;
   const aux = ui.surfaces?.auxiliary.logical;
   if (ui.viewport.logical.join("x") !== "400x240" || aux?.join("x") !== "320x240") throw new Error("the interface's 3DS presentation is not 400x240 over 320x240");
-  await $`rustup run ${TOOLCHAIN} cargo build --release`.cwd(join(ROOT, "n3ds/core"));
+  await $`rustup run ${TOOLCHAIN} cargo build --release`.cwd(join(ROOT, "n3ds/core")).env({ ...process.env, DUTY_MAP: MAP.id });
   const core = "n3ds/core/target/armv6k-nintendo-3ds/release/libduty_n3ds_core.a";
   const uiCore = await interfaceCore();
   const mounts = [{ hostPath: ROOT, containerPath: "/duty" }];

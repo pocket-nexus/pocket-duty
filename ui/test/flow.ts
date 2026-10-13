@@ -227,6 +227,48 @@ assert.equal(mock.state.mode, "title");
 rig.step(30);
 assert.equal(mock.idle, true);
 
+// A renderer with two maps. The title's first row opens their list and asks for nothing; the map
+// behind the list is marked; the back button closes the list. A row asks for a match on its map:
+// another map is read first, and the match begins when it has been.
+mock.state.maps = ["street", "yards"];
+rig.step(6);
+press(BTN.UP, 1);
+press(BTN.UP, 1);
+press(BTN.CIRCLE, 10);
+assert.deepEqual(asked(), []);
+for (const text of ["MAPS", "Market Street", "Twin Yards", "Here"]) assert.ok(rig.shows(text), `no "${text}" on the screen`);
+press(BTN.CROSS, 8);
+assert.deepEqual(asked(), []);
+press(BTN.CIRCLE, 10);
+choose(1);
+assert.deepEqual(asked(), [{ type: "map", id: "yards" }]);
+assert.equal(mock.state.mode, "loading");
+rig.step(6);
+for (const button of [...EVERY, BTN.START]) press(button, 1);
+assert.deepEqual(asked(), []);
+mock.read();
+rig.step(10);
+assert.equal(mock.state.mode, "play");
+assert.equal(mock.state.map, "yards");
+// The menu over the match says where it is played. Back at the title the list marks the map held,
+// and its row starts a match with no read.
+press(BTN.START, 10);
+assert.ok(rig.shows("Paused · Twin Yards"), "the strip does not name the map");
+choose(3);
+assert.deepEqual(asked(), [{ type: "menu", on: true }, { type: "title" }]);
+rig.step(10);
+press(BTN.UP, 1);
+press(BTN.UP, 1);
+press(BTN.CIRCLE, 10);
+choose(1);
+assert.deepEqual(asked(), [{ type: "map", id: "yards" }]);
+assert.equal(mock.state.mode, "play");
+press(BTN.START, 10);
+choose(3);
+asked();
+rig.step(30);
+assert.equal(mock.idle, true);
+
 // Every character the session put on the screen is in the bundle's fonts.
 assert.deepEqual(rig.missing(), []);
 const paced = mock.log.filter((command) => command.type === "idle").length;

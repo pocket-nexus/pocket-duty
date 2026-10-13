@@ -67,6 +67,10 @@ export interface HostState {
   banner: [number, string, string];
   /** Set while `mode` is "results". */
   result: Result | null;
+  /** The map the renderer holds (its id in maps/maps.json), and the maps it has a pack for, in the
+   *  list's order. A renderer that holds one map lists that one. */
+  map: string;
+  maps: string[];
   /** The numbers that change during play, at most once a turn (see `T`). */
   t: number[];
 }
@@ -142,4 +146,7 @@ export type Command =
   | { type: "wake"; id: number; seconds: number }
   /** A key of a touch screen was tapped during play: the next weapon, the fire
    *  mode, a reload. The match hears one press of the pad's button for it. */
-  | { type: "tap"; key: "weapon" | "mode" | "reload" };
+  | { type: "tap"; key: "weapon" | "mode" | "reload" }
+  /** A match on the map of this id, one of `HostState.maps`. The renderer reads that map's pack
+   *  first when it holds another's (`mode` is "loading" meanwhile), then the match begins. */
+  | { type: "map"; id: string };

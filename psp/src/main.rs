@@ -32,6 +32,7 @@ use alloc::string::String;
 use core::ffi::c_void;
 use core::fmt::Write;
 
+use duty_interface::maps;
 use duty_interface::{channel, pad, parse_f32, Mode, Pad, Session};
 use duty_pack::sound::{Id, Sound};
 use duty_pack::{self as pack, Scene};
@@ -215,6 +216,12 @@ unsafe fn remote(text: &str, ui: &mut interface::Ui, session: &mut Session, game
                     session.mode = mode;
                 }
             }
+            // (what a row of the interface's map list asks)
+            "map" => {
+                if let Some(map) = maps::named(value) {
+                    channel().receive(&format!(r#"{{"type":"map","id":"{}"}}"#, map.id));
+                }
+            }
             "ui" => channel().receive(match value {
                 "start" => r#"{"type":"start"}"#,
                 "menu" => r#"{"type":"menu","on":true}"#,
@@ -319,7 +326,8 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
     let mut boot_buf = [0u8; 2048];
     let boot: &str = store::boot_text(&mut boot_buf).unwrap_or("");
     let word = |key: &str| boot.split_ascii_whitespace().find_map(|w| w.strip_prefix(key).and_then(|w| w.strip_prefix('=')).and_then(parse_f32));
-    if word("title") != Some(0.0) {
+    // (a run the last one started for a match on another map goes straight to it)
+    if word("title") != Some(0.0) && !store::plays() {
         title();
     }
     psp::dprintln!("Pocket Duty\n");
@@ -391,10 +399,18 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
     let mut game = Game::new(level, defs, 0x5eed_1234);
     game.timer = Some(micros);
     let mut session = Session::new();
+    // The map this run read, and the maps there is a pack for: what the interface's list offers.
+    session.map_id = store::map().id;
+    session.maps = store::maps().map(|map| map.id).collect();
     // The map picture's corner, as the compiler laid it out about the level's origin.
     session.map = (scene.level_origin[0] - 80.0, scene.level_origin[2] - 80.0);
     session.focal = 136.0 / tan(FOV * 0.5 * (PI / 180.0));
     session.apply(&mut game);
+    if store::plays() {
+        session.play(&mut game);
+    }
+    // A map the interface asked for: the program is started again on it (`store`).
+    let mut leaving: Option<&'static maps::Map> = None;
     {
         // What the interface asked to have kept in an earlier run.
         let mut buf = [0u8; store::KEPT_MAX];
@@ -455,6 +471,20 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
         }
         if let Some(text) = session.obey(&mut game) {
             prefs = Some(text);
+        }
+        // Another map is another run of the program: the storage thread writes its name down and starts
+        // the program again. Until then the match stands still and the screen says what is read; where
+        // the kernel will not start a program, it says how to go on.
+        if let Some(to) = session.wanted.take().and_then(maps::named) {
+            store::change(to);
+            leaving = Some(to);
+        }
+        if let Some(to) = leaving {
+            let waits = store::change_waits();
+            session.mode = if waits { Mode::Error } else { Mode::Loading };
+            let message = &mut channel().state.message;
+            message.clear();
+            let _ = if waits { write!(message, "{} is chosen. Start Pocket Duty again to play it.", to.title) } else { write!(message, "Reading {}", to.title) };
         }
         // What the interface asked to have kept goes to the storage thread, which writes it beside the pack.
         if let Some(text) = prefs.take() {
@@ -686,7 +716,8 @@ unsafe fn run(ui: &mut interface::Ui, on_screen: &mut bool) -> Result<(), &'stat
             let spent = core::mem::take(&mut game.spent).map(|us| us / 15);
             let _ = write!(
                 status,
-                "{{\"target\":\"psp\",\"stage\":\"running\",\"frames\":{},\"frameMs\":{:.2},\"worstMs\":{:.2},\"late\":{},\"mode\":\"{}\",\"draws\":{},\"tris\":{},\"figureTris\":{},\"clusters\":{{\"listed\":{},\"unseen\":{},\"outside\":{},\"turned\":{},\"drawn\":{},\"cut\":{},\"large\":{}}},\"cut\":{{\"tested\":{},\"near\":{},\"corners\":{},\"cut\":{}}},\"nearer\":{:.2},\"farNear\":{:.2},\"budget\":{},\"gpuMs\":{:.2},\"busyMs\":{:.2},\"geMs\":{:.2},\"geWaited\":{},\"cpuMs\":{{\"sim\":{:.2},\"select\":{:.2},\"list\":{:.2}}},\"simUs\":[{},{},{},{}],\"near\":[{},{},{}],\"selectUs\":{},\"listUs\":[{},{},{},{},{},{},{},{},{},{}],\"words\":{},\"eye\":[{:.2},{:.2},{:.2}],\"yaw\":{:.1},\"pitch\":{:.1},\"match\":{{\"health\":{:.0},\"us\":{},\"them\":{},\"clock\":{:.0},\"standing\":{},\"kills\":{},\"deaths\":{},\"shots\":{},\"hits\":{},\"weapon\":{},\"magazine\":{}}},\"sound\":{},\"memory\":{{\"freeAtStart\":{},\"freeAfterLoad\":{},\"free\":{},\"resident\":{},\"arena\":{{\"capacity\":{},\"afterLoad\":{},\"now\":{}}},\"kernelBlocks\":{}}},\"loadMs\":{},\"pack\":{},\"interface\":{{\"up\":{},\"error\":\"{}\",\"turns\":{},\"why\":[{},{},{},{},{}],\"turnMs\":{{\"script\":{:.2},\"layout\":{:.2},\"news\":{:.2},\"quiet\":{:.2},\"ticks\":{:.2},\"worst\":{:.2},\"recent\":{:.2}}},\"collections\":{},\"cpuMs\":{:.2},\"words\":{},\"bytes\":{}}}}}",
+                "{{\"target\":\"psp\",\"stage\":\"running\",\"map\":\"{}\",\"frames\":{},\"frameMs\":{:.2},\"worstMs\":{:.2},\"late\":{},\"mode\":\"{}\",\"draws\":{},\"tris\":{},\"figureTris\":{},\"clusters\":{{\"listed\":{},\"unseen\":{},\"outside\":{},\"turned\":{},\"drawn\":{},\"cut\":{},\"large\":{}}},\"cut\":{{\"tested\":{},\"near\":{},\"corners\":{},\"cut\":{}}},\"nearer\":{:.2},\"farNear\":{:.2},\"budget\":{},\"gpuMs\":{:.2},\"busyMs\":{:.2},\"geMs\":{:.2},\"geWaited\":{},\"cpuMs\":{{\"sim\":{:.2},\"select\":{:.2},\"list\":{:.2}}},\"simUs\":[{},{},{},{}],\"near\":[{},{},{}],\"selectUs\":{},\"listUs\":[{},{},{},{},{},{},{},{},{},{}],\"words\":{},\"eye\":[{:.2},{:.2},{:.2}],\"yaw\":{:.1},\"pitch\":{:.1},\"match\":{{\"health\":{:.0},\"us\":{},\"them\":{},\"clock\":{:.0},\"standing\":{},\"kills\":{},\"deaths\":{},\"shots\":{},\"hits\":{},\"weapon\":{},\"magazine\":{}}},\"sound\":{},\"memory\":{{\"freeAtStart\":{},\"freeAfterLoad\":{},\"free\":{},\"resident\":{},\"arena\":{{\"capacity\":{},\"afterLoad\":{},\"now\":{}}},\"kernelBlocks\":{}}},\"loadMs\":{},\"pack\":{},\"interface\":{{\"up\":{},\"error\":\"{}\",\"turns\":{},\"why\":[{},{},{},{},{}],\"turnMs\":{{\"script\":{:.2},\"layout\":{:.2},\"news\":{:.2},\"quiet\":{:.2},\"ticks\":{:.2},\"worst\":{:.2},\"recent\":{:.2}}},\"collections\":{},\"cpuMs\":{:.2},\"words\":{},\"bytes\":{}}}}}",
+                session.map_id,
                 timing.frames,
                 timing.avg(),
                 timing.worst(),

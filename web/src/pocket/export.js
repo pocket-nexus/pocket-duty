@@ -13,16 +13,22 @@
 //   audio.dir      every sound, rendered by the reference's synthesis (audio.js)
 //   scene.json     what the other files need to be read: bounds, spawn points, the level's axes
 //
-//   export.html?sink=http://127.0.0.1:5291[&only=world,collision,…]
+//   export.html?sink=http://127.0.0.1:5291[&only=world,collision,…][&map=<name>]
+//
+// `map` is a map of ours: the server was started for it (tools/export.ts), and the world is built from
+// its layout (./mapworld.js). `only=look` exports nothing and leaves the page to tools/export.ts, which
+// poses the camera (`window.__LOOK__`) and takes pictures of the map as the reference draws it.
 import * as THREE from 'three';
 import { boot } from './boot.js';
 import { Bundle } from './bundle.js';
+import { mapGrid } from './mapnav.js';
 import { exportFigures } from './figures.js';
 import { exportAudio } from './audio.js';
 
 const params = new URLSearchParams(location.search);
 const SINK = params.get('sink');
 const ONLY = params.get('only')?.split(',');
+const MAP = params.get('map') ?? '';
 const wants = (part) => !ONLY || ONLY.includes(part);
 
 const logEl = document.getElementById('log');
@@ -35,7 +41,7 @@ const put = async (name, body) => {
 
 // The lowest preset: its surface programs read nothing from the screen (no ambient occlusion buffer, no
 // contact shadows, no reflections), so a vertex drawn as a point gets what the surface alone decides.
-const { engine, pump, system } = await boot({ quality: params.get('q') ?? 'low' });
+const { engine, pump, system } = await boot({ quality: params.get('q') ?? 'low', map: MAP });
 const renderer = system('render').renderer;
 log('reference started');
 
@@ -313,8 +319,13 @@ async function exportCollision() {
 // ---------------------------------------------------------------- where the soldiers walk
 async function exportNav() {
   const ai = system('ai');
-  const grid = ai.grid;
   const world = system('world');
+  // A map of ours has ground under roofs, lintels and the gate, and walls thinner than a cell (./mapnav.js).
+  if (world.map) {
+    const { opened, closed } = mapGrid(ai, world, system('physics'));
+    log(`nav: ${opened} cells opened under ${world.ceilings.length} roofs, lintels and gates, ${closed} closed by ${world.barriers.length} walls`);
+  }
+  const grid = ai.grid;
   const bundle = new Bundle({
     cell: grid.cell, minX: grid.minX, minZ: grid.minZ, nx: grid.nx, nz: grid.nz,
     radius: grid.radius, height: grid.height, crouchHeight: grid.crouchHeight, maxStep: grid.maxStep,
@@ -441,6 +452,8 @@ async function exportScene() {
   const physics = system('physics');
   const scene = {
     reference: 'Claude of Duty',
+    // The map: the reference's own street, or a layout of ours built by the reference's kit.
+    map: world.map ? { id: world.map.id, title: world.map.title ?? world.map.id } : { id: 'street', title: 'Market Street' },
     seed: 0x5eed1234,
     bounds: { min: world.bounds.min.toArray(), max: world.bounds.max.toArray() },
     // The reference lays the street out along its own axes and turns it into the world: a level point
@@ -461,6 +474,28 @@ async function exportScene() {
   await put('scene.json', JSON.stringify(scene, null, 1));
   log('scene: written');
 }
+
+// A look at the map through the reference's own renderer: the camera at a level point, looking at
+// another, for tools/export.ts to take a picture of. Nothing of it goes into a pack.
+window.__LOOK__ = async ({ pos, look, fov = 60, frames = 12 }) => {
+  const world = system('world');
+  const player = system('player');
+  player?.setControlEnabled?.(false);
+  if (engine.viewScene) engine.viewScene.visible = false;
+  const camera = engine.camera;
+  world.levelToWorld(pos[0], pos[1], pos[2], camera.position);
+  camera.fov = fov;
+  camera.updateProjectionMatrix();
+  camera.lookAt(world.levelToWorld(look[0], look[1], look[2]));
+  player?.teleport?.(camera.position, camera.rotation);
+  await pump(frames);
+  // (the player's own camera rig may have moved it: put it back for the frame that is looked at)
+  world.levelToWorld(pos[0], pos[1], pos[2], camera.position);
+  camera.lookAt(world.levelToWorld(look[0], look[1], look[2]));
+  camera.updateMatrixWorld(true);
+  await pump(2);
+  return true;
+};
 
 // What the steps kept in their own files work with.
 const ctx = { THREE, engine, pump, system, renderer, put, log, png, Bundle, readTexture, prepare, bakeVertices };

@@ -41,8 +41,10 @@ export class Mock {
       { key: "skill", value: 1, choices: ["Recruit", "Regular", "Veteran"] },
       { key: "stats", value: 0 },
     ],
-    stats: "", prefs: "", woke: 0, weapon: "M4A1", fire: "AUTO", feed: [], banner: [0, "", ""], result: null, t: fresh(),
+    stats: "", prefs: "", woke: 0, weapon: "M4A1", fire: "AUTO", feed: [], banner: [0, "", ""], result: null, map: "street", maps: ["street"], t: fresh(),
   };
+  /** A map this renderer was asked for and is reading: `read()` ends the read. */
+  reading: string | null = null;
   /** Every command received, oldest first. */
   log: Command[] = [];
   /** The interface said it has nothing scheduled. */
@@ -105,6 +107,15 @@ export class Mock {
         else if (command.key === "mode") s.fire = s.fire === "AUTO" ? "SEMI" : "AUTO";
         else this.set({ ammo: 30 });
         break;
+      case "map":
+        // A match on a map it has a pack for: at once on the one it holds, after a read on another.
+        if (!s.maps.includes(command.id) || !(s.mode === "title" || s.mode === "menu" || s.mode === "results")) break;
+        if (command.id === s.map) this.begin();
+        else {
+          this.reading = command.id;
+          Object.assign(s, { mode: "loading", message: `Reading ${command.id}` });
+        }
+        break;
       case "wake":
         this.wakes.push({ id: command.id, due: this.seconds + command.seconds });
         this.most = Math.max(this.most, this.wakes.length);
@@ -115,6 +126,15 @@ export class Mock {
   /** The level has loaded: the title is up. */
   loaded() {
     Object.assign(this.state, { mode: "title", message: "" });
+  }
+
+  /** The pack of the map that was asked for has been read: the match begins on it. */
+  read() {
+    if (!this.reading) return;
+    this.state.map = this.reading;
+    this.state.message = "";
+    this.reading = null;
+    this.begin();
   }
 
   /** Numbers of this moment, by name: `set({ health: 62, heading: 135 })`. */

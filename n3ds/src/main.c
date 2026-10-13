@@ -187,7 +187,7 @@ static bool load(void) {
   static RenderData data;
   static DtPack p;
   u32 size = 0;
-  loading("Reading the street");
+  loading("Reading the map");
   p.scene = read_section(TAG('S', 'C', 'E', 'N'), malloc, &size);
   p.chunks = read_section(TAG('C', 'H', 'N', 'K'), lined, &size);
   p.chunk_count = size / 128;

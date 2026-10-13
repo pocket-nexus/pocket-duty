@@ -19,10 +19,13 @@
 //                                             # the pictures of a run, one thirtieth of a second of the match apart,
 //                                             # drawn by the console (or by PPSSPPHeadless with --emu): what
 //                                             # tools/listing.ts makes the listing's clips from. --bare: no interface
-//   bun tools/psp.ts package                  # dist/psp/PSP/GAME/PocketDuty for a Memory Stick
+//   bun tools/psp.ts package                  # dist/psp/PSP/GAME/PocketDuty for a Memory Stick: every cooked map's pack
 //   bun tools/psp.ts emu [--frames 240] [--ctl "at=..."] [--out f.png] [--standalone] [--keep] [--no-interface]
 //                                             # the same PRX in PPSSPPHeadless (software GE): a frame and its status;
 //                                             # --keep leaves interface.json from the last run
+//
+// `run`, `bench`, `tour`, `film` and `emu` take `--map <id>` (maps/maps.json): the map the run starts on. Every
+// cooked map's pack is staged, so the interface's map list offers them all.
 //
 // One usbhostfs_pc owns the PSP's cable. If one is running (in any checkout),
 // these commands use its directory; `--share DIR` names another. Device
@@ -35,6 +38,7 @@ import { deflateSync } from "node:zlib";
 import { extractHostBuildInputs, hostBuildEnvironment } from "../vendor/pocketjs/framework/src/manifest/index.ts";
 import { withDeviceLease } from "../vendor/pocketjs/tools/device-lease.ts";
 import { POCKET3D_ICON } from "../vendor/pocketjs/tools/pocket3d-icon.ts";
+import { FIRST, mapNamed, MAPS, packPath } from "./maps.ts";
 import { compileInterface, type Interface } from "./ui.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -45,7 +49,9 @@ const opt = (key: string, fallback: string) => {
   const at = argv.indexOf(key);
   return at < 0 ? fallback : (argv[at + 1] ?? fallback);
 };
-const PACK = resolve(ROOT, ".pocket-build/duty/psp30/duty.pack");
+const PACK = packPath(FIRST, "psp30");
+// The map a run starts on (`map.txt` beside the packs): the first, or `--map <id>`.
+const MAP = mapNamed(opt("--map", FIRST)).id;
 const port = opt("--port", "10000");
 
 /** The directory the running usbhostfs_pc serves, if there is one. */
@@ -220,22 +226,42 @@ function sha(path: string): string {
   return h.digest("hex");
 }
 
-/** The pack's identity as the cook wrote it, so an unchanged pack is not copied again. */
-function packId(): string {
-  const receipt = resolve(PACK, "../receipt.json");
-  return existsSync(receipt) ? JSON.parse(readFileSync(receipt, "utf8")).pack.sha256 : sha(PACK);
+/** A pack's identity as the cook wrote it, so an unchanged pack is not copied again. */
+function packId(pack = PACK): string {
+  const receipt = resolve(pack, "../receipt.json");
+  return existsSync(receipt) ? JSON.parse(readFileSync(receipt, "utf8")).pack.sha256 : sha(pack);
 }
 
-function stage(dir: string) {
+/** The packs of the maps that are cooked, under the names the program opens them by (`Map::pack_name`). */
+function packs(): { id: string; file: string; name: string }[] {
+  return MAPS.flatMap((map) => (existsSync(packPath(map.id, "psp30")) ? [{ id: map.id, file: packPath(map.id, "psp30"), name: map.id === FIRST ? "duty" : map.id }] : []));
+}
+
+/**
+ * Puts every cooked map's pack in `dir`, and the name of the map the run starts on (`map.txt`: `MAP`, or
+ * none for a copy a person starts). Returns the first map's pack's identity.
+ */
+function stage(dir: string, map: string | null = MAP) {
   if (!existsSync(PACK)) throw new Error(`no pack at ${PACK}: run \`bun tools/duty.ts cook\` first`);
+  if (map && !existsSync(packPath(map, "psp30"))) throw new Error(`no pack at ${packPath(map, "psp30")}: run \`bun tools/duty.ts cook --map ${map}\` first`);
   mkdirSync(dir, { recursive: true });
-  const id = packId();
-  const mark = `${dir}/duty.json`;
-  if (!existsSync(`${dir}/duty.pack`) || !existsSync(mark) || JSON.parse(readFileSync(mark, "utf8")).sha256 !== id) {
-    cpSync(PACK, `${dir}/duty.pack`);
-    writeFileSync(mark, JSON.stringify({ sha256: id, bytes: statSync(PACK).size }));
+  for (const pack of packs()) {
+    const id = packId(pack.file);
+    const mark = `${dir}/${pack.name}.json`;
+    if (!existsSync(`${dir}/${pack.name}.pack`) || !existsSync(mark) || JSON.parse(readFileSync(mark, "utf8")).sha256 !== id) {
+      cpSync(pack.file, `${dir}/${pack.name}.pack`);
+      writeFileSync(mark, JSON.stringify({ sha256: id, bytes: statSync(pack.file).size }));
+    }
   }
-  return id;
+  if (map) writeFileSync(`${dir}/map.txt`, map);
+  else rmSync(`${dir}/map.txt`, { force: true });
+  return packId();
+}
+
+/** Takes the packs and their marks out of a directory a run does not read them from. */
+function unstage(dir: string) {
+  for (const map of MAPS) for (const end of ["pack", "json"]) rmSync(`${dir}/${map.id === FIRST ? "duty" : map.id}.${end}`, { force: true });
+  rmSync(`${dir}/map.txt`, { force: true });
 }
 
 async function pspsh(text: string): Promise<string> {
@@ -513,7 +539,7 @@ switch (cmd) {
       mkdirSync(`${root}/duty`, { recursive: true });
       stage(`${root}/duty`);
       for (const f of [...UI_FILES, "interface.json", "status.json"]) for (const dir of [root, `${root}/duty`]) rmSync(`${dir}/${f}`, { force: true });
-      rmSync(`${root}/duty.pack`, { force: true });
+      unstage(root);
       rmSync(`${root}/duty/film`, { recursive: true, force: true });
       mkdirSync(`${root}/duty/film`, { recursive: true });
       if (!bare) stageInterface(`${root}/duty`);
@@ -577,8 +603,8 @@ switch (cmd) {
     // `--standalone` puts the pack beside the EBOOT, as on a Memory Stick, instead of on the share.
     const standalone = argv.includes("--standalone");
     mkdirSync(`${root}/duty`, { recursive: true });
+    unstage(standalone ? `${root}/duty` : root);
     stage(standalone ? root : `${root}/duty`);
-    rmSync(standalone ? `${root}/duty/duty.pack` : `${root}/duty.pack`, { force: true });
     // The interface's files and what it kept go where the pack is.
     // `--keep` leaves what the interface kept in the last run (`interface.json`) for this one to read.
     for (const f of [...UI_FILES, ...(argv.includes("--keep") ? [] : ["interface.json"])]) for (const dir of [root, `${root}/duty`]) rmSync(`${dir}/${f}`, { force: true });
@@ -608,9 +634,10 @@ switch (cmd) {
     const dir = `${OUT}/PSP/GAME/PocketDuty`;
     mkdirSync(dir, { recursive: true });
     cpSync(`${OUT}/EBOOT.PBP`, `${dir}/EBOOT.PBP`);
-    stage(dir);
+    // (every cooked map's pack; no `map.txt`: a copy opens on the first map until a person chooses another)
+    stage(dir, null);
     stageInterface(dir);
-    rmSync(`${dir}/duty.json`, { force: true });
+    for (const pack of packs()) rmSync(`${dir}/${pack.name}.json`, { force: true });
     console.log(`psp: copy ${OUT}/PSP to the root of a Memory Stick`);
     break;
   }

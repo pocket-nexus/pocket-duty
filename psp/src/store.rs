@@ -1,8 +1,13 @@
-//! Storage: the pack's sections read one by one, the files beside the pack
-//! (the interface's bundle and what it asked to have kept), and the PSPLINK
+//! Storage: a map's pack with its sections read one by one, the files beside
+//! it (the interface's bundle and what it asked to have kept), and the PSPLINK
 //! mailbox.
 //!
-//! Each section is read straight into memory of its exact size (`mem`).
+//! Each section is read straight into memory of its exact size (`mem`), which
+//! keeps it for the rest of the run: the program holds one map's pack and
+//! cannot give it back. So another map is another run. `map.txt` beside the
+//! packs names the map a run reads (`locate`); when the interface asks for
+//! another, the name is written there and the program is started again
+//! (`change`, `serve`).
 //!
 //! The kernel keeps a working directory per thread, and only the thread the
 //! program started on has one (the EBOOT's directory): a path without a
@@ -20,6 +25,7 @@ use core::mem::ManuallyDrop;
 use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use duty_interface::maps::{Map, MAPS};
 use psp::sys::*;
 
 use crate::mem;
@@ -52,24 +58,106 @@ pub const SCRIPT: usize = 1;
 pub const PAK: usize = 2;
 const KEPT: usize = 3;
 
-/// Opens the pack and the files that go with it, beside the EBOOT (a packaged copy) or else on the
-/// computer's share. Call on the thread the program started on, before the frame thread exists. It
-/// allocates nothing.
+/// The computer's share, where the files are when they are not beside the EBOOT.
+const SHARE: &[u8] = b"host0:/duty/";
+/// The file that names the map a run reads.
+const CHOICE: &[u8] = b"map.txt";
+
+/// The map whose pack `locate` opened, as an index of `MAPS`, and the maps a pack was found for, a bit each.
+static mut HELD: usize = 0;
+static mut HAVE: u32 = 1;
+/// The run was started by the last one for a match on another map: it begins in the match.
+static mut PLAYS: bool = false;
+/// What `map.txt` holds after a map's name when the next run is to begin in a match.
+const PLAY: &str = " play";
+
+/// A file's path with a NUL after it: beside the EBOOT, or on the computer's share.
+fn path(local: bool, name: &[u8]) -> [u8; 64] {
+    let mut out = [0u8; 64];
+    let mut at = 0;
+    for part in [if local { &[][..] } else { SHARE }, name] {
+        let n = part.iter().position(|b| *b == 0).unwrap_or(part.len()).min(63 - at);
+        out[at..at + n].copy_from_slice(&part[..n]);
+        at += n;
+    }
+    out
+}
+
+unsafe fn open(local: bool, name: &[u8]) -> SceUid {
+    sceIoOpen(path(local, name).as_ptr(), IoOpenFlags::RD_ONLY, 0)
+}
+
+/// Opens a map's pack and the files that go with it, beside the EBOOT (a packaged copy) or else on the
+/// computer's share. The map is the one `map.txt` names when its pack is there, else the first. Call on
+/// the thread the program started on, before the frame thread exists. It allocates nothing.
 pub unsafe fn locate() {
-    const NAMES: [[&[u8]; 2]; 4] = [
-        [b"duty.pack\0", b"host0:/duty/duty.pack\0"],
-        [b"duty.js\0", b"host0:/duty/duty.js\0"],
-        [b"duty.pak\0", b"host0:/duty/duty.pak\0"],
-        [b"interface.json\0", b"host0:/duty/interface.json\0"],
-    ];
-    FOUND[PACK] = sceIoOpen(NAMES[PACK][0].as_ptr(), IoOpenFlags::RD_ONLY, 0);
-    LOCAL = FOUND[PACK].0 >= 0;
-    if !LOCAL {
-        FOUND[PACK] = sceIoOpen(NAMES[PACK][1].as_ptr(), IoOpenFlags::RD_ONLY, 0);
+    // The first map's pack says where everything is: every copy of the game has it.
+    let mut name = [0u8; 32];
+    MAPS[0].pack_name(&mut name);
+    let first = open(true, &name);
+    LOCAL = first.0 >= 0;
+    if first.0 >= 0 {
+        sceIoClose(first);
     }
-    for file in [SCRIPT, PAK, KEPT] {
-        FOUND[file] = sceIoOpen(NAMES[file][!LOCAL as usize].as_ptr(), IoOpenFlags::RD_ONLY, 0);
+    // The maps there is a pack for.
+    HAVE = 0;
+    for (i, map) in MAPS.iter().enumerate().take(32) {
+        map.pack_name(&mut name);
+        let fd = open(LOCAL, &name);
+        if fd.0 >= 0 {
+            sceIoClose(fd);
+            HAVE |= 1 << i;
+        }
     }
+    // The map chosen in an earlier run.
+    HELD = 0;
+    let choice = open(LOCAL, CHOICE);
+    if choice.0 >= 0 {
+        let mut text = [0u8; 32];
+        let n = sceIoRead(choice, text.as_mut_ptr() as *mut c_void, text.len() as u32).max(0) as usize;
+        sceIoClose(choice);
+        let note = core::str::from_utf8(&text[..n]).unwrap_or("").trim_end();
+        let id = note.strip_suffix(PLAY).unwrap_or(note);
+        if let Some(i) = MAPS.iter().position(|m| m.id == id).filter(|i| *i < 32 && HAVE & (1 << i) != 0) {
+            HELD = i;
+            PLAYS = note.len() != id.len();
+        }
+        // The match is begun once: a later start of the program opens on this map's title.
+        if note.len() != id.len() {
+            write_choice(id.as_bytes(), b"");
+        }
+    }
+    MAPS[HELD].pack_name(&mut name);
+    FOUND[PACK] = open(LOCAL, &name);
+    for (file, name) in [(SCRIPT, &b"duty.js"[..]), (PAK, b"duty.pak"), (KEPT, b"interface.json")] {
+        FOUND[file] = open(LOCAL, name);
+    }
+}
+
+/// Writes `map.txt`: a map's name, and what follows it.
+unsafe fn write_choice(id: &[u8], then: &[u8]) {
+    let fd = sceIoOpen(path(LOCAL, CHOICE).as_ptr(), IoOpenFlags::WR_ONLY | IoOpenFlags::CREAT | IoOpenFlags::TRUNC, 0o644);
+    if fd.0 >= 0 {
+        sceIoWrite(fd, id.as_ptr() as *const c_void, id.len());
+        sceIoWrite(fd, then.as_ptr() as *const c_void, then.len());
+        sceIoClose(fd);
+    }
+}
+
+/// The map whose pack this run reads.
+pub fn map() -> &'static Map {
+    unsafe { &MAPS[HELD] }
+}
+
+/// Whether the last run started this one for a match on this map.
+pub fn plays() -> bool {
+    unsafe { PLAYS }
+}
+
+/// The maps a pack was found for, in the list's order.
+pub fn maps() -> impl Iterator<Item = &'static Map> {
+    let have = unsafe { HAVE };
+    MAPS.iter().enumerate().filter(move |(i, _)| *i < 32 && have & (1 << i) != 0).map(|(_, map)| map)
 }
 
 /// One of the files `locate` opened, once: its handle and length.
@@ -129,7 +217,7 @@ pub unsafe fn read_exact(fd: SceUid, dst: *mut u8, len: usize) -> bool {
 impl PackFile {
     /// The pack `locate` opened: its section table.
     pub unsafe fn open() -> Result<PackFile, &'static str> {
-        let (fd, bytes) = found(PACK).ok_or("no duty.pack beside the program or on host0:/duty")?;
+        let (fd, bytes) = found(PACK).ok_or("no pack beside the program or on host0:/duty")?;
         let mut head = [0u32; 4];
         if !read_exact(fd, head.as_mut_ptr().cast(), 16) || head[0] != duty_pack::MAGIC {
             return Err("duty.pack is not a pack");
@@ -221,6 +309,64 @@ static mut KEPT_TEXT: [u8; KEPT_MAX] = [0; KEPT_MAX];
 static mut KEPT_LEN: usize = 0;
 static KEPT_FLAG: AtomicU32 = AtomicU32::new(0);
 
+// Another map: 0 none asked for, 1 asked for (`CHANGE_TO` of `MAPS`), 2 its name is written and the
+// kernel would not start the program again.
+static CHANGE_FLAG: AtomicU32 = AtomicU32::new(0);
+static mut CHANGE_TO: usize = 0;
+
+/// Asks for a run on another map: `serve` writes its name to `map.txt` and starts the program again.
+pub unsafe fn change(to: &'static Map) {
+    if let Some(i) = MAPS.iter().position(|m| m.id == to.id) {
+        CHANGE_TO = i;
+        CHANGE_FLAG.store(1, Ordering::Release);
+    }
+}
+
+/// Whether the map asked for is written down and the program was not started again: the next run reads
+/// it, and a person has to start that run.
+pub fn change_waits() -> bool {
+    CHANGE_FLAG.load(Ordering::Acquire) == 2
+}
+
+/// Writes the map's name where the next run reads it, and starts the program again. Returns only when
+/// the kernel would not. On the thread the program started on: the only one with a working directory.
+///
+/// The program's file is named with its whole path: the kernel hands the path to the next run as its
+/// first argument, and that run's working directory comes from it. The path is not ours to ask for, so
+/// the places a copy stands are tried: where a package puts it on a Memory Stick or in a PSP Go's
+/// storage (tools/psp.ts `package`), and where PPSSPP mounts the directory it was started from. Anywhere
+/// else nothing is started.
+unsafe fn start_again(to: &'static Map) {
+    write_choice(to.id.as_bytes(), PLAY.as_bytes());
+    for directory in [&b"ms0:/PSP/GAME/PocketDuty/"[..], b"ef0:/PSP/GAME/PocketDuty/", b"umd0:/"] {
+        let mut name = [0u8; 64];
+        name[..directory.len()].copy_from_slice(directory);
+        if LOCAL {
+            // The files are beside the program: a directory is this program's when the name just
+            // written is read back from it.
+            name[directory.len()..directory.len() + CHOICE.len()].copy_from_slice(CHOICE);
+            let fd = sceIoOpen(name.as_ptr(), IoOpenFlags::RD_ONLY, 0);
+            if fd.0 < 0 {
+                continue;
+            }
+            let mut text = [0u8; 32];
+            let n = sceIoRead(fd, text.as_mut_ptr() as *mut c_void, text.len() as u32).max(0) as usize;
+            sceIoClose(fd);
+            if text[..n].strip_suffix(PLAY.as_bytes()) != Some(to.id.as_bytes()) {
+                continue;
+            }
+        } else if directory != b"umd0:/" {
+            // The files are on the computer's share: the program is PSPLINK's to start, or an emulator's.
+            continue;
+        }
+        name[directory.len()..directory.len() + 10].copy_from_slice(b"EBOOT.PBP\0");
+        LAST_CODE = sceKernelLoadExec(name.as_ptr(), ptr::null_mut());
+    }
+    // In a directory with another name the program is not started again: a run started by a path
+    // without its directory has no working directory, and finds none of its files. The name is
+    // written down, and the screen says to start the program again (`change_waits`).
+}
+
 /// Tells `serve` whether the computer's share is there.
 pub unsafe fn start(pack: &PackFile) {
     HOST = pack.host;
@@ -242,6 +388,11 @@ pub unsafe fn serve() -> ! {
                 sceIoClose(fd);
             }
             KEPT_FLAG.store(0, Ordering::Release);
+        }
+        // (after what the interface asked to have kept: a run that ends here has written it)
+        if CHANGE_FLAG.load(Ordering::Acquire) == 1 {
+            start_again(&MAPS[CHANGE_TO]);
+            CHANGE_FLAG.store(2, Ordering::Release);
         }
         if !HOST {
             continue;

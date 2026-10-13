@@ -13,9 +13,11 @@
 // The address chooses the pack and what a development host would say:
 //
 //   ?device=psp|3ds             the handheld the page opens as (the bar chooses another at any time)
-//   ?pack=URL                   the pack (the PSP's): its file, on a server that answers byte ranges,
-//                               or the manifest (.json) of one cut into pieces. Without it, the page's
-//                               own (<meta name="pocket-pack">)
+//   ?pack=URL                   the first map's pack (the PSP's): its file, on a server that answers
+//                               byte ranges, or the manifest (.json) of one cut into pieces. Without it,
+//                               the page's own (<meta name="pocket-pack">)
+//   ?map=yards                  the map the page opens on, of those it has a pack for
+//                               (<meta name="pocket-packs">: `<map>=<pack>` with spaces between)
 //   ?words=mode=play+auto=1     what a development host would send the game (App::control)
 //   ?interface=off              the street alone, played by the pad: no guest is started
 //   ?sound=off                  no sound
@@ -25,7 +27,7 @@ import { playTitle } from "./pocket3d-title.js";
 import { frames, hasWebGPU, titleCard } from "./pocket3d-shell.js";
 import { openInterface, screens } from "./pocket3d-interface.js";
 import { createPlayer } from "./pocket3d-player.js";
-import init, { Duty, shapes, sound_rate } from "./pkg/duty_wgpu.js";
+import init, { Duty, maps, shapes, sound_rate } from "./pkg/duty_wgpu.js";
 
 // The handhelds the game runs on. Each one's screen is the renderer's shape of the same name and its
 // interface the bundle under ui/<id>/, as that device's own build compiles it. A 3DS has a second screen,
@@ -96,17 +98,27 @@ async function start() {
   const report = { duty, device: () => device.id, shape: () => shape, ready: 0, interfaceReady: 0, firstFrame: 0, firstWorld: 0, frames: 0, failure: "", timing };
   window.pocketDuty = report;
 
-  // The street, read beside everything else.
-  const pack = query.get("pack") ?? document.querySelector('meta[name="pocket-pack"]').content;
-  duty.reader().read(new URL(pack, location.href).href).then((world) => {
+  // The packs by map: the first map's, and those of the other maps the page names.
+  const packs = new Map([[JSON.parse(maps())[0].id, query.get("pack") ?? document.querySelector('meta[name="pocket-pack"]').content]]);
+  for (const word of (document.querySelector('meta[name="pocket-packs"]')?.content ?? "").split(/\s+/).filter(Boolean)) {
+    const at = word.indexOf("=");
+    if (at > 0) packs.set(word.slice(0, at), word.slice(at + 1));
+  }
+  duty.maps([...packs.keys()].join(","));
+  // A map's pack, read beside everything else. The shell holds one world: it let the last one go
+  // before it asked for this map.
+  const read = (map) => duty.reader().read(new URL(packs.get(map), location.href).href).then((world) => {
     duty.enter(world);
-    if (query.get("words")) duty.control(query.get("words"));
-    report.ready = performance.now() - started;
+    if (!report.ready && query.get("words")) duty.control(query.get("words"));
+    report.ready ||= performance.now() - started;
   }).catch((error) => {
     report.failure = message(error);
     duty.fail(report.failure);
     if (!ui) say(report.failure);
   });
+  const first = packs.has(query.get("map")) ? query.get("map") : packs.keys().next().value;
+  duty.reads(first);
+  read(first);
 
   // A device on the page: its screens, its controls, and its presentation of the interface in a new realm.
   let ui = null;
@@ -173,6 +185,9 @@ async function start() {
   const frame = (now) => {
     const held = controls.read();
     duty.step(now, held.buttons, held.left[0], held.left[1]);
+    // The interface asked for a match on another map: its pack is read, and the match starts when it is there.
+    const map = duty.map_wanted();
+    if (map) read(map);
     // (a turn is offered as often as the PSP offers one, and is that many sixtieths of a second)
     const ticks = ui !== null ? duty.guest_due(held.touching) : 0;
     const turned = ticks > 0;

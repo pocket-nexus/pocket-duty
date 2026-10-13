@@ -36,6 +36,20 @@ function Settings(props: { frame: Frame; match: Match; menu: Menu; active: () =>
   );
 }
 
+/** The maps a match can be played on, as a panel over the title. */
+function Maps(props: { frame: Frame; match: Match; menu: Menu; active: () => boolean }) {
+  const { w: W, h: H } = props.frame;
+  const width = fit(props.frame, 300);
+  return (
+    <Panel width={W} height={H - FOOTER} panelWidth={width} panelHeight={HEAD + Math.max(1, props.match.maps().length) * ROW}>
+      <View class="flex-col">
+        <Heading text="MAPS" width={width} height={HEAD} />
+        <Rows match={props.match} menu={props.menu} width={width} rowHeight={ROW} active={props.active} />
+      </View>
+    </Panel>
+  );
+}
+
 /** The name over the scene the match will be played in, and the title's rows. A plate at the
  *  left keeps them legible; the rest of the scene stays in view. */
 export function Title(props: { frame: Frame; match: Match; menu: Menu }) {
@@ -53,12 +67,14 @@ export function Title(props: { frame: Frame; match: Match; menu: Menu }) {
       <View class="absolute" style={{ insetL: 0, insetT: 0, width: W, height: H, display: home() ? 0 : 1, hitPass: 1 }}>
         <View class="absolute bg-gradient-to-r from-[#000000c8] to-[#00000000]" style={{ insetL: 0, insetT: 0, width: 330, height: H }} />
         <View class="absolute" style={{ insetL: 24, insetT: 22 }}><Wordmark large /></View>
-        <Text class="absolute text-xs" style={{ insetL: 24, insetT: 88, textColor: DIM }}>A firefight on a market street.</Text>
+        {/* The map behind the title, in its own words. */}
+        <Text class="absolute text-xs" style={{ insetL: 24, insetT: 88, textColor: DIM }}>{match.map().line}</Text>
         <View class="absolute" style={{ insetL: 10, insetT: 114 }}>
           <Rows match={match} menu={props.menu} width={190} rowHeight={26} active={() => up("menu")} warm={[match.lists.title]} />
         </View>
       </View>
       <Keep when={up("settings")} width={W} height={H - FOOTER}><Settings frame={props.frame} match={match} menu={props.menu} active={() => up("settings")} /></Keep>
+      <Keep when={up("maps")} width={W} height={H - FOOTER}><Maps frame={props.frame} match={match} menu={props.menu} active={() => up("maps")} /></Keep>
       <Keep when={up("about")} width={W} height={H - FOOTER}>
         <Panel width={W} height={H - FOOTER} panelWidth={about} panelHeight={tall ? 218 : 212}>
           <View class="flex-col">

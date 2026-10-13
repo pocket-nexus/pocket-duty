@@ -1,13 +1,13 @@
 //! Frames of the game written to files, on the build machine: the renderer
 //! of the browser tab on this machine's GPU, reading the pack from disk.
 //!
-//!   duty-shot --pack duty.pack --out frame.png [--size 480x272] [--frames 240]
+//!   duty-shot --pack duty.pack --out frame.png [--map yards] [--size 480x272] [--frames 240]
 //!             [--words "mode=play auto=1 …"] [--cue 300:"at=…"]… [--status status.json] [--log 60]
 //!   duty-shot --pack duty.pack --film frames.rgba --frames 900 [--from 600] …
 //!   duty-shot --compare a.png b.png
 //!
 //! `--pack` names the pack's file, or the manifest (`.json`) of a pack cut
-//! into pieces. The game runs `--frames` frames of a sixtieth of a second
+//! into pieces; `--map` says which map's it is (the first, without it). The game runs `--frames` frames of a sixtieth of a second
 //! each, with no interface: with none the match starts by itself after half a
 //! second, and `--words` are a development host's (`App::control`):
 //! `mode=play auto=1` is a match played by the bench's player. `--cue N:WORDS`
@@ -113,6 +113,9 @@ mod native {
         let source = task::wait(Source::open(&pack))?;
         let world = task::wait(World::read(gpu.clone(), screen.format, source, Progress::default()))?;
         let mut app = App::open(gpu, screen, shape);
+        if let Some(map) = option("--map") {
+            app.reads(&map);
+        }
         app.enter(world);
         if let Some(words) = option("--words") {
             app.control(&words);

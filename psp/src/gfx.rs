@@ -463,7 +463,7 @@ impl Gfx {
         if texels.as_ptr() as usize & 15 != 0 {
             return Err("the pack's pictures");
         }
-        progress("Reading the street");
+        progress("Reading the map");
         let chunks: Kept<Chunk> = file.resident(pack::CHNK)?;
         let clusters: Kept<Cluster> = file.resident(pack::CLUS)?;
         let larges: Kept<Large> = file.resident(pack::LTRI)?;

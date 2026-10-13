@@ -5,20 +5,21 @@
 //
 //   bun tools/release.ts [--targets psp,3ds] [--out dist/release] [--no-build] [--no-cook] [--upload]
 //
-// For each target it cooks the profile's pack from the export
-// (.pocket-build/duty/ir) with this commit's compiler, builds the program and
-// writes one file to --out:
+// For each target it cooks the profile's pack of every map the target's package
+// holds, from that map's export (tools/maps.ts says where each lies; the first
+// map's is .pocket-build/duty/ir) with this commit's compiler, builds the
+// program and writes one file to --out:
 //
-//   psp   pocket-duty-<version>-psp.zip   PSP/GAME/PocketDuty/, for the root of a Memory Stick
-//   3ds   pocket-duty-<version>.3dsx      the pack and the interface in its ROMFS
+//   psp   pocket-duty-<version>-psp.zip   PSP/GAME/PocketDuty/, for the root of a Memory Stick: every map's pack
+//   3ds   pocket-duty-<version>.3dsx      the first map's pack and the interface in its ROMFS
 //
 // and release.json beside them: the commit, the version (ui/pocket.json),
 // each file's size and SHA-256, the inputs and the toolchains. A target that
 // fails is reported, the others still build, and the exit status is 1.
 //
 // --no-build      Take the packages release.json lists; their hashes are checked.
-// --no-cook       Build from the pack already under .pocket-build/duty/<profile>
-//                 (a cook takes four minutes); its receipt is recorded as it is.
+// --no-cook       Build from the packs already cooked (a cook takes four to seven
+//                 minutes a map); their receipts are recorded as they are.
 // --upload        Send each package to Pocket Studio with `pocket-studio package`,
 //                 run here, where `pocket-studio register` wrote .pocket-studio.json.
 //                 POCKET_STUDIO_CLI names the command when it is not on PATH.
@@ -28,6 +29,7 @@
 import { closeSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { deflateRawSync } from "node:zlib";
+import { cookedDir, FIRST, irDir, MAPS } from "./maps.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const POCKETJS = join(ROOT, "vendor/pocketjs");
@@ -54,10 +56,13 @@ interface Package {
 const TARGETS = ["psp", "3ds"] as const;
 type Target = (typeof TARGETS)[number];
 
-/** What each target cooks and what its package is called. */
-const BUILDS: Record<Target, { profile: string; filename: (version: string) => string; build: (log: string, output: string) => Promise<void> }> = {
-  psp: { profile: "psp30", filename: (v) => `${NAME}-${v}-psp.zip`, build: psp },
-  "3ds": { profile: "n3ds30", filename: (v) => `${NAME}-${v}.3dsx`, build: n3ds },
+/**
+ * What each target cooks, the maps its package holds and what the package is called. A PSP reads a map's
+ * pack from a file beside the program; a 3DS's pack is in its one `.3dsx`, which holds the first map's.
+ */
+const BUILDS: Record<Target, { profile: string; maps: string[]; filename: (version: string) => string; build: (log: string, output: string) => Promise<void> }> = {
+  psp: { profile: "psp30", maps: MAPS.map((map) => map.id), filename: (v) => `${NAME}-${v}-psp.zip`, build: psp },
+  "3ds": { profile: "n3ds30", maps: [FIRST], filename: (v) => `${NAME}-${v}.3dsx`, build: n3ds },
 };
 
 const sha256 = (bytes: Uint8Array | string) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
@@ -167,10 +172,10 @@ function accept(output: string): void {
   if (statSync(output).size < 1024 * 1024) throw new Error(`${output} is ${statSync(output).size} bytes: the pack is not in it`);
 }
 
-/** The export every pack is cooked from: its files' names and bytes as one hash. */
-function dutyIr() {
-  const directory = join(ROOT, ".pocket-build/duty/ir");
-  if (!existsSync(directory)) throw new Error(`${directory} is missing: run \`bun tools/duty.ts export\` first`);
+/** The export a map's packs are cooked from: its files' names and bytes as one hash. */
+function dutyIr(map = FIRST) {
+  const directory = irDir(map);
+  if (!existsSync(directory)) throw new Error(`${directory} is missing: run \`bun tools/duty.ts export${map === FIRST ? "" : ` --map ${map}`}\` first`);
   const hash = new Bun.CryptoHasher("sha256");
   let files = 0;
   const walk = (at: string, prefix: string) => {
@@ -265,10 +270,12 @@ if (argv.includes("--no-build")) {
   console.log(`release: ${TITLE} ${version} at ${commit}${dirty ? " with uncommitted changes" : ""}`);
   const ir = dutyIr();
   const packs: Record<string, { bytes: number; sha256: string }> = {};
+  // The other maps: each one's export and its pack for each profile that was cooked.
+  const maps: Record<string, { dutyIr: ReturnType<typeof dutyIr>; packs: Record<string, { bytes: number; sha256: string }> }> = {};
   const seconds: Partial<Record<Target, number>> = {};
   // One at a time: each device's interface is compiled into the same generated files under ui/.
   for (const target of targets) {
-    const { profile, filename, build } = BUILDS[target];
+    const { profile, maps: held, filename, build } = BUILDS[target];
     const log = join(WORK, "logs", `${target}.log`);
     const output = join(OUT, filename(version));
     const start = performance.now();
@@ -276,8 +283,13 @@ if (argv.includes("--no-build")) {
     rmSync(output, { force: true });
     try {
       console.log(`release: ${target}: ${argv.includes("--no-cook") ? "taking the cooked" : "cooking"} ${profile}, building (log: ${log})`);
-      if (!argv.includes("--no-cook")) await run(log, ["bun", "tools/duty.ts", "cook", "--profile", profile]);
-      packs[profile] = JSON.parse(readFileSync(join(ROOT, ".pocket-build/duty", profile, "receipt.json"), "utf8")).pack;
+      for (const map of held) {
+        if (map !== FIRST) maps[map] ??= { dutyIr: dutyIr(map), packs: {} };
+        if (!argv.includes("--no-cook")) await run(log, ["bun", "tools/duty.ts", "cook", "--map", map, "--profile", profile]);
+        const pack = JSON.parse(readFileSync(join(cookedDir(map, profile), "receipt.json"), "utf8")).pack;
+        if (map === FIRST) packs[profile] = pack;
+        else maps[map]!.packs[profile] = pack;
+      }
       await build(log, output);
       accept(output);
       packages.push({ target, filename: filename(version), bytes: statSync(output).size, sha256: fileSha256(output) });
@@ -300,7 +312,7 @@ if (argv.includes("--no-build")) {
         dirty,
         packages,
         failed: failed.map(({ target, error }) => ({ target, error: error.split("\n")[0] })),
-        inputs: { dutyIr: ir, packs },
+        inputs: { dutyIr: ir, packs, maps },
         toolchains: toolchains(),
       },
       null,

@@ -12,6 +12,7 @@ use duty_sim::math::*;
 use duty_sim::player::{btn, Input};
 use duty_sim::tune::{mode, DT};
 
+use crate::maps::{self, MAPS};
 use crate::{channel, flag, t, Command, Kill, Mode, Outcome, Setting, State};
 
 /// The pad as a device hands it over: one bit a button, whatever the device calls it.
@@ -75,6 +76,22 @@ pub struct Session {
     /// Pixels a unit of the view's tangent takes at the widest field of view: what turns the
     /// weapon's cone into the crosshair's gap.
     pub focal: f32,
+    /// The id of the map the device holds, and the ids of the maps it has a pack for, in the list's
+    /// order: the device sets both when it has read a pack. Before that, the first map alone.
+    pub map_id: &'static str,
+    pub maps: Vec<&'static str>,
+    /// A map the interface asked for that the device does not hold: the device takes it, reads that
+    /// map's pack, sets `map_id` and calls [`Session::play`].
+    pub wanted: Option<&'static str>,
+}
+
+/// What asking for a match on a map comes to: nothing, a new match on the map that is held, or
+/// another map's pack to read first.
+#[derive(Debug, PartialEq)]
+enum Asked {
+    Nothing,
+    Again,
+    Another(&'static str),
 }
 
 impl Default for Session {
@@ -85,7 +102,22 @@ impl Default for Session {
 
 impl Session {
     pub fn new() -> Session {
-        Session { mode: Mode::Title, idle: false, stats: false, look: 1, invert: false, assist: true, layout: 0, skill: 1, listed: None, seconds: 0.0, wakes: Vec::new(), feed: Vec::new(), lines: 0, banner: (0, "", ""), prev_held: u32::MAX, tapped: 0, frames: 0, map: (0.0, 0.0), focal: 213.0 }
+        Session { mode: Mode::Title, idle: false, stats: false, look: 1, invert: false, assist: true, layout: 0, skill: 1, listed: None, seconds: 0.0, wakes: Vec::new(), feed: Vec::new(), lines: 0, banner: (0, "", ""), prev_held: u32::MAX, tapped: 0, frames: 0, map: (0.0, 0.0), focal: 213.0, map_id: MAPS[0].id, maps: alloc::vec![MAPS[0].id], wanted: None }
+    }
+
+    /// What a row of the map list comes to. A list is up (no match runs under a map that goes), and
+    /// the device has the map's pack.
+    fn asked(&self, id: &str) -> Asked {
+        match maps::named(id).filter(|map| self.maps.contains(&map.id)) {
+            Some(map) if matches!(self.mode, Mode::Title | Mode::Menu | Mode::Results) => {
+                if map.id == self.map_id {
+                    Asked::Again
+                } else {
+                    Asked::Another(map.id)
+                }
+            }
+            _ => Asked::Nothing,
+        }
     }
 
     /// Hands the settings to a match.
@@ -95,6 +127,12 @@ impl Session {
         game.player.analog_look = self.layout == 1;
         game.assist = self.assist;
         game.skill = SKILL[self.skill].1;
+    }
+
+    /// A match begins on the map the device now holds: what a device calls when it has read the pack
+    /// of the map that was asked for.
+    pub fn play(&mut self, game: &mut Game) {
+        self.fresh(game);
     }
 
     fn fresh(&mut self, game: &mut Game) {
@@ -153,6 +191,13 @@ impl Session {
             // A tap during play is one press of the pad's button for the same thing; anywhere else
             // it is nothing, so a match does not resume with a press waiting.
             Command::Tap(key) => self.tap(&key),
+            // A match on a map: at once on the one the device holds, and on another once the device
+            // has read it. A map the device has no pack for is not asked of it.
+            Command::Map(id) => match self.asked(&id) {
+                Asked::Again => self.fresh(game),
+                Asked::Another(map) => self.wanted = Some(map),
+                Asked::Nothing => {}
+            },
             other => return Some(other),
         }
         None
@@ -242,6 +287,10 @@ impl Session {
     /// Writes what the interface is shown.
     pub fn publish(&mut self, game: &Game, state: &mut State) {
         state.mode = self.mode;
+        state.map = self.map_id;
+        if state.maps != self.maps {
+            state.maps.clone_from(&self.maps);
+        }
         let listed = (self.look, self.invert, self.assist, self.layout, self.skill, self.stats);
         if self.listed != Some(listed) {
             self.listed = Some(listed);
@@ -410,5 +459,32 @@ mod tests {
         session.tap("mode");
         assert_eq!(core::mem::take(&mut session.tapped), btn::MODE);
         assert_eq!(session.tapped, 0);
+    }
+
+    #[test]
+    fn a_map_is_asked_for_from_a_list_and_only_when_the_device_has_its_pack() {
+        let (first, other) = (MAPS[0].id, MAPS[1].id);
+        let mut session = Session::new();
+        assert_eq!((session.map_id, session.maps.as_slice()), (first, &[first][..]));
+        // The device has one pack: the other map is not offered, and asking for it is nothing.
+        assert_eq!(session.asked(other), Asked::Nothing);
+        assert_eq!(session.asked(first), Asked::Again);
+        session.maps.push(other);
+        assert_eq!(session.asked(other), Asked::Another(other));
+        assert_eq!(session.asked("no-such-map"), Asked::Nothing);
+        // The map that is held needs no reading, from the menu and the results as from the title.
+        for mode in [Mode::Menu, Mode::Results] {
+            session.mode = mode;
+            assert_eq!((session.asked(first), session.asked(other)), (Asked::Again, Asked::Another(other)));
+        }
+        // No list is up: nothing takes the map from under a match, or from under a read.
+        for mode in [Mode::Play, Mode::Down, Mode::Loading, Mode::Error] {
+            session.mode = mode;
+            assert_eq!((session.asked(first), session.asked(other)), (Asked::Nothing, Asked::Nothing));
+        }
+        // On the other map, the first is the one to read.
+        session.mode = Mode::Title;
+        session.map_id = other;
+        assert_eq!((session.asked(first), session.asked(other)), (Asked::Another(first), Asked::Again));
     }
 }

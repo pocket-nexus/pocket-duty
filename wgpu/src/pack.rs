@@ -21,6 +21,11 @@ impl Progress {
     pub fn get(&self) -> (u64, u64) {
         self.0.get()
     }
+
+    /// Nothing read and no size known: before another pack's read.
+    pub fn clear(&self) {
+        self.0.set((0, 0));
+    }
 }
 
 /// The whole pack from `source`.
@@ -52,9 +57,29 @@ pub fn records<T: Copy>(bytes: &[u8], tag: u32) -> Result<Vec<T>, String> {
     Ok((0..s.len() / size).map(|i| pack::read::<T>(s, i * size).unwrap()).collect())
 }
 
-/// Records that live as long as the program: the match borrows the collision world and the walk grid.
-pub fn kept<T: Copy>(bytes: &[u8], tag: u32) -> Result<&'static [T], String> {
-    Ok(Box::leak(records::<T>(bytes, tag)?.into_boxed_slice()))
+/// What [`kept`] handed out for one world: given back when the world goes, after the match that borrowed it.
+#[derive(Default)]
+pub struct Keep(Vec<(*mut u8, std::alloc::Layout)>);
+
+impl Drop for Keep {
+    fn drop(&mut self) {
+        for (at, layout) in self.0.drain(..) {
+            // SAFETY: `kept` took each block from the allocator with this layout, and nothing borrows it now.
+            unsafe { std::alloc::dealloc(at, layout) };
+        }
+    }
+}
+
+/// Records that live as long as their world: the match borrows the collision world and the walk grid.
+/// `keep` must outlive every use of what this returns.
+pub fn kept<T: Copy>(keep: &mut Keep, bytes: &[u8], tag: u32) -> Result<&'static [T], String> {
+    let records = records::<T>(bytes, tag)?.into_boxed_slice();
+    let layout = std::alloc::Layout::for_value::<[T]>(&records);
+    let all: &'static mut [T] = Box::leak(records);
+    if layout.size() > 0 {
+        keep.0.push((all.as_mut_ptr() as *mut u8, layout));
+    }
+    Ok(all)
 }
 
 /// The bytes of plain records.
