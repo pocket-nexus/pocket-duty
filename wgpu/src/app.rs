@@ -858,7 +858,7 @@ impl App {
         self.records.clear();
         self.batches.clear();
         self.figure_triangles = 0;
-        let (mut held, mut flash) = (None, None);
+        let (mut held, mut flash, mut light) = (None, None, None);
         if stood || self.set.view.is_some() {
             let renderer = &w.renderer;
             self.figure_triangles += w.figures.soldiers(&w.scene, &vp, camera.eye, look, &w.game, |x, z| renderer.sunlit(x, z), &mut self.records, &mut self.batches);
@@ -870,6 +870,9 @@ impl App {
                 self.figure_triangles += triangles;
                 held = Some(frustum);
                 if w.game.arms.flash > 0 {
+                    // A muzzle's light on the street, where the muzzle is in the world (the PS Vita's pack: `vita/src/main.rs`).
+                    let right = look.cross(V3::UP).norm_or(v3(1.0, 0.0, 0.0));
+                    light = Some((camera.eye + right * muzzle.x + right.cross(look) * muzzle.y - look * muzzle.z, 1.4 * w.game.arms.flash as f32));
                     let (at, half) = (muzzle + v3(0.0, 0.0, -0.06), 0.035 + 0.012 * w.game.arms.flash as f32);
                     flash = Some([(-1.0, 1.0), (1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)].map(|(sx, sy): (f32, f32)| FxVertex { uv: [0.02 + (sx * 0.5 + 0.5) * 0.46, 0.52 + (0.5 - sy * 0.5) * 0.46], colour: [255, 220, 160, 240], pos: [at.x + sx * half, at.y + sy * half, at.z] }));
                 }
@@ -891,6 +894,7 @@ impl App {
             covering,
             glowing,
             flash,
+            light,
             look: Look { sixteen: self.set.look.sixteen && self.shape.sixteen, ..self.set.look },
         };
         self.drawn = w.renderer.frame(&self.gpu, &self.screen, &self.overlay, &w.chunks, &view)?;

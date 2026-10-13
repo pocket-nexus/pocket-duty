@@ -15,6 +15,18 @@ struct Scene {
   // The ground's shadow picture: u = x·a + z·b + c of a place, then v.
   shadow_u: vec4<f32>,
   shadow_v: vec4<f32>,
+  // The PS Vita's pack (`rich_fragment`). The sun's depth picture: three rows that take a place
+  // (x, y, z, 1) to the picture's u, its v and the place's own depth from the sun.
+  sun_u: vec4<f32>,
+  sun_v: vec4<f32>,
+  sun_w: vec4<f32>,
+  // x: what a place's depth may exceed the picture's by before its light is all gone; y: 1 over the
+  // depth it goes out across; z: 1 when the ground takes its shadow picture; w: 1 when walls and
+  // things take the sun's depth picture.
+  sun_edge: vec4<f32>,
+  // A muzzle's light: xyz where in the world, w its strength (0: none); and its colour.
+  flash: vec4<f32>,
+  flash_colour: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> scene: Scene;
 

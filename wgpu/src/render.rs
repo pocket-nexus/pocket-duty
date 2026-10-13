@@ -19,6 +19,13 @@
 //! CPU and holds a frame to a number of triangles (see `psp/src/gfx.rs`). A
 //! depth buffer of 24 bits, a rasterizer that clips and this GPU need none of
 //! the three.
+//!
+//! The PS Vita's pack (`profiles/vita60.json`: pictures in the GPU's blocks or
+//! in true colour) is drawn as that console's own renderer draws it
+//! (`vita/src/world.rs`, `vita/shaders/`): four samples a pixel, a picture's
+//! texels mixed between two of its levels, the ground's shadow in the street's
+//! own pass, the sun's shadow on walls and things a pixel at a time from the
+//! pack's depth picture, and a muzzle's light on what is near it.
 
 use duty_pack::{self as pack, chunk, texture, Chunk, Scene, Texture, WorldVertex};
 use duty_sim::fx::{self, FxVertex};
@@ -36,7 +43,7 @@ use crate::pack::{bytes_of, level_size, records, rgba, section};
 const TARGET: TextureFormat = TextureFormat::Rgba8Unorm;
 /// A record of a uniform buffer starts on a multiple of this (WebGPU's `minUniformBufferOffsetAlignment`).
 const ALIGN: u64 = 256;
-const SCENE_FLOATS: usize = 16 * 3 + 4 * 4;
+const SCENE_FLOATS: usize = 16 * 3 + 4 * 4 + 4 * 6;
 const CHUNK_FLOATS: usize = 12;
 const FIGURE_STRIDE: u64 = ((RECORD * 4) as u64).div_ceil(ALIGN) * ALIGN;
 /// Batches of soldiers and of the held weapon a frame draws at most.
@@ -82,6 +89,8 @@ pub struct View<'a> {
     pub glowing: usize,
     /// The flash at the muzzle, in the held weapon's own space.
     pub flash: Option<[FxVertex; 4]>,
+    /// The muzzle's light on the street, in the PS Vita's pack: where in the world, and how strong.
+    pub light: Option<(V3, f32)>,
     pub look: Look,
 }
 
@@ -89,7 +98,9 @@ pub struct View<'a> {
 struct Targets {
     width: u32,
     height: u32,
+    /// What the scene is drawn into: several samples a pixel for the PS Vita's pack, resolved into `resolve`.
     colour: wgpu::TextureView,
+    resolve: Option<wgpu::TextureView>,
     depth: wgpu::TextureView,
     group: wgpu::BindGroup,
 }
@@ -133,6 +144,17 @@ pub struct Renderer {
     scratch: Vec<u8>,
     /// Bytes of geometry and texels handed to the GPU, for the status.
     pub bytes: u64,
+    /// The pack is the PS Vita's: drawn as that console draws it.
+    pub rich: bool,
+    /// Samples a pixel of the scene's target.
+    pub samples: u32,
+    /// The sun's depth picture and its numbers, in a pack whose corners keep the sun's light apart.
+    pub sun_depth: Option<pack::SunDepth>,
+    /// How the pack's block pictures reached the GPU: "" (it has none), "gpu" (as blocks) or "decoded" (as
+    /// rows of true colour, on a GPU that reads no blocks).
+    pub blocks: &'static str,
+    /// The ground's shadow picture and the sun's depths, for the PS Vita's street.
+    light_group: Option<wgpu::BindGroup>,
 }
 
 /// A colour of the pack (alpha, blue, green, red in a word) as 0…1.
@@ -149,6 +171,18 @@ impl Renderer {
     pub fn new(gpu: &Gpu, format: TextureFormat, bytes: &[u8], scene: &Scene, chunks: &[Chunk], figures: &Figures) -> Result<Renderer, String> {
         let device = &gpu.device;
         let mut held = 0u64;
+        // The pictures say whose pack this is: the PSP's are palettes, the PS Vita's blocks and true colour.
+        let textures: Vec<Texture> = records(bytes, pack::TEXT)?;
+        let texels = section(bytes, pack::TEXD)?;
+        let stored: Vec<WorldVertex> = records(bytes, pack::WVTX)?;
+        let rich = textures.iter().any(|t| t.format != texture::T8);
+        let samples = if rich { 4 } else { 1 };
+        // (the colours with the sun off: one of 16 bits a corner)
+        let shades = pack::section(bytes, pack::WSHD).filter(|s| s.len() == stored.len() * 2);
+        let sun_depth = match (shades, pack::section(bytes, pack::SUND)) {
+            (Some(_), Some(_)) => records::<pack::SunDepth>(bytes, pack::SUND)?.first().copied().filter(|sun| textures.get(sun.texture as usize).is_some_and(|t| t.format == texture::D16)),
+            _ => None,
+        };
         let common = include_str!("shaders/scene.wgsl");
         let module = |label: &str, source: &str| device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) });
         let world = module("world", &format!("{common}{}", include_str!("shaders/world.wgsl")));
@@ -167,6 +201,12 @@ impl Renderer {
         let post_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("post"), entries: &[entry(0, wgpu::ShaderStages::FRAGMENT, uniform(false)), entry(1, wgpu::ShaderStages::FRAGMENT, wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false })] });
         let layout = |label: &str, groups: &[&wgpu::BindGroupLayout]| device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: groups, push_constant_ranges: &[] });
         let world_layout = layout("world", &[&scene_layout, &picture_layout, &record_layout]);
+        // (the PS Vita's street also reads the ground's shadow picture and the sun's depths)
+        let light_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("light"),
+            entries: &[entry(0, wgpu::ShaderStages::FRAGMENT, filtered), entry(1, wgpu::ShaderStages::FRAGMENT, sampler), entry(2, wgpu::ShaderStages::FRAGMENT, wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Uint, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false })],
+        });
+        let rich_layout = layout("street", &[&scene_layout, &picture_layout, &record_layout, &light_layout]);
         let flat_layout = layout("flat", &[&scene_layout, &picture_layout]);
         let skin_layout = layout("skin", &[&scene_layout, &record_layout]);
         let present_layout = layout("present", &[&post_layout]);
@@ -190,16 +230,19 @@ impl Renderer {
                 fragment: Some(wgpu::FragmentState { module, entry_point: Some(fragment), compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format: to, blend, write_mask: wgpu::ColorWrites::ALL })] }),
                 primitive: wgpu::PrimitiveState { front_face: wgpu::FrontFace::Ccw, cull_mode: cull.then_some(wgpu::Face::Back), ..Default::default() },
                 depth_stencil: depth.map(|(compare, write)| wgpu::DepthStencilState { format: DEPTH, depth_write_enabled: write, depth_compare: compare, stencil: Default::default(), bias: Default::default() }),
-                multisample: Default::default(),
+                // (everything drawn with a depth goes into the scene's target; the last pass goes onto the screen)
+                multisample: wgpu::MultisampleState { count: if depth.is_some() { samples } else { 1 }, mask: !0, alpha_to_coverage_enabled: false },
                 multiview: None,
                 cache: None,
             })
         };
         use wgpu::CompareFunction::{Always, Equal, LessEqual};
         let street = |label: &str, fragment: &str, blend: Option<wgpu::BlendState>, cull: bool, depth: (wgpu::CompareFunction, bool)| pipeline(label, &world_layout, &world, "world_vertex", fragment, &[buffer(16, world_attrs)], TARGET, blend, cull, Some(depth));
-        let solid = [true, false].map(|cull| street("solid", "world_fragment", None, cull, (LessEqual, true)));
+        // The PS Vita's street is one program: its ground takes the shadow picture in the same pass.
+        let street_rich = |label: &str, blend: Option<wgpu::BlendState>, cull: bool, depth: (wgpu::CompareFunction, bool)| pipeline(label, &rich_layout, &world, "rich_vertex", "rich_fragment", &[buffer(16, world_attrs)], TARGET, blend, cull, Some(depth));
+        let solid = [true, false].map(|cull| if rich { street_rich("solid", None, cull, (LessEqual, true)) } else { street("solid", "world_fragment", None, cull, (LessEqual, true)) });
         // Glass: its colour by its opacity over what is behind it. The opacity is the draw's blend constant.
-        let glass = [true, false].map(|cull| street("glass", "world_fragment", mix(B::Constant, B::OneMinusConstant), cull, (LessEqual, false)));
+        let glass = [true, false].map(|cull| if rich { street_rich("glass", mix(B::Constant, B::OneMinusConstant), cull, (LessEqual, false)) } else { street("glass", "world_fragment", mix(B::Constant, B::OneMinusConstant), cull, (LessEqual, false)) });
         // The ground once more: what is there times the shadow picture, where the depth is the ground's own.
         let shadow = street("shadow", "shadow_fragment", mix(B::Dst, B::Zero), true, (Equal, false));
         let flat = |label: &str, vertex: &str, fragment: &str, blend: Option<wgpu::BlendState>, depth: wgpu::CompareFunction| pipeline(label, &flat_layout, &world, vertex, fragment, &[buffer(24, flat_attrs)], TARGET, blend, false, Some((depth, false)));
@@ -211,9 +254,8 @@ impl Renderer {
         let skin_program = pipeline("skin", &skin_layout, &skin, "skin_vertex", "skin_fragment", &[buffer(24, skin_attrs)], TARGET, None, true, Some((LessEqual, true)));
         let present = pipeline("present", &present_layout, &post, "corner", "present", &[], format, None, false, None);
 
-        // ---- the pictures: indices into a palette in the pack, texels here
-        let textures: Vec<Texture> = records(bytes, pack::TEXT)?;
-        let texels = section(bytes, pack::TEXD)?;
+        // ---- the pictures: indices into a palette in the PSP's pack, texels here; blocks and true colour in
+        // the PS Vita's, which a GPU that reads blocks takes as they are
         let samplers = [wgpu::AddressMode::Repeat, wgpu::AddressMode::ClampToEdge].map(|wrap| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("picture"),
@@ -221,44 +263,95 @@ impl Renderer {
                 address_mode_v: wrap,
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
-                // (the GE takes one level, the nearest in size, and mixes none)
-                mipmap_filter: wgpu::FilterMode::Nearest,
+                // (the GE takes one level, the nearest in size, and mixes none; the PS Vita mixes two)
+                mipmap_filter: if rich { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest },
                 ..Default::default()
             })
         });
+        let reads_blocks = gpu.features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        let mut blocks = "";
+        let picture = |label: &str, format: TextureFormat, width: u32, height: u32, levels: u32| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: levels,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        let write = |to: &wgpu::Texture, level: u32, bytes: &[u8], row: u32, rows: u32, width: u32, height: u32| {
+            gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: to, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                bytes,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(rows) },
+                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            );
+        };
         let mut pictures = Vec::with_capacity(textures.len());
+        // (the ground's shadow picture and the sun's depths are also read by the PS Vita's street)
+        let (mut shadow_view, mut depth_view) = (None, None);
         let mut sun = (Vec::new(), 0, 0);
         for (number, t) in textures.iter().enumerate() {
-            // (a depth picture is the PS Vita's own: it is read as greys and nothing here draws from it, so this
-            // renderer shows such a pack's walls with nothing between them and the sun)
             if t.format != texture::T8 && t.format != texture::RGBA8 && t.format != texture::D16 && t.block().is_none() {
                 return Err(format!("picture {number} has format {} (this renderer reads the PSP's pack and the PS Vita's)", t.format));
             }
             let levels = (t.levels as u32).max(1);
-            let made = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("picture"),
-                size: wgpu::Extent3d { width: t.width as u32, height: t.height as u32, depth_or_array_layers: 1 },
-                mip_level_count: levels,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
+            let (width, height) = (t.width as u32, t.height as u32);
+            if t.format == texture::D16 {
+                // The sun's depths: one number of 16 bits a texel, read as whole numbers (`sun_reached`).
+                let (at, bytes) = t.level(0);
+                let rows = texels.get(t.offset as usize + at..t.offset as usize + at + bytes).ok_or("a picture's texels are cut short")?;
+                let made = picture("depths", TextureFormat::R16Uint, width, height, 1);
+                write(&made, 0, rows, width * 2, height, width, height);
+                held += rows.len() as u64;
+                if sun_depth.is_some_and(|sun| sun.texture as usize == number) {
+                    depth_view = Some(made.create_view(&Default::default()));
+                }
+                // (no surface draws from it: its number in the list is kept by a picture of one texel)
+                let blank = picture("blank", TextureFormat::Rgba8Unorm, 1, 1, 1);
+                write(&blank, 0, &[255; 4], 4, 1, 1, 1);
+                pictures.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("picture"),
+                    layout: &picture_layout,
+                    entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&blank.create_view(&Default::default())) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&samplers[1]) }],
+                }));
+                continue;
+            }
+            // A picture in blocks goes to a GPU that reads blocks as it is; to another as rows of true colour.
+            let native = match t.format {
+                texture::BC1 if reads_blocks => Some(TextureFormat::Bc1RgbaUnorm),
+                texture::BC3 if reads_blocks => Some(TextureFormat::Bc3RgbaUnorm),
+                _ => None,
+            };
+            if t.block().is_some() {
+                blocks = if native.is_some() { "gpu" } else { "decoded" };
+            }
+            let made = picture("picture", native.unwrap_or(TextureFormat::Rgba8Unorm), width, height, levels);
             for level in 0..levels {
                 let (w, h) = level_size(t, level);
-                let rows = rgba(t, texels, level)?;
-                held += rows.len() as u64;
-                gpu.queue.write_texture(
-                    wgpu::TexelCopyTextureInfo { texture: &made, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                    &rows,
-                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
-                    wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                );
-                if number as u32 == scene.shadow_texture && level == 0 {
-                    // The palette's green: one half is all of the sun.
-                    sun = (rows.chunks_exact(4).map(|p| ((p[1] as u32 * 255) / 127).min(255) as u8).collect(), w as usize, h as usize);
+                match (native, t.block()) {
+                    (Some(_), Some(block)) => {
+                        let (at, bytes) = t.level(level);
+                        let rows = texels.get(t.offset as usize + at..t.offset as usize + at + bytes).ok_or("a picture's texels are cut short")?;
+                        held += rows.len() as u64;
+                        // (a level is written as whole blocks)
+                        write(&made, level, rows, w.div_ceil(4) * block as u32, h.div_ceil(4), w.div_ceil(4) * 4, h.div_ceil(4) * 4);
+                    }
+                    _ => {
+                        let rows = rgba(t, texels, level)?;
+                        held += rows.len() as u64;
+                        write(&made, level, &rows, w * 4, h, w, h);
+                    }
                 }
+            }
+            if number as u32 == scene.shadow_texture {
+                // The palette's green (the picture's, in the PS Vita's pack): one half is all of the sun.
+                let rows = rgba(t, texels, 0)?;
+                sun = (rows.chunks_exact(4).map(|p| ((p[1] as u32 * 255) / 127).min(255) as u8).collect(), width as usize, height as usize);
+                shadow_view = Some((made.create_view(&Default::default()), (t.flags & texture::CLAMP != 0) as usize));
             }
             pictures.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("picture"),
@@ -281,7 +374,11 @@ impl Renderer {
         let mut chunk_records = vec![0u8; chunks.len().max(1) * ALIGN as usize];
         for (i, c) in chunks.iter().enumerate() {
             let centre = scene.cell_centre(c.cell as u32);
-            let record: [f32; CHUNK_FLOATS] = [centre[0], centre[1], centre[2], scene.quantum, c.uv_scale[0], c.uv_scale[1], c.uv_offset[0], c.uv_offset[1], (c.flags & chunk::CUTOUT != 0) as u32 as f32, 0.0, 0.0, 0.0];
+            // (the PS Vita's street: ground takes the shadow picture, and what is neither ground nor a cut-out nor
+            // glass keeps the sun's light apart, in a pack that has the sun's depths)
+            let ground = rich && c.flags & chunk::GROUND != 0 && c.flags & chunk::BLEND == 0;
+            let apart = sun_depth.is_some() && c.flags & (chunk::GROUND | chunk::CUTOUT | chunk::BLEND) == 0;
+            let record: [f32; CHUNK_FLOATS] = [centre[0], centre[1], centre[2], scene.quantum, c.uv_scale[0], c.uv_scale[1], c.uv_offset[0], c.uv_offset[1], (c.flags & chunk::CUTOUT != 0) as u32 as f32, ground as u32 as f32, apart as u32 as f32, 0.0];
             chunk_records[i * ALIGN as usize..][..CHUNK_FLOATS * 4].copy_from_slice(floats(&record));
         }
         let chunk_buf = init("chunks", &chunk_records, wgpu::BufferUsages::UNIFORM);
@@ -292,12 +389,45 @@ impl Renderer {
         let figure_buf = uniforms("figures", FIGURE_DRAWS * FIGURE_STRIDE);
         let figure_group = record_group("figures", &figure_buf, (RECORD * 4) as u64);
         let post_buf = uniforms("post", 16);
+        let light_group = match (rich, shadow_view) {
+            (true, Some((shadow, wrap))) => {
+                // (a pack with no depth picture: one texel that nothing is asked of)
+                let depths = depth_view.unwrap_or_else(|| picture("depths", TextureFormat::R16Uint, 1, 1, 1).create_view(&Default::default()));
+                Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("light"),
+                    layout: &light_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&shadow) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&samplers[wrap]) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&depths) },
+                    ],
+                }))
+            }
+            (true, None) => return Err("the pack's scene names no shadow picture".into()),
+            _ => None,
+        };
 
         // ---- the street: a corner in the GE's order (texture, colour, position: 12 bytes) laid out on
         // four-byte boundaries, its colour of 16 bits as the eight a GE reads it as
-        let stored: Vec<WorldVertex> = records(bytes, pack::WVTX)?;
         let mut corners = Vec::with_capacity(stored.len() * 16);
-        for v in &stored {
+        // The PS Vita's corner (`Vertex` in vita/src/world.rs): five, six and five bits each widened to a byte's
+        // whole range, with the colour the corner has with the sun off in the padding and the fourth byte
+        // (the corner's own colour again in a pack that has none).
+        let wide = |c: u16| -> [u8; 3] { [((c & 31) as u32 * 255 / 31) as u8, (((c >> 5) & 63) as u32 * 255 / 63) as u8, ((c >> 11) as u32 * 255 / 31) as u8] };
+        for (i, v) in stored.iter().enumerate() {
+            if rich {
+                let lit = wide(v.colour);
+                let off = if sun_depth.is_some() { shades.map_or(lit, |s| wide(u16::from_le_bytes([s[i * 2], s[i * 2 + 1]]))) } else { lit };
+                for part in [v.pos[0], v.pos[1], v.pos[2]] {
+                    corners.extend_from_slice(&part.to_le_bytes());
+                }
+                corners.extend_from_slice(&[off[0], off[1]]);
+                for part in [v.uv[0], v.uv[1]] {
+                    corners.extend_from_slice(&part.to_le_bytes());
+                }
+                corners.extend_from_slice(&[lit[0], lit[1], lit[2], off[2]]);
+                continue;
+            }
             let (r, g, b) = ((v.colour & 31) as u8, ((v.colour >> 5) & 63) as u8, (v.colour >> 11) as u8);
             for part in [v.pos[0], v.pos[1], v.pos[2], 0, v.uv[0], v.uv[1]] {
                 corners.extend_from_slice(&part.to_le_bytes());
@@ -390,6 +520,11 @@ impl Renderer {
             glass_order: Vec::new(),
             scratch: Vec::new(),
             bytes: held,
+            rich,
+            samples,
+            sun_depth,
+            blocks,
+            light_group,
         })
     }
 
@@ -407,13 +542,13 @@ impl Renderer {
         if self.targets.as_ref().is_some_and(|t| (t.width, t.height) == (width, height)) {
             return;
         }
-        let target = |label: &str, format: TextureFormat, sampled: bool| {
+        let target = |label: &str, format: TextureFormat, sampled: bool, samples: u32| {
             gpu.device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
                     size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
                     mip_level_count: 1,
-                    sample_count: 1,
+                    sample_count: samples,
                     dimension: wgpu::TextureDimension::D2,
                     format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT | if sampled { wgpu::TextureUsages::TEXTURE_BINDING } else { wgpu::TextureUsages::empty() },
@@ -421,9 +556,12 @@ impl Renderer {
                 })
                 .create_view(&wgpu::TextureViewDescriptor::default())
         };
-        let (colour, depth) = (target("frame", TARGET, true), target("depth", DEPTH, false));
-        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("post"), layout: &self.post_layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: self.post_buf.as_entire_binding() }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&colour) }] });
-        self.targets = Some(Targets { width, height, colour, depth, group });
+        // With several samples a pixel the scene's target is resolved into the picture the last pass reads.
+        let depth = target("depth", DEPTH, false, self.samples);
+        let (colour, resolve) = if self.samples > 1 { (target("samples", TARGET, false, self.samples), Some(target("frame", TARGET, true, 1))) } else { (target("frame", TARGET, true, 1), None) };
+        let shown = resolve.as_ref().unwrap_or(&colour);
+        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("post"), layout: &self.post_layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: self.post_buf.as_entire_binding() }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(shown) }] });
+        self.targets = Some(Targets { width, height, colour, resolve, depth, group });
     }
 
     /// Draws a frame onto `screen`, with the interface's picture over it. Returns the draws and the triangles.
@@ -443,6 +581,19 @@ impl Renderer {
         record[52..56].copy_from_slice(&[scene.haze[0], scene.haze[1], hazy as u32 as f32, 0.0]);
         record[56..60].copy_from_slice(&[scene.shadow_rows[0][0], scene.shadow_rows[0][1], scene.shadow_rows[0][2], 0.0]);
         record[60..64].copy_from_slice(&[scene.shadow_rows[1][0], scene.shadow_rows[1][1], scene.shadow_rows[1][2], 0.0]);
+        // The PS Vita's street: the sun's depth picture while the shadows are on, and a muzzle's light.
+        let sun = self.sun_depth.filter(|_| view.look.shadows);
+        if let Some(sun) = &sun {
+            for (row, at) in sun.rows.iter().zip([64, 68, 72]) {
+                record[at..at + 4].copy_from_slice(row);
+            }
+        }
+        // (lit up to `bias` past the picture's depth, then out over `edge`)
+        record[76..80].copy_from_slice(&[sun.map_or(0.0, |s| s.bias + s.edge), sun.map_or(0.0, |s| 1.0 / s.edge.max(1e-9)), view.look.shadows as u32 as f32, sun.is_some() as u32 as f32]);
+        if let Some((at, strength)) = view.light.filter(|_| self.rich) {
+            record[80..84].copy_from_slice(&[at.x, at.y, at.z, strength]);
+            record[84..88].copy_from_slice(&[1.0, 0.8, 0.5, 0.0]);
+        }
         gpu.queue.write_buffer(&self.scene_buf, 0, floats(&record));
         gpu.queue.write_buffer(&self.post_buf, 0, floats(&[view.look.sixteen as u32 as f32, 0.0, 0.0, 0.0]));
         let figures = if view.look.figures { &view.figures[..view.figures.len().min(FIGURE_DRAWS as usize)] } else { &[] };
@@ -479,7 +630,8 @@ impl Renderer {
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &targets.colour, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: haze[0] as f64, g: haze[1] as f64, b: haze[2] as f64, a: 1.0 }), store: wgpu::StoreOp::Store } })],
+                // (several samples a pixel are kept only as far as their resolve)
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &targets.colour, resolve_target: targets.resolve.as_ref(), ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: haze[0] as f64, g: haze[1] as f64, b: haze[2] as f64, a: 1.0 }), store: if targets.resolve.is_some() { wgpu::StoreOp::Discard } else { wgpu::StoreOp::Store } } })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &targets.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }), stencil_ops: None }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
@@ -506,6 +658,9 @@ impl Renderer {
             // ---- the street
             pass.set_vertex_buffer(0, self.vertices.slice(..));
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint16);
+            if let Some(light) = &self.light_group {
+                pass.set_bind_group(3, light, &[]);
+            }
             let run = |pass: &mut wgpu::RenderPass, d: &Draw, c: &Chunk| {
                 let level = c.lod(d.lod as usize);
                 let from = level.index + d.first;
@@ -534,8 +689,8 @@ impl Renderer {
                 draws += 1;
                 triangles += d.count / 3;
             }
-            // The ground once more, under its shadow picture.
-            if view.look.shadows {
+            // The ground once more, under its shadow picture (the PS Vita's street took it in its own pass).
+            if view.look.shadows && !self.rich {
                 pass.set_pipeline(&self.shadow);
                 pass.set_bind_group(1, &self.pictures[scene.shadow_texture as usize], &[]);
                 record = u32::MAX;

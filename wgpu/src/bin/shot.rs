@@ -108,7 +108,8 @@ mod native {
             return Err("--out PNG or --film FILE".into());
         }
 
-        let gpu = task::wait(Gpu::headless())?;
+        // (a pack in blocks goes to a GPU that reads blocks as it is)
+        let gpu = task::wait(Gpu::headless_wanting(pocket_web_wgpu::wgpu::Features::TEXTURE_COMPRESSION_BC))?;
         let screen = Screen::texture(&gpu, shape.width, shape.height, 1);
         let source = task::wait(Source::open(&pack))?;
         let world = task::wait(World::read(gpu.clone(), screen.format, source, Progress::default()))?;

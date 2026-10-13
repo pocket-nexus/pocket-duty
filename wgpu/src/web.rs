@@ -101,7 +101,8 @@ impl Duty {
     pub async fn open(canvas: web_sys::HtmlCanvasElement, shape: String, prefs: String) -> Result<Duty, JsError> {
         std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&info.to_string().into())));
         let shape = Shape::named(&shape).ok_or_else(|| JsError::new("no such shape"))?;
-        let (gpu, surface) = Gpu::for_canvas(canvas).await.map_err(|e| JsError::new(&e))?;
+        // (the PS Vita's pack holds its surfaces in blocks: a GPU that reads them takes them as they are)
+        let (gpu, surface) = Gpu::for_canvas_wanting(canvas, pocket_web_wgpu::wgpu::Features::TEXTURE_COMPRESSION_BC).await.map_err(|e| JsError::new(&e))?;
         // (the street has a target of its own; the canvas takes the frame in the display's colours)
         let screen = Screen::canvas(&gpu, surface, shape.width, shape.height, 1);
         let mut app = App::open(gpu, screen, shape);
