@@ -147,7 +147,7 @@ export const LOOK = {
     ar_rubble: { of: 'rubble', tint: 0xe6d4bc },
     ar_frieze: { of: 'teeth', tint: 0xf0dcc0 },
     ar_roof: { of: 'plaster', tint: 0xb8946a, scale: 3.2 },
-    ar_sett: { of: 'setts', tint: 0xefe6d8 },
+    ar_sett: { of: 'setts', tint: 0xf6efe4 },
     ar_slab: { of: 'flags', tint: 0xf4e3c8 },
     ar_sand: { of: 'grit', tint: 0xf4e0c6 },
     ar_wood: { of: 'boards', tint: 0xe6c9a4 },
@@ -159,5 +159,5 @@ export const LOOK = {
   windows: { every: 9 },
   sky: { hour: 16.4, weather: { coverage: 0.18, turbidity: 3.0 } },
   // The cook's light for this place: a late sky's fill, what the sunlit sand sends back, its lamps.
-  light: { sky: [2.4, 2.0, 1.6], bounce: [0.8, 0.62, 0.42], lamp: [8.5, 6.2, 3.6], reach: 12 },
+  light: { sky: [3.0, 2.5, 2.05], bounce: [0.95, 0.74, 0.5], lamp: [10, 7.4, 4.4], reach: 13 },
 };
