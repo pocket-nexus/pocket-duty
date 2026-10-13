@@ -7,7 +7,8 @@
 //                                               # dist/3ds/pocket-duty.3dsx with the interface in its ROMFS and one
 //                                               # map's pack as pieces there (the first map's; `none` for a
 //                                               # program that reads every pack from the card)
-//                                               # (--no-ui keeps the interface as last compiled)
+//                                               # (--no-ui keeps the interface as last compiled; --map <id>
+//                                               # is --embed <id>)
 //   bun tools/n3ds.ts card <directory>          # what goes on a memory card, under <directory>: the .3dsx and
 //                                               # every cooked map's pack as pieces (3ds/pocket-duty/packs/),
 //                                               # brought up to date with the pieces <directory> lacks
@@ -19,9 +20,11 @@
 //                                               #   touch=X,Y | touch=off (a stylus on the lower screen)
 //   bun tools/n3ds.ts capture [--out f.png] [--surface top|auxiliary]
 //   bun tools/n3ds.ts bench [--seconds 60] [--install]   # a match played by the bench's player → .pocket-build/validation/3ds/
-//   bun tools/n3ds.ts emu [--frames 90] [--ctl "at=..."] [--out f.png] [--prefs JSON] [--no-card]
+//   bun tools/n3ds.ts emu [--frames 90] [--ctl "at=..."] [--out f.png] [--prefs JSON] [--no-card] [--map <id>]
 //                                               # the same .3dsx in Azahar (software PICA): both screens of a
-//                                               # frame (the lower one under the upper) and the status
+//                                               # frame (the lower one under the upper) and the status. Every
+//                                               # cooked map's pack is on the emulated card unless --no-card;
+//                                               # --map changes to that map at the start
 //
 // `--host ADDRESS` (default 192.168.8.159, or POCKET_3DS_HOST). The console
 // must run a Pocket Runtime build with the paired wire: this program itself
@@ -62,7 +65,7 @@ const opt = (key: string, fallback: string) => {
 // one map the `.3dsx` carries in its ROMFS (`--embed`, the first map's). The paired wire installs a file of
 // 32 MiB at most, so the `.3dsx` carries one pack or none; the interface lists every map that is cooked,
 // and the program offers the ones it finds a whole pack for.
-const EMBED = opt("--embed", FIRST);
+const EMBED = opt("--embed", opt("--map", FIRST));
 const HELD = cooked("n3ds30").map((each) => mapNamed(each.id));
 /** Where the card's files lie on it. */
 const CARD = "3ds/pocket-duty";
@@ -401,7 +404,9 @@ switch (cmd) {
     // The card's packs: every cooked map's (`--no-card`: the `.3dsx` and what its ROMFS carries, alone).
     if (!argv.includes("--no-card")) bringMaps("n3ds30", `${user}/sdmc/${CARD}/packs`);
     const frames = Number(opt("--frames", "90"));
-    writeFileSync(`${card}/boot.txt`, `title=0 ${opt("--ctl", "")} shot=${frames} exit=${frames + 3}\n`);
+    // `--map <id>`: the run changes to that map at its start, as a choice in the interface's list does.
+    const onMap = argv.includes("--map") ? `map=${mapNamed(opt("--map", FIRST)).id} ` : "";
+    writeFileSync(`${card}/boot.txt`, `title=0 ${onMap}${opt("--ctl", "")} shot=${frames} exit=${frames + 3}\n`);
     // What the interface kept in an earlier run, when the run is to start from it.
     const kept = `${user}/sdmc/3ds/pocket-duty/interface.json`;
     if (opt("--prefs", "")) {

@@ -12,7 +12,7 @@ The reference is a browser game: three.js on WebGL2, every mesh, texture, animat
 |---|---|
 | Reference | `web/`, Claude of Duty by mshumer at `d9b237b`, MIT (`web/LICENSE`) |
 | PSP | PSP-2000 or later (the pack needs the 52 MB memory setting; a PSP-1000 has 24 MB). A whole match on a console: **29.9 frames a second, 55 frames late of 18 375** |
-| Nintendo 3DS | Old 3DS or New 3DS with the Homebrew Launcher, one `.3dsx`. A whole match on an Old 3DS: **29.8 frames a second, 48 frames late of 17 954** |
+| Nintendo 3DS | Old 3DS or New 3DS with the Homebrew Launcher: one `.3dsx` and the maps' packs in `packs/` beside it on the memory card. A whole match on an Old 3DS: **29.8 frames a second, 48 frames late of 17 954** |
 | Browser tab | As a PSP, 480 × 272 in the PSP display's 16-bit colours; as a Nintendo 3DS, 400 × 240 over a lower screen of 320 × 240 with its four keys. wgpu over WebGPU, the PSP's pack. Chrome 154 on an M3 Max: **60 frames a second, under 0.4 ms a frame** |
 
 The consoles and the browser are measured in "What is measured".
@@ -45,13 +45,15 @@ For the 3DS, with Docker (the build runs in PocketJS's pinned devkitARM containe
 
 ```
 bun tools/duty.ts cook --profile n3ds30   # .pocket-build/duty/n3ds30/duty.pack (28.3 MB)
-bun tools/n3ds.ts build            # n3ds/ + ui/ + the pack → dist/3ds/pocket-duty.3dsx (31.1 MB)
-bun tools/n3ds.ts emu              # the same .3dsx in Azahar: both screens of a frame and its status
+bun tools/n3ds.ts build            # n3ds/ + ui/ + the first map's pack → dist/3ds/pocket-duty.3dsx (31.4 MB)
+bun tools/n3ds.ts build --embed none   # the same program with no pack inside (3.1 MB): it reads the card's
+bun tools/n3ds.ts card <directory> # what a memory card takes: 3ds/pocket-duty/ with the .3dsx and packs/
+bun tools/n3ds.ts emu              # the same .3dsx in Azahar, every cooked map on its card: both screens and the status
 bun tools/n3ds.ts install          # send it to a paired console over the LAN and start it
 bun tools/n3ds.ts status           # frame time, triangles, the match, memory
 bun tools/n3ds.ts bench            # a match played by the bench's player, 60 s of frame timings
 bun tools/n3ds.ts capture          # both screens
-bun tools/release.ts               # dist/release: the PSP's zip and the 3DS's .3dsx, with release.json
+bun tools/release.ts               # dist/release: the PSP's zip and the 3DS's zip, with release.json
 ```
 
 `install`, `status`, `bench` and `capture` reach a console that runs a Pocket Runtime program with the paired wire (this one, once it is on the card) and whose pairing key is under `vendor/pocketjs/.pocket/3ds/devices/`. By hand: copy `pocket-duty.3dsx` to `sdmc:/3ds/` and start it from the Homebrew Launcher.
@@ -263,10 +265,12 @@ bun tools/release.ts [--targets psp,3ds] [--out dist/release] [--no-build] [--no
 
 | Target | File | Holds |
 | --- | --- | --- |
-| `psp` | `pocket-duty-<version>-psp.zip` | `PSP/GAME/PocketDuty/` for the root of a Memory Stick: `EBOOT.PBP`, a pack a map (`duty.pack`, `yards.pack`), and the interface's `duty.js` and `duty.pak` |
-| `3ds` | `pocket-duty-<version>.3dsx` | The program for `sdmc:/3ds/`, with `duty.pack` and the interface in its ROMFS. **31.1 MB**; the paired wire installs at most 32 MiB |
+| `psp` | `pocket-duty-<version>-psp.zip` | `PSP/GAME/PocketDuty/` for the root of a Memory Stick: `EBOOT.PBP`, every map's pack as pieces (`pocket.packs` and the `.bin` files it lists), and the interface's `duty.js` and `duty.pak` |
+| `3ds` | `pocket-duty-<version>-3ds.zip` | `3ds/pocket-duty/` for the root of a memory card: `pocket-duty.3dsx` with the interface in its ROMFS (**3.1 MB**) and `packs/` with every map's pack as pieces |
 
-- It cooks the profile's pack of every map the package holds (every map for a PSP, the first for a 3DS) from that map's export with this commit's compiler (`--no-cook` takes the cooked packs as they are), builds the program and writes the zip. **The zip's bytes follow from its entries alone**: fixed dates, fixed modes, entries in the order of their names.
+A map's pack is cut into pieces named by their bytes, and one list (`pocket.packs`, PocketJS's `docs/POCKET3D-PACKS.md`) says which pieces make which map's pack. `bun tools/packs.ts cut [--profile psp30]` writes them under `.pocket-build/duty/packs/<profile>/`; `bun tools/packs.ts bring <directory>` copies the pieces a directory lacks. The browser, the PSP and the 3DS read a pack through that list. A `.3dsx` built without `--embed none` holds the first map's pieces in its ROMFS and runs with no card files; it is **31.4 MB**, and the paired wire installs at most 32 MiB.
+
+- It cooks the profile's pack of every map the package holds from that map's export with this commit's compiler (`--no-cook` takes the cooked packs as they are), builds the program and writes the zip. **The zip's bytes follow from its entries alone**: fixed dates, fixed modes, entries in the order of their names.
 - `release.json` beside it records the commit, the version (`ui/pocket.json`), the file's size and SHA-256, the export and the pack it was built from, and the toolchains.
 
 **Packages go to Pocket Studio and to no page on GitHub.** `--upload` runs `pocket-studio package <file> --target <id> --version <version>` for each package from the repository's root, where `pocket-studio register --title "Pocket Duty"` wrote `.pocket-studio.json` (ignored by Git). `POCKET_STUDIO_CLI` names the command when it is not on `PATH`.
