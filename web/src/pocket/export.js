@@ -459,6 +459,7 @@ async function exportScene() {
     // A place's floors lie at any height and have surfaces of its own: the cook's ground follows them.
     ...(world.ground ? { ground: world.ground } : {}),
     ...(world.light ? { light: world.light } : {}),
+    ...(world.ladders ? { ladders: world.ladders } : {}),
     // The reference lays the street out along its own axes and turns it into the world: a level point
     // (x, z) stands at `origin + x·axisX + z·axisZ`.
     level: {

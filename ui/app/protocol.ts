@@ -67,7 +67,7 @@ export interface HostState {
   banner: [number, string, string];
   /** Set while `mode` is "results". */
   result: Result | null;
-  /** The map the renderer holds (its id in maps/maps.json), and the maps it has a pack for, in the
+  /** The map the renderer holds (its id: its directory under maps/), and the maps it has a pack for, in the
    *  list's order. A renderer that holds one map lists that one. */
   map: string;
   maps: string[];

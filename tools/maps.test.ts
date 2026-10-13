@@ -15,8 +15,10 @@ test("the first map is the reference's street, where its files always were", () 
 });
 
 test("every directory under maps/ is a map of the table, and every map of ours has its directory", () => {
+  // (no file lists the maps: a directory with a `map.json` is a map)
   const directories = readdirSync(join(ROOT, "maps"), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   expect(directories.sort()).toEqual(ours.map((map) => map.id).sort());
+  expect(readdirSync(join(ROOT, "maps")).filter((name) => name.endsWith(".json"))).toEqual(["street.json"]);
 });
 
 test("a map states the table's id and title, four starts or more, and views for `look`", async () => {
@@ -38,11 +40,11 @@ test("a map states the table's id and title, four starts or more, and views for 
   }
 });
 
-test("a map's files are text: a plan, its views, and nothing built", () => {
+test("a map's files are text: its name, its plan, its look, its views, and nothing built", () => {
   for (const map of ours) {
     const files = readdirSync(join(ROOT, "maps", map.id)).sort();
-    expect(files.length).toBe(2);
-    expect(files[1]).toBe("views.json");
-    expect(["layout.js", "place.js"]).toContain(files[0]!);
+    for (const file of files) expect(["layout.js", "look.js", "map.json", "place.js", "views.json"]).toContain(file);
+    expect(files).toContain("map.json");
+    expect(files).toContain("views.json");
   }
 });

@@ -100,6 +100,37 @@ export function mapGrid(ai, world, physics) {
       }
     }
   }
+  // A doorway's middle stays open (`world.threads`): the cells within half a cell of the line through it
+  // that have ground under them.
+  for (const thread of world.threads ?? []) {
+    world.levelToWorld(thread.a[0], 0, thread.a[1], a);
+    world.levelToWorld(thread.b[0], 0, thread.b[1], b);
+    const dx = b.x - a.x, dz = b.z - a.z, len2 = dx * dx + dz * dz || 1;
+    for (let iz = grid.cellZ(Math.min(a.z, b.z) - 1); iz <= grid.cellZ(Math.max(a.z, b.z) + 1); iz++) {
+      for (let ix = grid.cellX(Math.min(a.x, b.x) - 1); ix <= grid.cellX(Math.max(a.x, b.x) + 1); ix++) {
+        if (!grid.inside(ix, iz)) continue;
+        const x = grid.worldX(ix), z = grid.worldZ(iz), i = grid.index(ix, iz);
+        const t = Math.min(1, Math.max(0, ((x - a.x) * dx + (z - a.z) * dz) / len2));
+        if (Math.hypot(x - a.x - dx * t, z - a.z - dz * t) <= grid.cell * 0.56 && Number.isFinite(grid.floor[i]) && !grid.flags[i]) grid.flags[i] = 1;
+      }
+    }
+  }
+  // A stair steeper than a soldier's step from node to node: its open cells carry the stair's mark
+  // (4 beside 1 or 2), and the cook and the match let a step between them be twice as tall.
+  for (const poly of world.stairs ?? []) {
+    for (let iz = 0; iz < grid.nz; iz++) {
+      for (let ix = 0; ix < grid.nx; ix++) {
+        const i = grid.index(ix, iz);
+        if (!grid.flags[i]) continue;
+        world.worldToLevel(grid.worldX(ix), 0, grid.worldZ(iz), level);
+        let hit = false;
+        for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) {
+          if (poly[a][1] > level.z !== poly[b][1] > level.z && level.x < ((poly[b][0] - poly[a][0]) * (level.z - poly[a][1])) / (poly[b][1] - poly[a][1]) + poly[a][0]) hit = !hit;
+        }
+        if (hit) grid.flags[i] |= 4;
+      }
+    }
+  }
   let walk = 0;
   for (let i = 0; i < grid.flags.length; i++) if (grid.flags[i]) walk++;
   grid.walkableCount = walk;

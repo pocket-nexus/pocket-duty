@@ -1,4 +1,4 @@
-//! The maps a match is played on: `maps/maps.json`, compiled in (`build.rs`).
+//! The maps a match is played on: the street and a directory a map under `maps/`, compiled in (`build.rs`).
 //!
 //! A device holds one map's pack at a time. It says which maps it has a pack for
 //! ([`crate::Session::maps`]) and which one it holds ([`crate::Session::map_id`]); the interface lists
@@ -45,11 +45,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_list_is_the_file() {
-        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../maps/maps.json")).unwrap();
-        // Every map of the file is here, in its order, and the first is the street.
-        let ids: std::vec::Vec<&str> = text.split("\"id\"").skip(1).map(|rest| rest.split('"').nth(1).unwrap()).collect();
-        assert_eq!(ids, MAPS.iter().map(|m| m.id).collect::<std::vec::Vec<_>>());
+    fn the_list_is_the_directories() {
+        // Every directory under maps/ with a `map.json` is here, after the street.
+        let maps = concat!(env!("CARGO_MANIFEST_DIR"), "/../../maps");
+        let mut ids: std::vec::Vec<std::string::String> = std::fs::read_dir(maps).unwrap().flatten().filter(|e| e.path().join("map.json").exists()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        ids.sort();
+        let mut listed: std::vec::Vec<&str> = MAPS.iter().skip(1).map(|m| m.id).collect();
+        listed.sort();
+        assert_eq!(ids, listed);
         assert_eq!(first().id, "street");
         assert!(named("street").is_some() && named("no-such-map").is_none());
     }

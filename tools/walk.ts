@@ -70,7 +70,8 @@ export function walk(map: string, argv: string[]): void {
         const ni = i + di, nj = j + dj;
         if (ni < 0 || nj < 0 || ni >= nx || nj >= nz) continue;
         const next = nj * nx + ni;
-        if (open_(next) && part[next] === -1 && Math.abs(cm(node) - cm(next)) <= STEP) {
+        // (a stair's nodes carry 4 beside their flag: a step to or from one may be twice as tall)
+        if (open_(next) && part[next] === -1 && Math.abs(cm(node) - cm(next)) <= ((flags[node]! | flags[next]!) & 4 ? 2 * STEP : STEP)) {
           part[next] = id;
           stack.push(next);
         }

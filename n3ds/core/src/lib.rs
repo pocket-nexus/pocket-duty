@@ -316,7 +316,7 @@ pub unsafe extern "C" fn dt_chart(texture: i32, picture: u32, side: u32, metres:
 }
 
 /// Says which map's pack `dt_init` is given next (`held`) and which maps the card has a pack for
-/// (`have`: ids with spaces between). Ids `maps/maps.json` does not list are left out.
+/// (`have`: ids with spaces between). Ids that are no map's are left out.
 ///
 /// # Safety
 /// Both are C strings.

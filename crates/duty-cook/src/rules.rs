@@ -31,7 +31,9 @@ pub fn nav(ir: &Path, scene: &Value, solid: &Bvh) -> Result<Vec<u8>, String> {
     // step of 45 cm reaches. A soldier sent to one, or standing on one, finds no way at all, and
     // asks again. So only the largest part that hangs together stays open: every way asked for
     // on it exists.
-    let step = |a: usize, b: usize| (heights[a] as i32 - heights[b] as i32).abs() <= 45;
+    // (a place marks a stair's nodes with 4: a step to or from one may be twice a knee)
+    let stair: Vec<bool> = flags.iter().map(|f| f & 4 != 0).collect();
+    let step = |a: usize, b: usize| (heights[a] as i32 - heights[b] as i32).abs() <= if stair[a] || stair[b] { 90 } else { 45 };
     let mut part = vec![u32::MAX; flags.len()];
     let mut sizes: Vec<usize> = Vec::new();
     for start in 0..flags.len() {

@@ -25,7 +25,7 @@
 //                                             # the same PRX in PPSSPPHeadless (software GE): a frame and its status;
 //                                             # --keep leaves interface.json from the last run
 //
-// `run`, `bench`, `tour`, `film` and `emu` take `--map <id>` (maps/maps.json): the map the run starts on. Every
+// `run`, `bench`, `tour`, `film` and `emu` take `--map <id>` (a directory under maps/): the map the run starts on. Every
 // cooked map's pack is staged, so the interface's map list offers them all. Staging brings a directory up
 // to date (tools/packs.ts): only the pieces it lacks are copied, and the ones no map lists any more go.
 //

@@ -8,7 +8,7 @@
 //   bun tools/duty.ts walk [--map yards] [--out f.png]              where the soldiers can walk, from the export
 //   bun tools/duty.ts maps                                          the maps, and which of them are cooked
 //
-// Without `--map` a command means the first map of maps/maps.json, the reference's own street. Where a
+// Without `--map` a command means the first map, the reference's own street. Where a
 // map's files lie is tools/maps.ts.
 
 import { $ } from "bun";

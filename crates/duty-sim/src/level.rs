@@ -116,11 +116,13 @@ impl<'a> Level<'a> {
         self.flags[node as usize] != 0
     }
 
-    /// Whether a soldier can walk from one node to a neighbour: both open, and no step taller than a knee.
+    /// Whether a soldier can walk from one node to a neighbour: both open, and no step taller than a knee,
+    /// or than two on a stair.
     #[inline]
     pub fn passable(&self, from: u32, to: u32) -> bool {
-        self.open(to)
-            && (self.floor[from as usize] as i32 - self.floor[to as usize] as i32).abs() <= 45
+        // (a stair's nodes carry 4 beside their flag: a step to or from one may be twice a knee)
+        let stair = (self.flags[from as usize] | self.flags[to as usize]) & 4 != 0;
+        self.open(to) && (self.floor[from as usize] as i32 - self.floor[to as usize] as i32).abs() <= if stair { 90 } else { 45 }
     }
 
     /// The open node nearest a point and within 1.4 m of its height, looking outward ring by ring.

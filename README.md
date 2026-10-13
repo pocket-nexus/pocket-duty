@@ -31,7 +31,7 @@ bun tools/psp.ts emu               # the same EBOOT in PPSSPPHeadless: a frame a
 bun tools/psp.ts package           # dist/psp/PSP/GAME/PocketDuty for a Memory Stick
 ```
 
-Those are the first map's commands, the reference's street. Another map is the same with `--map <id>` (`maps/maps.json` lists them):
+Those are the first map's commands, the reference's street. Another map is the same with `--map <id>` (a directory under `maps/` a map):
 
 ```
 bun tools/duty.ts export --map yards   # maps/yards/place.js through the reference's kit → .pocket-build/duty/maps/yards/ir
@@ -116,7 +116,7 @@ Left out: leaning, lying down, and the reference's ragdolls (a soldier who falls
 
 ## Maps
 
-A map is a plan drawn by hand (`maps/<id>/place.js`): **floors as polygons at their heights**, in the place's own coordinates, built by the reference's kit in Chrome, exported and cooked like the street. **`maps/maps.json` lists the maps**: the reference's street first, then Twin Yards: two sites, a long lane with a pit, a middle lane, covered ways on two heights and a high start.
+A map is a plan drawn by hand (`maps/<id>/place.js`): **floors as polygons at their heights**, in the place's own coordinates, built by the reference's kit in Chrome, exported and cooked like the street. **A map is a directory under `maps/`** with its own name, plan, look and views, and no file lists them; the reference's street is first, then Twin Yards: two sites, a long lane with a pit, a middle lane, covered ways on two heights and a high start.
 
 - `web/src/pocket/placekit.js` builds a place with no street, gate or perimeter: a wall where a floor's edge has nothing beyond it, a face where a lower floor lies beyond, a cap over each block between, and what a plan lists beside its floors (walls with openings, covered ways, doors, crates, houses). `placelook.js` gives a map surfaces of its own, drawn by functions of ours and baked by the reference's material system, and its sky. The reference's files are unchanged.
 - The cook, the pack, the match and the devices hold no code for a particular map: starts, walk grid, collision and sight lists are sections of each map's pack.
@@ -128,7 +128,7 @@ A map is a plan drawn by hand (`maps/<id>/place.js`): **floors as polygons at th
 ## How it is built
 
 ```
-maps/                the maps: maps.json, and a plan a map (maps/<id>/layout.js)
+maps/                the maps: a directory a map (map.json, place.js, look.js, views.json)
 web/                 the reference, unmodified, plus the export page (web/src/pocket, web/export.html)
 tools/               duty.ts (export, cook, shot, look, walk), maps.ts (where each map's files lie), ui.ts (the interface), psp.ts and n3ds.ts (build, emu, run, bench), wgpu.ts (the browser), release.ts
 profiles/            psp30.json, n3ds30.json: what a console's pack is (cell size, levels of detail, texture format, budgets)
